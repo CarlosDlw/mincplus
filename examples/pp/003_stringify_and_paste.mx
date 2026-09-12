@@ -1,0 +1,79 @@
+// `#` (stringify) and `##` (paste): the only two places a preprocessor creates
+// a token that was never written.
+//
+// The rule both operators share is the subtle one: **their operand is used
+// unexpanded**. That is why the two-level macros below exist, and why this file
+// is worth reading before writing any macro that builds a name.
+//
+// What the preprocessor emits:
+//
+//   DECLARE_PAIR(a)                 -> let a: i32 = 1; let a2: i32 = 2;
+//   FIELD(NAME_SUFFIX)              -> myName
+//   STRINGIFY(MAX_ITEMS)            -> "MAX_ITEMS"
+//   STRINGIFY_EXPANDED(MAX_ITEMS)   -> "100"
+//   STRINGIFY(0x1F)                 -> "0x1F"
+//
+// Reading the two `STRINGIFY` functions side by side is the whole lesson: the
+// single-level macro shows the *spelling* the user wrote, and the two-level one
+// shows the *value* after expansion, because the outer macro expands its
+// argument before the inner one ever sees it. `0x1F` shows the third rule --
+// stringifying preserves the source spelling, it does not reformat a number.
+
+#define MAX_ITEMS 100
+#define PREFIX my
+#define NAME_SUFFIX Name
+
+// Level 1: `##` joins the two spellings it is given, with no expansion.
+#define CONCAT(a, b) a##b
+// Level 2: this level expands its arguments, so `CONCAT` receives their values.
+#define CONCAT_EXPANDED(a, b) CONCAT(a, b)
+
+// Same shape for `#`: level 1 stringifies the spelling it is handed.
+#define STRINGIFY(x) #x
+// Level 2: the argument is expanded here, so level 1 sees the expansion.
+#define STRINGIFY_EXPANDED(x) STRINGIFY(x)
+
+// A paste where only one side is a parameter: `base` is unexpanded (it is an
+// operand of `##`) and the `2` is a literal, so the two are joined into one
+// identifier. This is how a macro generates a family of names from one name.
+#define DECLARE_PAIR(base) let base: i32 = 1; let CONCAT(base, 2): i32 = 2;
+
+// `PREFIX` is expanded before the paste because it is not an operand of `##`
+// *in this macro's body* -- it is an argument to `CONCAT_EXPANDED`, whose own
+// body is the `##`. Two levels, two different rules.
+#define FIELD(suffix) CONCAT_EXPANDED(PREFIX, suffix)
+
+// Each of these three is one macro in a position where the result has to be a
+// string, so the file stays type-correct rather than stringifying into a local
+// that nothing can consume.
+fn str spelled()
+{
+  return STRINGIFY(MAX_ITEMS);
+}
+
+fn str expanded()
+{
+  return STRINGIFY_EXPANDED(MAX_ITEMS);
+}
+
+fn str preserved()
+{
+  return STRINGIFY(0x1F);
+}
+
+fn i32 main()
+{
+  DECLARE_PAIR(a)
+
+  let myName = 5;
+  let fieldName: i32 = FIELD(NAME_SUFFIX);
+
+  // The three string results are used at the call sites rather than dropped
+  // into unused locals, because a declaration nothing reads is not an example
+  // of anything.
+  spelled();
+  expanded();
+  preserved();
+
+  return a + a2 + myName + fieldName;
+}

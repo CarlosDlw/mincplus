@@ -1,0 +1,42 @@
+// `#include`, and the include graph it produces.
+//
+// Like every file in `examples/pp`, this one is preprocessed with
+// `-I examples/pp/include`, and that one flag is the whole configuration of the
+// corpus.
+//
+// The three includes below show the three behaviors that matter:
+//
+//   #include "include/minc_config.h"    searched relative to this file first
+//   #include <minc_limits.h>            searched only on the include path
+//   #include "include/minc_config.h"    included a second time: a no-op
+//
+// The third one is the reason the file exists. `minc_config.h` is guarded, so
+// the second inclusion is skipped before the file is even opened, and it does
+// not define `PAGES` twice. Without the guard the same three lines would still
+// compile -- because a redefinition with an identical replacement list is
+// allowed -- but the file would be read twice for nothing, and the guard is the
+// difference between a header that is cheap to include and one that is not. A
+// guarded header read a second time is what the multiple-include optimization
+// recognizes; a header with no guard read a second time is diagnosed, because
+// that is almost always a bug.
+//
+// The graph, as the preprocessor records it:
+//
+//   005_includes.mx
+//     -> include/minc_config.h
+//          -> include/minc_limits.h
+//     -> include/minc_limits.h            (already read: elided)
+//     -> include/minc_config.h            (already read: elided)
+
+#include "include/minc_config.h"
+#include <minc_limits.h>
+#include "include/minc_config.h"
+
+fn i32 main()
+{
+  let total: i32 = MAX_ITEMS;  // defined in include/minc_limits.h
+  let perPage: i32 = PER_PAGE; // defined in include/minc_limits.h
+  let pages: i32 = PAGES;      // defined in include/minc_config.h, which used both
+
+  return total + perPage + pages;
+}

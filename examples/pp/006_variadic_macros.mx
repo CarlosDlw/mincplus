@@ -1,0 +1,62 @@
+// Variadic macros: `...`, `__VA_ARGS__`, `__VA_OPT__`, and the empty-argument
+// rule that makes "is it empty?" hard to ask.
+//
+// What the preprocessor emits:
+//
+//   ONE_ARG()          -> ""            one empty argument, not zero arguments
+//   FIRST(7, 8)        -> (7)
+//   PICK(7, 8)         -> ((7))         `PICK` adds `, 0`, so `FIRST` sees three
+//                                      arguments and takes the first of them
+//   OPT_ADD()          -> (0 )
+//   OPT_ADD(5)         -> (0 + (5))
+//   OPT_ADD(5 + 1)     -> (0 + (5 + 1))
+//
+// Three rules are visible there:
+//   * `__VA_ARGS__` is the variadic part *verbatim*, commas included, and no
+//     comma is inserted for the caller. `FIRST` has to swallow the rest with
+//     its own `...` parameter; it cannot simply ignore it.
+//   * `()` at an invocation is **one empty argument**, not no arguments. That
+//     is why `ONE_ARG()` stringifies to `""`, and why "is this variadic
+//     argument empty?" cannot be answered by counting arguments -- which is the
+//     problem `__VA_OPT__` was added to solve.
+//   * The `, 0` in `PICK` is the usual trick for the pre-C23 rules, which
+//     require at least one argument for the variadic part. With `PICK()` the
+//     variadic part is still `0` -- one argument -- so the call is well-formed
+//     where `FIRST()` would not be.
+
+#define STRINGIFY(x) #x
+#define ONE_ARG(x) STRINGIFY(x)
+
+// `...` collects the tail, which stays unexpanded until it is used.
+#define FIRST(a, ...) (a)
+#define PICK(...) (FIRST(__VA_ARGS__, 0))
+
+// `__VA_OPT__` (C23) expands to its content only when the variadic part has at
+// least one token, and to nothing otherwise. This is the separator case it
+// exists for: no stray `+` when there is nothing to add.
+#define OPT_ADD(...) (0 __VA_OPT__(+ (__VA_ARGS__)))
+
+fn i32 seven()
+{
+  return 7;
+}
+
+// The empty string has to end up somewhere a string is expected, so it is
+// returned rather than parked in a local nothing reads.
+fn str empty_string()
+{
+  return ONE_ARG();
+}
+
+fn i32 main()
+{
+  let first: i32 = FIRST(7, 8);
+  let picked: i32 = PICK(7, 8);
+  let none: i32 = OPT_ADD();
+  let one: i32 = OPT_ADD(5);
+  let many: i32 = OPT_ADD(5 + 1);
+
+  empty_string();
+
+  return first + picked + none + one + many + seven();
+}

@@ -12,12 +12,13 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace minc::driver {
 
 // Subcommands the driver understands. Anything else is a usage error.
-enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse };
+enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp };
 
 // Name, argument shape, and one-line description of a subcommand. Kept in one
 // table so the parser, error messages, and help text cannot drift apart.
@@ -45,10 +46,29 @@ struct CliOptions {
   bool hideTrivia = false;
   std::optional<Command> command;
   std::vector<std::string> inputs; // files and pass-through arguments
-  std::string error;               // non-empty => usage error; ignore the rest
+  // Preprocessor inputs, in the order they were written: order is meaning, both
+  // for `-D`/`-U` (a later one wins) and for `-I` (the search order).
+  std::vector<std::string> defines;
+  std::vector<std::string> undefines;
+  std::vector<std::string> includeDirs;
+  // `--defines`, `--includes`, `--deps`: what `pp` should print. Not a single
+  // enum, because asking for two of them at once is meaningful.
+  bool showDefines = false;
+  bool showIncludes = false;
+  bool showDeps = false;
+  // `--at [file:]line`.
+  std::string at;
+  std::string error; // non-empty => usage error; ignore the rest
 };
 
 // Parses argv[1..argc). Accepts a possibly-null argv[i] (some CRTs allow it).
 [[nodiscard]] CliOptions parseArgs(int argc, const char* const* argv);
+
+// `-D name[=body]`, written as one string, split into the pairs the preprocessor
+// takes. One implementation so every command that preprocesses cannot disagree
+// about what `-DNAME=` means (an *empty* body, which is a define and not a
+// no-op).
+[[nodiscard]] std::vector<std::pair<std::string, std::string>>
+splitDefines(const std::vector<std::string>& defines);
 
 } // namespace minc::driver

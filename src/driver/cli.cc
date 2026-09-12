@@ -7,12 +7,19 @@
 namespace minc::driver {
 namespace {
 
-constexpr std::array<CommandInfo, 5> kCommands{{
+constexpr std::array<CommandInfo, 6> kCommands{{
     {Command::Build, "build", "<files...>", "Compile sources and link an executable", false},
     {Command::Run, "run", "<files...>", "Build and run the resulting program", false},
     {Command::Check, "check", "<files...>", "Parse and type-check only; no code is emitted", false},
-    {Command::Lex, "lex", "<files...>", "Print the token stream of each file", true},
-    {Command::Parse, "parse", "<files...>", "Parse each file and print its syntax tree", true},
+    // The three stages, each with the view it is responsible for, and the
+    // pipeline written out where a reader looks for it: `lex` is the raw bytes
+    // of one file (which is why a `#` is an error there), `pp` is the token
+    // stream of the translation unit, `parse` is the tree over that stream.
+    {Command::Lex, "lex", "<files...>", "Lex one file; raw tokens, no preprocessing", true},
+    {Command::Parse, "parse", "[options] <files...>",
+     "Preprocess and parse each file; print its syntax tree", true},
+    {Command::Pp, "pp", "[options] <files...>",
+     "Preprocess each file; -D/-U/-I, --defines, --includes, --deps, --at", true},
 }};
 
 // A lone "-" and any argument not starting with '-' are positional. Doing this
@@ -40,8 +47,25 @@ const char* toString(Command command) {
     return "lex";
   case Command::Parse:
     return "parse";
+  case Command::Pp:
+    return "pp";
   }
   return "unknown";
+}
+
+std::vector<std::pair<std::string, std::string>>
+splitDefines(const std::vector<std::string>& defines) {
+  std::vector<std::pair<std::string, std::string>> out;
+  out.reserve(defines.size());
+  for (const std::string& define : defines) {
+    const std::size_t equals = define.find('=');
+    if (equals == std::string::npos) {
+      out.emplace_back(define, std::string{});
+    } else {
+      out.emplace_back(define.substr(0, equals), define.substr(equals + 1));
+    }
+  }
+  return out;
 }
 
 std::optional<Command> commandFromName(std::string_view name) {
@@ -78,6 +102,47 @@ CliOptions parseArgs(int argc, const char* const* argv) {
       }
       if (arg == "--no-trivia") {
         opts.hideTrivia = true;
+        continue;
+      }
+      // `-D`/`-U`/`-I` take a value, joined or separate. Both spellings are
+      // accepted because half the world writes `-DFOO=1` and the other half
+      // `-D FOO=1`, and a compiler that accepts only one is a paper cut.
+      if (arg.size() >= 2 && arg[0] == '-' && (arg[1] == 'D' || arg[1] == 'U' || arg[1] == 'I')) {
+        std::string value(arg.substr(2));
+        if (value.empty()) {
+          if (i + 1 < argc) {
+            value = argv[i + 1] != nullptr ? argv[++i] : "";
+          }
+        }
+        if (value.empty()) {
+          opts.error = "option '" + std::string(arg) + "' needs a value";
+          return opts;
+        }
+        switch (arg[1]) {
+        case 'D':
+          opts.defines.push_back(std::move(value));
+          break;
+        case 'U':
+          opts.undefines.push_back(std::move(value));
+          break;
+        default:
+          opts.includeDirs.push_back(std::move(value));
+          break;
+        }
+        continue;
+      }
+      if (arg == "--defines" || arg == "--includes" || arg == "--deps") {
+        opts.showDefines = opts.showDefines || arg == "--defines";
+        opts.showIncludes = opts.showIncludes || arg == "--includes";
+        opts.showDeps = opts.showDeps || arg == "--deps";
+        continue;
+      }
+      if (arg == "--at") {
+        if (i + 1 >= argc || argv[i + 1] == nullptr) {
+          opts.error = "option '--at' needs '[file:]line'";
+          return opts;
+        }
+        opts.at = argv[++i];
         continue;
       }
       if (!isPositional(arg)) {

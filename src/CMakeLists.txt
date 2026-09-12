@@ -1,5 +1,6 @@
 add_subdirectory(support)
 add_subdirectory(lex)
 add_subdirectory(parse)
+add_subdirectory(pp)
 add_subdirectory(syntax)
 add_subdirectory(driver)

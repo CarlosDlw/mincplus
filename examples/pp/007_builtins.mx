@@ -1,0 +1,52 @@
+// Predefined macros: `__FILE__`, `__LINE__`, `__COUNTER__`, and
+// `__has_include`, plus the two that are deliberately not here.
+//
+// `__DATE__` and `__TIME__` are absent on purpose. A build that embeds the
+// current time cannot be reproduced from its inputs, so they read the timestamp
+// out of `SOURCE_DATE_EPOCH` and are an error when it is unset, rather than
+// silently embedding the clock. An example that used them would fail for
+// anyone building it at a different second -- which is the point.
+//
+// What the preprocessor emits:
+//
+//   __FILE__     -> the path exactly as the driver was given it, as a string
+//   __LINE__     -> the line number of the *invocation*, not of a definition
+//   __COUNTER__  -> 0, then 1, then 2, ... counting invocations per unit
+//   __has_include("path") -> 1 or 0, and it is only valid in `#if`
+
+// `__has_include` resolves a quoted path the way a quoted `#include` would:
+// relative to the file that asks. The header exists, so this is `#if 1`.
+#if __has_include("include/minc_limits.h")
+#define HAVE_LIMITS 1
+#else
+#define HAVE_LIMITS 0
+#endif
+
+// The usual shape of a feature test: a macro that answers "is this available?"
+// so that the rest of the file can use one spelling.
+#if __has_include(<minc_limits.h>) && HAVE_LIMITS
+#define LIMIT_SOURCE "include path"
+#else
+#define LIMIT_SOURCE "not found"
+#endif
+
+// `__FILE__` is the path the driver was given, so it is a string and belongs in
+// a string-returning position. It is expanded at the invocation, which is why
+// the same function reports this file and not a header.
+fn str where()
+{
+  return __FILE__;
+}
+
+fn i32 main()
+{
+  let line: i32 = __LINE__;
+  let first: i32 = __COUNTER__;
+  let second: i32 = __COUNTER__;
+  let haveLimits: i32 = HAVE_LIMITS;
+
+  // `where()` is called so the file it reports is actually read by something.
+  where();
+
+  return line + first + second + haveLimits;
+}

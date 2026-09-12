@@ -13,3 +13,6 @@ CMakeFiles/
 .vscode/
 .idea/
 .DS_Store
+
+# Local tests
+ztests/

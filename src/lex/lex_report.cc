@@ -47,9 +47,16 @@ void reportInvalid(const TokenStream& stream, const Token& token, support::DiagB
 } // namespace
 
 std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags) {
+  return reportLexErrors(stream, diags, nullptr);
+}
+
+std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags, TokenSkip skip) {
   const std::size_t before = diags.size();
 
   for (const Token& token : stream.tokens()) {
+    if (skip != nullptr && skip(token, stream.text())) {
+      continue;
+    }
     if (token.is(TokenKind::Invalid)) {
       reportInvalid(stream, token, diags);
     }

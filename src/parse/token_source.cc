@@ -49,7 +49,10 @@ public:
 
   [[nodiscard]] support::Span spanOfCurrent() const override {
     if (index_ < significant_.size()) {
-      return stream_->spanOf(stream_->significantAt(index_));
+      // `spanOfAt` rather than `spanOf`: a preprocessed stream carries the span
+      // each token was *written* at, which can be a header or a macro body, and
+      // a caret must point there rather than at the preprocessed text.
+      return stream_->spanOfAt(significant_[index_]);
     }
     // At the end, an empty span at the very end of the file, so a caret for
     // "expected ';'" sits where the text stops.

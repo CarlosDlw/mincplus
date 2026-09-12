@@ -65,6 +65,11 @@ minc_add_executable(minc_unit_tests
     lex/token_dump_test.cc
     lex/lex_report_test.cc
     lex/examples_test.cc
+    pp/macro_test.cc
+    pp/directives_test.cc
+    pp/include_test.cc
+    pp/builtins_test.cc
+    pp/corpus_test.cc
     parse/syntax_kind_test.cc
     parse/parser_test.cc
     parse/error_codes_test.cc
@@ -82,6 +87,9 @@ minc_add_executable(minc_unit_tests
     minc_parse
     minc_parse_report
     minc_syntax
+    minc_pp
+    minc_pp_report
+    minc_pp_parse
     minc_driver
     GTest::gtest_main
 )

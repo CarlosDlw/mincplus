@@ -75,7 +75,10 @@ Rules:
   cannot reach the grammar.
 - `src/support/term` is the only module allowed to contain `#if defined(_WIN32)`
   and `<windows.h>` / `<unistd.h>`. Everything else asks it a yes/no question
-  and stays platform-agnostic.
+  and stays platform-agnostic. `src/support/fs` (planned, for file identity and
+  canonicalization — see
+  [`architectures/preprocessor.md`](architectures/preprocessor.md)) will be the
+  second and last such module, for the same reason.
 - Targets are created with `minc_add_library` / `minc_add_executable`, which
   apply the include dirs, the C++ standard, and the shared warning set. A new
   module is a directory with a three-line `CMakeLists.txt`.
@@ -231,6 +234,37 @@ Design record: [`docs/architectures/lexer.md`](architectures/lexer.md).
   from the data and prints `line:col` by walking the stream, so the table is
   aligned whatever the file holds; it writes nothing and colors nothing that is
   not asked for.
+- A stream can describe **more than one file**: `fromPreprocessed` carries an
+  origin span per token, so the parser's caret points at the header a token was
+  written in while the tree is built over the preprocessed text. `spanOf`
+  answers for the single-file case, `spanOfAt` for both.
+
+### `pp` — the preprocessor
+
+Design record: [`docs/architectures/preprocessor.md`](architectures/preprocessor.md).
+
+- It is a **client of the lexer**, never a second tokenizer: it walks
+  `TokenStream`s and re-lexes a paste with the same `lexOne`. The `#` of a
+  directive is claimed here, which is why the lexer has no `#` kind at all.
+- Directives are recognised only while the expansion stack is empty -- that is
+  literally "this token was written in a file, not produced by a macro".
+- The output is the preprocessed **text** plus the tokens that tile it, trivia
+  included, because the parser above it is trivia-blind while the tree builder
+  is not: one output, two consumers, no way for them to disagree.
+- Two tokens are separated by one space exactly when the second does not
+  continue the previous bytes verbatim, decided from the two origins. A file
+  with no directives therefore preprocesses to bytes identical to its input.
+- Every token carries its spelling site, and the expansion chain is a separate
+  hash-consed table, so a diagnostic can say "in expansion of macro `X`" and
+  point at the header the bytes came from.
+- Errors are values, so nothing here prints and the stage links no diagnostics;
+  `pp_report` is the only file that knows about `DiagBag`.
+- The result keeps **every file it lexed**, which is the only way a bad byte in
+  a header can be reported: no other stage knows the header was opened.
+- A leaf's text is a view into the preprocessed text and the node cache is shared
+  across inputs, so the text must outlive the cache. That is a lifetime rule, not
+  a detail: freeing a result early is a use-after-free the sanitizer preset
+  catches.
 
 ### `parse` — the grammar
 
@@ -437,16 +471,43 @@ checks all three. The load-bearing decisions:
   Linux; MSVC has no UBSan, so the preset reports that instead of
   half-instrumenting.
 
-## Where the next stages plug in
+## The pipeline
 
-Planned pipeline: `source -> preprocess -> lex -> parse (AST) -> sema -> ir ->
-backend -> C interop`, with the driver orchestrating the stages.
+`source -> lex -> preprocess -> parse (AST) -> sema -> ir -> backend -> C
+interop`, with the driver orchestrating the stages. Tokenization is phase 3 and
+directives are phase 4, so the lexer feeds the preprocessor rather than the
+other way round.
 
-- **preprocess** turns a `SourceFile` into a token stream with `#include`
-  resolution; it owns file inclusion and macro expansion, and reports through
-  `DiagBag` with spans that survive expansion. It runs *before* the lexer and
-  therefore owns `#` and every directive; the lexer is what it feeds, and `#`
-  outside a directive is not part of the language.
+The first four stages are shipped and **wired**: `mincc parse` runs the whole
+front end, so a file that begins with `#define` has a syntax tree of its
+translation unit rather than a lex error on the `#`. The three commands are the
+three views of one pipeline, and each names the other two so a reader is never
+left guessing which one to reach for:
+
+| Command | Stage | Sees |
+| --- | --- | --- |
+| `mincc lex` | lexer | one file, raw tokens, directives are `lex-invalid-character` |
+| `mincc pp` | lexer + preprocessor | the token stream of the translation unit — macros expanded, includes resolved |
+| `mincc parse` | the whole front end | the syntax tree over the preprocessed stream |
+
+`-D`/`-U`/`-I` belong to the *front end*, not to one command that prints it, so
+all three commands that preprocess accept them and one helper splits `-DNAME=V`
+so no two commands can disagree about what it means.
+
+- **preprocess** (`src/pp`) is a **client of the lexer**: it owns `#` and every
+  directive, file inclusion, and macro expansion, and it emits the preprocessed
+  text and the token stream the parser consumes. `#` outside a directive is not
+  part of the language, which is why the lexer classifies it as no token at all.
+  Every token carries provenance that survives expansion (macro body, argument,
+  or invocation site), so a diagnostic can name the macro, the invocation, and
+  the include chain; it links no diagnostics and reports errors as values, like
+  the lexer and the parser. Design record:
+  [`architectures/preprocessor.md`](architectures/preprocessor.md) — including
+  the resource budgets that make it total on untrusted input, and the file
+  identity rules that make `#pragma once` and include guards correct on
+  case-insensitive filesystems.
+- **sema** is next: it consumes the `SyntaxTree` plus the `TreeStore`, filtered
+  by what the type checklist in `README.md` decided.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

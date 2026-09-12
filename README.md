@@ -23,12 +23,25 @@ platform; the concrete guarantees are in
 
 ## Status
 
-Scaffold v0.1: the `src/support` foundation, the lexer (`src/lex`), the parser
-and syntax tree (`src/parse`, `src/syntax`), and the `mincc` driver.
-`mincc lex <files...>` prints the token stream and `mincc parse <files...>`
-prints the syntax tree; `build`, `run`, and `check` parse correctly but report
-that they are not implemented, and there is no semantic analysis or backend
-yet. `--help` and `--version` are functional.
+Scaffold v0.1: the `src/support` foundation, the lexer (`src/lex`), the
+preprocessor (`src/pp`), the parser and syntax tree (`src/parse`, `src/syntax`),
+and the `mincc` driver. The front end is wired end to end: `mincc parse` runs
+`source -> lex -> preprocess -> parse`, so a file that starts with `#define` has
+a syntax tree of its translation unit. `build`, `run`, and `check` parse
+correctly but report that they are not implemented, and there is no semantic
+analysis or backend yet. `--help` and `--version` are functional.
+
+Three commands, three views, one pipeline — each names the stage it shows:
+
+| Command | Shows |
+| --- | --- |
+| `mincc lex <files...>` | one file's raw tokens, no preprocessing (a `#` is `lex-invalid-character` there) |
+| `mincc pp <files...>` | the token stream of the translation unit: macros expanded, includes resolved |
+| `mincc parse <files...>` | the syntax tree over that stream |
+
+`-D name[=body]`, `-U name` and `-I dir` are front-end options, so all three
+accept them, and a `-D` is a real source file (`<command line>`) so a caret on a
+command-line token points at something a reader can find.
 
 ```console
 $ mincc lex examples/002_variables.mx
@@ -379,7 +392,15 @@ hidden escape hatch.
   `TreeStore` that keeps trees keyed by `(FileId, revision)` and shares one node
   cache across them, and the `mincc parse` dump. Design in
   [`docs/architectures/parser.md`](docs/architectures/parser.md).
-- `src/lex/pp|sema|ir|backend|cinterop/` — planned.
+- `src/pp/` — the preprocessor. A client of the lexer that owns `#`, file
+  inclusion and macro expansion, with always-on resource budgets and provenance
+  that survives expansion. Its output is the preprocessed text and the tokens
+  that tile it, so the parser and the tree builder read the same bytes, and each
+  token still carries the source span it was written at. `minc_pp_parse` is the
+  adapter that lets the parser read it, kept a separate target so the
+  preprocessor never links the grammar. Design in
+  [`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md).
+- `src/sema|ir|backend|cinterop/` — planned.
 - `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
   `tests/unit/lex/examples_test.cc` and parsed by
@@ -393,13 +414,36 @@ hidden escape hatch.
     conditional operator, and every assignment form
   - `005_literals.mx` — integers in four bases, decimal/hex floats, character
     and string escapes, and both comment styles
+  - `pp/` — the **preprocessor corpus**. A different contract from the five
+    above: these files contain directives, so what must lex and parse cleanly is
+    the *result* of preprocessing them, not the file itself -- `mincc lex`
+    still flags their `#` by design, because it is the raw per-file view, while
+    `mincc parse` preprocesses them first. Each file documents the expansion it
+    produces, and every file is preprocessed with one flag,
+    `-I examples/pp/include`, which is the corpus's entire configuration.
+    - `pp/001_object_macros.mx` — object-like macros, `#undef` and redefinition
+    - `pp/002_function_macros.mx` — parameters, nested invocation, statement and
+      block macros
+    - `pp/003_stringify_and_paste.mx` — `#`, `##`, and the two-level trick that
+      distinguishes a spelling from a value
+    - `pp/004_conditionals.mx` — `#if`/`#elif`/`#else`, `defined`,
+      `#elifdef`, and nesting
+    - `pp/005_includes.mx` — both include spellings, and a guarded header
+      included three times
+    - `pp/006_variadic_macros.mx` — `...`, `__VA_ARGS__`, the one-empty-argument
+      rule, and `__VA_OPT__`
+    - `pp/007_builtins.mx` — `__FILE__`, `__LINE__`, `__COUNTER__`,
+      `__has_include`
+    - `pp/include/minc_limits.h`, `pp/include/minc_config.h` — the guarded
+      headers `pp/005` pulls in, one of which includes the other
 
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
-[`docs/roadmap.md`](docs/roadmap.md); the lexer and parser designs and their
-research references are in
-[`docs/architectures/lexer.md`](docs/architectures/lexer.md) and
-[`docs/architectures/parser.md`](docs/architectures/parser.md).
+[`docs/roadmap.md`](docs/roadmap.md); the lexer, parser, and preprocessor
+designs and their research references are in
+[`docs/architectures/lexer.md`](docs/architectures/lexer.md),
+[`docs/architectures/parser.md`](docs/architectures/parser.md), and
+[`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md).
 
 ## Build
 

@@ -7,6 +7,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# No translation unit here uses C++20 modules, so there is nothing to scan for.
+# Left on, the scan puts a dependency file in every compile command (`@...modmap`
+# with GCC as well as Clang), and no tool that reads `compile_commands.json` --
+# clang-tidy above all -- can parse those flags. Turning it off is what makes the
+# compile database mean what it says. Guarded because the variable is 3.28+.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+  set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+endif()
+
 # Libraries are static today but position-independent so they can later be
 # linked into a shared libminc without a rebuild.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

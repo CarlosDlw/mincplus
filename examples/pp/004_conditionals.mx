@@ -1,0 +1,73 @@
+// Conditional compilation: `#if` with `defined`, arithmetic and comparisons,
+// `#ifdef`/`#ifndef`, `#elif`/`#elifdef`, nesting, and the two spellings of an
+// undefined name.
+//
+// The shape of the emitted code is the same either way, on purpose: a build
+// without `-DDEBUG` drops the extra statement, it does not change the surface.
+// An example that changed shape under a flag would be two examples, and only
+// one of them would ever be read.
+//
+// Rules this file exercises:
+//   * `defined X` and `defined(X)` are both accepted, and `defined` is an
+//     operator, not a macro: `#define X 1` does not make `defined X` mean
+//     `1`.
+//   * An identifier that is not a macro evaluates to `0` in `#if`. Every name
+//     used that way below goes through `defined` instead, because
+//     `#if NOT_DEFINED` is almost always a typo -- which is what `-Wundef`
+//     exists to report.
+//   * `#elifdef` is C23; `#elif defined(X)` is the same thing spelled
+//     portably, and both are accepted.
+
+#define MAX_ITEMS 100
+#define PER_PAGE 25
+#define TARGET_64 1
+
+// `defined` and arithmetic in one expression, with the result feeding a macro.
+#if defined(MAX_ITEMS) && MAX_ITEMS > PER_PAGE
+#define PAGE_COUNT ((MAX_ITEMS + PER_PAGE - 1) / PER_PAGE)
+#else
+#define PAGE_COUNT 1
+#endif
+
+// Only the first branch that holds is taken, and the ones after it are not even
+// evaluated -- their directives inside would still be skipped, but their
+// expressions are never compiled.
+#ifdef TARGET_64
+#define WORD_BITS 64
+#elifdef TARGET_32
+#define WORD_BITS 32
+#else
+#define WORD_BITS 16
+#endif
+
+// The negative spelling, which is the one that does not need `defined(X) == 0`.
+#ifndef LIMIT_IS_SET
+#define LIMIT_IS_SET 1
+#endif
+
+// Nested conditionals: the inner one is only reachable from inside the outer
+// branch, and a mismatched `#endif` is diagnosed at the directive that made the
+// nesting impossible to close.
+#if LIMIT_IS_SET
+#if WORD_BITS >= 64
+#define CHUNK ((1 << 8) - 1)
+#else
+#define CHUNK ((1 << 4) - 1)
+#endif
+#endif
+
+fn i32 main()
+{
+  let pageCount: i32 = PAGE_COUNT;
+  let wordBits: i32 = WORD_BITS;
+  let chunk: i32 = CHUNK;
+
+#ifdef DEBUG
+  // Compiled only with `-DDEBUG`. It reads the same macros, so the two branches
+  // cannot drift apart in what they count.
+  let measured: i32 = PAGE_COUNT + CHUNK;
+  return measured + wordBits;
+#else
+  return pageCount + chunk + wordBits;
+#endif
+}

@@ -55,6 +55,56 @@ inline constexpr std::size_t kMaxParseErrors = 4096;
 // Maximum diagnostics kept per bag; prevents OOM on cascading errors.
 inline constexpr std::size_t kMaxDiagnostics = 1024;
 
+// --- the preprocessor -------------------------------------------------------
+//
+// Everything below bounds a *hazard*, not a feature. The C standard's own
+// minima (5.2.4.1) are floors a conforming implementation must exceed, and they
+// are the reason these numbers are far larger than real code needs: 15 nested
+// includes, 63 nested conditionals, 127 macro parameters and arguments.
+//
+// They can be raised, never disabled. A "no limits" switch would turn the
+// compiler into a denial-of-service tool: macro expansion can be exponential
+// under the standard's own rules (`#define A B B` / `#define B C C` doubles per
+// level) and blue paint only blocks direct self-reference.
+
+// Nested `#include` depth. Well past the standard's 15, and shallow enough that
+// the include stack, the records, and the diagnostic chain stay readable.
+inline constexpr std::size_t kMaxIncludeDepth = 200;
+
+// Nested conditional-inclusion depth. The standard requires 63.
+inline constexpr std::size_t kMaxConditionalNesting = 256;
+
+// Macros live on the expansion stack at once (`#define X Y` / `#define Y X`).
+inline constexpr std::size_t kMaxExpansionDepth = 256;
+
+// Tokens a single translation unit may produce by expansion. The hard stop for
+// an exponential bomb, checked as the token is appended so the array cannot
+// grow past it.
+inline constexpr std::size_t kMaxExpandedTokens = std::size_t{8} << 20;
+
+// Bytes the preprocessed output may occupy. Same order as a source file, for
+// the same reason: past this the parser is being handed something no human
+// wrote, and the failure should be a diagnostic rather than an OOM kill.
+inline constexpr std::size_t kMaxPreprocessedBytes = kMaxSourceBytes;
+
+// Longest spelling a token may have after `#` or `##`. The standard's floor for
+// a logical source line is 4095 characters; a paste that keeps doubling is
+// quadratic work, so the result is capped where a line would be.
+inline constexpr std::size_t kMaxTokenBytes = 4095;
+
+// Parameters (including `...`) in one macro definition. Standard floor: 127.
+inline constexpr std::size_t kMaxMacroParameters = 256;
+
+// Files a single translation unit may include. Bounds the "include the same
+// unguarded file a million times" case, which the guard optimization can only
+// help with when the file has a guard.
+inline constexpr std::size_t kMaxIncludesPerUnit = 65536;
+
+// Macro expansion depth as seen by a *diagnostic*: how much of the "in
+// expansion of macro 'X'" chain is rendered before it is elided. Separate from
+// kMaxExpansionDepth because it is a presentation choice, not a safety one.
+inline constexpr std::size_t kMaxMacroBacktrace = 8;
+
 // Largest single block the Arena will ask the allocator for. A runaway size --
 // a SIZE_MAX from bad arithmetic, a corrupted length field -- must never reach
 // operator new: what it does with an absurd request is implementation-defined

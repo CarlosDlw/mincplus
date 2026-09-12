@@ -1,0 +1,48 @@
+// Object-like macros: constants, expressions built from other macros, and
+// `#undef` followed by a redefinition.
+//
+// What the preprocessor emits for the body below:
+//
+//   let maxItems: i32 = 100;
+//   let perPage: i32 = 25;
+//   let pages: i32 = ((100 + 25 - 1) / 25);
+//   let bits: i32 = ((1 << 8) - 1);
+//   let renamed: i32 = 100;
+//
+// Two rules the shapes above show:
+//   * `PAGE_COUNT` is expanded where it is *used*, so it picks up whatever
+//     `MAX_ITEMS` and `PER_PAGE` are at that point, not what they were when it
+//     was defined.
+//   * The parentheses in `LOW_BITS` are the macro author's job, and they are
+//     not cosmetic: `#define LOW_BITS 1 << 8 - 1` expands to `1 << 8 - 1`, and
+//     because `-` binds tighter than `<<` that is `1 << 7`, i.e. `128` rather
+//     than `255`. The preprocessor is purely textual and adds no parentheses of
+//     its own, here or anywhere else.
+
+#define MAX_ITEMS 100
+#define PER_PAGE 25
+
+#define PAGE_COUNT ((MAX_ITEMS + PER_PAGE - 1) / PER_PAGE)
+#define LOW_BITS ((1 << 8) - 1)
+
+// A name that is undefined and then defined again. Both the undefinition and
+// the new definition are recorded, so a later "where did this come from" has an
+// answer even for the first definition.
+#define OLD_NAME 100
+#undef OLD_NAME
+#define OLD_NAME MAX_ITEMS
+
+// An object-like macro whose body is a single identifier: still a macro, still
+// recorded, and expanded recursively when used.
+#define BITS_ALIAS LOW_BITS
+
+fn i32 main()
+{
+  let maxItems: i32 = MAX_ITEMS;
+  let perPage: i32 = PER_PAGE;
+  let pages: i32 = PAGE_COUNT;
+  let bits: i32 = BITS_ALIAS;
+  let renamed: i32 = OLD_NAME;
+
+  return pages + bits + renamed + maxItems / perPage;
+}

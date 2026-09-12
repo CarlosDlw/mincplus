@@ -138,6 +138,35 @@ TEST(ParseCommandTest, EveryExampleSucceeds) {
   }
 }
 
+TEST(ParseCommandTest, PreprocessesBeforeParsing) {
+  // The whole point of the front end: a file with directives has no syntax tree
+  // of its own, and the tree is of its *translation unit*. Without the
+  // preprocessor this input is `lex-invalid-character` on the `#` and
+  // `parse-expected-item` on the directive -- which is what `mincc lex` still
+  // reports, because that command is the raw per-file view.
+  const TempFile file("minc_parse_pp.mx", "#define N 3\nfn i32 main() { return N; }\n");
+  const ParseRun run = runParse({file.path()});
+  EXPECT_EQ(run.code, exitCode(ExitCode::Ok)) << run.err;
+  EXPECT_TRUE(run.err.empty()) << run.err;
+  // The leaf is the *expansion*: the token is `3`, and its span still says it
+  // was written where the definition was -- which is what keeps a caret useful.
+  EXPECT_NE(run.out.find("\"3\""), std::string::npos) << run.out;
+}
+
+TEST(ParseCommandTest, CommandLineDefinesReachTheParser) {
+  const TempFile file("minc_parse_define.mx", "fn i32 main() { return N; }\n");
+  ParseRequest request;
+  request.inputs = {file.path()};
+  request.defines = {{"N", "7"}};
+
+  std::ostringstream out;
+  std::ostringstream err;
+  const int code = parseInputs(request, out, err);
+  EXPECT_EQ(code, exitCode(ExitCode::Ok)) << err.str();
+  EXPECT_TRUE(err.str().empty()) << err.str();
+  EXPECT_NE(out.str().find("\"7\""), std::string::npos) << out.str();
+}
+
 // Without inputs the command is a usage error before it opens anything. Like
 // `lex`, the check lives in the entry point rather than in the injectable body,
 // so the hint goes straight to stderr -- there is no stream to inject here.

@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "lex/token.h"
@@ -35,6 +36,23 @@ public:
   // Lexes `text` in full. `text` is *not* copied and must outlive the stream;
   // in the normal flow it is `SourceFile::text`, owned by the Session.
   [[nodiscard]] static TokenStream lex(support::FileId file, std::string_view text);
+
+  // A stream over tokens that did not all come from one file: the output of the
+  // preprocessor, whose tokens were written in headers, in macro bodies, or
+  // nowhere at all (a pasted or stringified spelling).
+  //
+  // `text` is the preprocessed text the tokens tile, `unit` names the
+  // translation unit it belongs to, and `origins` gives each token the source
+  // span it was *written* at -- so a caret still points at the header the bytes
+  // came from while the tree is built over the preprocessed text. `origins` must
+  // be either empty (every token came from `unit`) or exactly `tokens.size()`
+  // long.
+  //
+  // Not `lex`: the tokens are already tokenized, and re-lexing the preprocessed
+  // text would throw away the provenance that makes the diagnostics right.
+  [[nodiscard]] static TokenStream fromPreprocessed(support::FileId unit, std::string_view text,
+                                                    std::vector<Token> tokens,
+                                                    std::vector<support::Span> origins);
 
   [[nodiscard]] support::FileId file() const {
     return file_;
@@ -74,8 +92,15 @@ public:
     return tokens_[significant_[index]];
   }
 
-  // Span covering the token's lexeme, in this stream's file.
+  // Span covering the token's lexeme, in this stream's file. Use this for a
+  // stream that really is one file: `lex_report` walks one and wants the stream
+  // to be right rather than to be started.
   [[nodiscard]] support::Span spanOf(const Token& token) const;
+
+  // Span of the token at `index`: the origin it was written at when the stream
+  // carries origins, the stream's own file otherwise. This is what the parser
+  // asks for, because it is the one that has to point a caret at the source.
+  [[nodiscard]] support::Span spanOfAt(std::size_t index) const;
 
   // True when the tokens tile the input exactly. Always true for a stream
   // built by lex(); exposed so tests and any future incremental splice can
@@ -89,6 +114,8 @@ private:
   std::string_view text_;
   std::vector<Token> tokens_;
   std::vector<std::uint32_t> significant_;
+  // Empty for a lexed stream (one file for every token); see `fromPreprocessed`.
+  std::vector<support::Span> origins_;
   std::size_t triviaCount_ = 0;
   bool lossless_ = true;
 };

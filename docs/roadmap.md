@@ -26,18 +26,63 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
-## 1. Preprocessor — `src/lex/pp`
+## 1. Preprocessor — `src/pp`
 
-- [ ] `#include` with an include-path search (`-I`), `<>` vs `""`
-- [ ] `#define` / `#undef`, object- and function-like macros
-- [ ] Macro expansion with correct rescanning, recursion blocking, `##` and `#`
-- [ ] Variadic macros (`...`, `__VA_ARGS__`) and `__VA_OPT__` `[?]`
-- [ ] Conditionals: `#if`/`#ifdef`/`#ifndef`/`#elif`/`#else`/`#endif`, `defined`
-- [ ] Constant-expression evaluation for `#if` (integer arithmetic, `&&`, `||`)
-- [ ] `#error`, `#warning`, `#pragma`, `#line`, `__FILE__`/`__LINE__`
-- [ ] Predefined macros (`__STDC__`, target/ABI macros, version)
-- [ ] Directive-scoped diagnostics with correct spans inside macro expansions
-- [ ] Expansion-limit guard and a clear "macro expansion too deep" diagnostic
+Design in
+[`architectures/preprocessor.md`](architectures/preprocessor.md): a client of
+the lexer that owns `#`, file inclusion and macro expansion, and emits the
+preprocessed text plus the token stream. Cost model first: every hazard has an
+always-on budget, and provenance survives expansion.
+
+**Shipped**, and wired into the front end: `mincc parse` runs `lex -> preprocess
+-> parse`, so a directive is no longer a syntax error.
+
+- [x] `#include` with an include-path search (`-I`), `<>` vs `""`,
+      `#include_next`
+- [x] `#define` / `#undef`, object- and function-like macros, identical-redefine
+      check
+- [x] Macro expansion with correct rescanning, the "ineligible for further
+      replacement" mark, `##` and `#`
+- [x] Variadic macros (`...`, `__VA_ARGS__`) and `__VA_OPT__`
+- [x] Conditionals: `#if`/`#ifdef`/`#ifndef`/`#elif`/`#elifdef`/`#else`/`#endif`,
+      `defined`
+- [x] Constant-expression evaluation for `#if`: 64-bit, no UB, division by zero
+      diagnosed, short-circuit branches not evaluated
+- [x] `#line`, `#error`, `#warning`, `#pragma` (parsed and preserved, `once`
+      honored)
+- [x] Predefined macros (`__FILE__`, `__LINE__`, `__COUNTER__`, `__has_include`)
+- [x] **Provenance that survives expansion**: `TokenLoc` + a hash-consed
+      `ExpansionTable`, so a diagnostic can name the macro, the invocation, and
+      the include chain
+- [x] **Always-on budgets**, each with a code and a test: include depth,
+      conditional nesting, expansion depth, expanded-token count, preprocessed
+      bytes, pasted token length, macro parameters, includes per unit
+- [x] File identity by `(device, inode)` / Windows file index, so `#pragma once`
+      and include guards are right and symlink cycles are reported by name
+- [x] Multiple-include optimization for the canonical guard pattern and
+      `#pragma once`, asserted equivalent to running without it
+- [x] A missing include guard on a twice-read header is diagnosed
+- [x] Reproducibility gate: `__DATE__`/`__TIME__` come from `SOURCE_DATE_EPOCH`
+      or are an error, never the clock
+- [x] The record: directive spans, include graph, branch decisions, and the
+      original↔expanded map, for `mincc pp` and the LSP
+- [x] `mincc pp` modes: default stream, `--at LINE:COL`, `--defines`,
+      `--includes`, `--deps`
+- [x] The output is text the parser *and* the tree builder read, with a
+      per-token origin, so the tree holds every byte and a caret still points at
+      the header a token was written in
+- [x] Lexical errors of every file the run read, not just the one named on the
+      command line
+- [ ] `_Pragma` (parsed today as a pragma, not executed)
+- [ ] `-isystem`, and the `#pragma GCC system_header` semantics that go with it
+- [ ] Target/ABI predefined macros (`__LP64__`, type widths) — they need the
+      type table, so they land with sema
+- [ ] Differential test against `cc -E` / `clang -E` over a curated macro corpus.
+      The strongest single check in the design and the one still missing
+- [ ] Reserved with the decision recorded, not accepted yet: `#embed`
+- [ ] `startup/deprecated/overloadable`-style vendor pragmas are parsed and
+      preserved, never interpreted
+- [ ] A fuzz target over the macro corpus, seeded from the examples
 
 ## 2. Lexer — `src/lex`
 

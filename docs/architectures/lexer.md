@@ -183,7 +183,7 @@ the bytes.
 | 10 | Implicit octal (`010`) | **Rejected.** Leading zero without a prefix is plain decimal; octal is spelled `0o`. C's implicit octal is a well-known footgun and `.mx` states widths explicitly elsewhere too. |
 | 11 | Literal suffixes (`10u`, `1.0f`) | **Open.** The lexer consumes the numeric core and leaves a following letter to start an identifier, so `10u` is `10` then `u`. Suffixes tie into the type system, so they are decided with it, not ahead of it. |
 | 12 | Unicode identifiers | **Not supported.** Names are ASCII; a non-ASCII byte outside a comment or string is one `Invalid` token covering the whole character. |
-| 13 | `#` in the lexer | **Not a token.** `#` introduces a preprocessor directive, and the preprocessor is a separate layer that owns it. `mincc lex` shows it as `Invalid`, which is the honest answer for "lex this file with no preprocessing". |
+| 13 | `#` in the lexer | **Not a token.** `#` introduces a preprocessor directive, and the preprocessor is a separate layer that owns it ([`preprocessor.md`](preprocessor.md)). `mincc lex` shows it as `Invalid`, which is the honest answer for "lex this file with no preprocessing". |
 
 ## The lexical grammar as implemented
 
@@ -253,7 +253,8 @@ implementation-defined. The arena now refuses such a request itself
 
 - No type information, no name resolution, no semantic checks — those are sema.
 - No source reading, buffering, or encoding validation — that is `SourceManager`.
-- No macro expansion or directive handling — that is the preprocessor.
+- No macro expansion or directive handling — that is the preprocessor
+  ([`preprocessor.md`](preprocessor.md)).
 - No tree building — that is the parser.
 - No printing, and no I/O of any kind. `dumpTokens` returns a string; the driver
   decides where it goes.

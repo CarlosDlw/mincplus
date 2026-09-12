@@ -13,6 +13,8 @@
 #include "lex/lex_report.h"
 #include "lex/token_stream.h"
 #include "parse/parse_report.h"
+#include "pp/pp_report.h"
+#include "pp/preprocessor.h"
 #include "support/diag/diag_renderer.h"
 #include "support/expected/fallible.h"
 #include "support/session/session.h"
@@ -38,6 +40,16 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
   dumpOptions.color = request.dumpColor;
   dumpOptions.showTrivia = request.showTrivia;
 
+  // The preprocessed unit of every input, alive for the whole invocation.
+  //
+  // A green leaf's text is a view, and the node cache is shared across inputs --
+  // that sharing is the reason the store exists. So the text a leaf points at
+  // has to outlive the cache, and it cannot be freed at the end of the loop
+  // iteration that produced it. `reserve` is load-bearing: it is what keeps the
+  // elements from moving out from under the views.
+  std::vector<pp::PPResult> preprocessed;
+  preprocessed.reserve(request.inputs.size());
+
   bool failed = false;
   for (const std::string& name : request.inputs) {
     const support::Fallible<support::FileId> id = loadInput(session, name);
@@ -54,15 +66,29 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
       continue;
     }
 
-    const lex::TokenStream stream = lex::TokenStream::lex(file->id, file->text);
+    // The front end is `source -> lex -> preprocess -> parse`, in that order and
+    // with no way to skip a stage: the parser is handed the preprocessed stream,
+    // because a parser that reads a file directly cannot see a macro and would
+    // report every directive as a syntax error. The tree is built from the same
+    // stream, so the two halves cannot disagree about what the tokens are.
+    pp::PPOptions ppOptions;
+    ppOptions.defines = request.defines;
+    ppOptions.undefines = request.undefines;
+    ppOptions.includes.quote = request.includeDirs;
+    pp::Preprocessor preprocessor(session, std::move(ppOptions));
 
     // Cleared per file so the counts below belong to this input alone and the
     // bag never accumulates across a multi-file command line.
     session.diags().clear();
-    // Lexical problems are reported first: a syntax error caused by a malformed
-    // token is a consequence, and showing the cause first reads better.
-    const std::size_t lexical = lex::reportLexErrors(stream, session.diags());
+    preprocessed.push_back(preprocessor.run(file->id));
+    const pp::PPResult& result = preprocessed.back();
+    const std::size_t lexical = pp::reportLexedFileErrors(result, session.diags());
+    (void)pp::reportPPErrors(result.errors, preprocessor.expansions(), session.diags(),
+                             &session.symbols());
+    (void)pp::reportPPWarnings(result.warnings, preprocessor.expansions(), session.diags(),
+                               &session.symbols());
 
+    const lex::TokenStream stream = pp::preprocessedStream(result);
     const syntax::SyntaxTree* tree = store.parse(stream, file->revision);
     if (tree == nullptr) {
       printError(err, name + ": out of memory while building the syntax tree");
@@ -80,7 +106,7 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
       err << renderer.renderAll(session.diags());
       err.flush();
     }
-    if (lexical != 0 || syntax != 0) {
+    if (lexical != 0 || syntax != 0 || !result.errors.empty()) {
       failed = true;
     }
   }
@@ -95,6 +121,9 @@ int runParse(const CliOptions& options) {
 
   ParseRequest request;
   request.inputs = options.inputs;
+  request.defines = splitDefines(options.defines);
+  request.undefines = options.undefines;
+  request.includeDirs = options.includeDirs;
   request.showTrivia = !options.hideTrivia;
   // Color is decided per stream: a redirected stdout must stay clean even when
   // the terminal the user is watching can render colors on stderr.

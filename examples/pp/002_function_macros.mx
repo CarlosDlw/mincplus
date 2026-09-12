@@ -1,0 +1,61 @@
+// Function-like macros: parameter substitution, why every parameter and the
+// whole body are parenthesized, a macro calling another macro, and macros whose
+// body is a statement or a block.
+//
+// What the preprocessor emits, macro by macro:
+//
+//   SQUARE(4)                 -> ((4) * (4))
+//   MIN(2, 3)                 -> (((2) < (3)) ? (2) : (3))
+//   MAX(SQUARE(4), 10)        -> (((((4) * (4))) > (10)) ? (((4) * (4))) : (10))
+//   MIN_OF_PLUS_SQUARE(2,3,4) -> ((((2) < (3)) ? (2) : (3)) + ((4) * (4)))
+//   HALF(20)                  -> ((20) / 2)
+//   LET_INT(declared, 7)      -> let declared: i32 = 7;
+//   SCOPED_ZERO(scoped)       -> { let scoped: i32 = 0; }
+//
+// (The `MAX` line is what a mechanical substitution produces, which is the only
+// honest way to write it down: counting parentheses by hand gets it wrong, and
+// that is one more reason a macro body should be parenthesized defensively.)
+//
+// Three things worth reading off that list:
+//   * The arguments are substituted **expanded** into `MIN`/`MAX`, which is why
+//     `SQUARE(4)` arrives as `((4) * (4))` rather than as the four tokens
+//     `S Q U A R E ( 4 )`.
+//   * `MIN_OF_PLUS_SQUARE` only works because the substituted body is rescanned
+//     for more macro names -- that rescan is the whole reason macro expansion is
+//     specified in two steps instead of one.
+//   * `LET_INT` and `SCOPED_ZERO` show that a macro body is not restricted to
+//     expressions: the `;` and the `{}` in the body are just tokens, and the
+//     user of the macro writes neither. A macro whose body is a block is the
+//     C idiom for "declare a temporary with a name you do not care about".
+
+#define SQUARE(x) ((x) * (x))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define HALF(x) ((x) / 2)
+
+// A macro whose body invokes two other macros, one of them twice with the
+// caller's arguments. Nothing here is special-cased: the arguments are expanded
+// first, substituted, and then the result is scanned again.
+#define MIN_OF_PLUS_SQUARE(a, b, c) (MIN(a, b) + SQUARE(c))
+
+// A statement macro. It carries its own `;` so the call site never writes one
+// and the expansion is a complete statement wherever it is used.
+#define LET_INT(name, value) let name: i32 = value;
+
+// A block macro: the braces really are part of the expansion, so the temporary
+// it declares cannot leak out into the surrounding scope.
+#define SCOPED_ZERO(name) { let name: i32 = 0; }
+
+fn i32 main()
+{
+  let squared: i32 = SQUARE(4);
+  let smallest: i32 = MIN(2, 3);
+  let largest: i32 = MAX(SQUARE(4), 10);
+  let nested: i32 = MIN_OF_PLUS_SQUARE(2, 3, 4);
+  let halved: i32 = HALF(20);
+
+  SCOPED_ZERO(scoped)
+  LET_INT(declared, 7)
+
+  return squared + smallest + largest + nested + halved + declared;
+}

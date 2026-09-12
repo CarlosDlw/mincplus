@@ -3,9 +3,11 @@
 // What the parser reads from.
 //
 // Deliberately tiny, and deliberately an interface. The parser today reads a
-// file's significant tokens; a macro expansion later reads a token tree. If the
-// parser talked to `lex::TokenStream` directly, that second source would be a
-// rewrite of the grammar instead of a second implementation of this.
+// file's significant tokens; the preprocessor will read what the lexer produces
+// and hand the parser its expanded stream. If the parser talked to
+// `lex::TokenStream` directly, that second source would be a rewrite of the
+// grammar instead of a second implementation of this. Design record for the
+// preprocessor side: `docs/architectures/preprocessor.md`.
 //
 // Trivia is never returned: the parser is trivia-blind by design. Attaching
 // trivia to the tree is the builder's job, not the grammar's.

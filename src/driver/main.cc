@@ -12,6 +12,7 @@
 #include "driver/help_text.h"
 #include "driver/lex_command.h"
 #include "driver/parse_command.h"
+#include "driver/pp_command.h"
 #include "driver/version.h"
 
 int main(int argc, char** argv) {
@@ -35,6 +36,8 @@ int main(int argc, char** argv) {
     return minc::driver::runLex(opts);
   case minc::driver::Command::Parse:
     return minc::driver::runParse(opts);
+  case minc::driver::Command::Pp:
+    return minc::driver::runPp(opts);
   case minc::driver::Command::Build:
   case minc::driver::Command::Run:
   case minc::driver::Command::Check:
