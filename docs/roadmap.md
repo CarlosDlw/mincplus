@@ -17,7 +17,7 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 - [x] `driver` shell: `cli`, `help_text`, `exit_code`, `--help`/`--version`
 - [x] Build system, presets, cross-platform CI, format and tidy gates
 - [x] Architecture contract map in [`architecture.md`](architecture.md), lexer
-      design in [`lexer.md`](lexer.md)
+      design in [`architectures/lexer.md`](architectures/lexer.md)
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
@@ -36,7 +36,8 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 
 ## 2. Lexer — `src/lex`
 
-- [ ] Design from [`lexer.md`](lexer.md): a pure, resumable raw lexer producing
+- [ ] Design from [`architectures/lexer.md`](architectures/lexer.md): a pure,
+      resumable raw lexer producing
       `{kind, length}` tokens with error flags, recorded into a lossless
       per-file token buffer
 - [ ] Token kinds, token buffer with lookahead, and `Span` on every token

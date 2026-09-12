@@ -1,0 +1,7 @@
+// variables examples
+fn i32 main()
+{
+  let x: i32 = 0;
+  let y = 10; // auto-infer
+  return x;
+}

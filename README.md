@@ -47,9 +47,11 @@ and full C interoperability in both directions.
 - [x] `fn` function declaration form (`fn i32 main() { ... }`), as in
       `examples/001_main_func.mx`
 - [x] Block statements and `return`
+- [x] `//` line comments
+- [x] `let` bindings with a colon type annotation and inference
+      (`let x: i32 = 0;` / `let y = 10;`), as in `examples/002_variables.mx`
+- [ ] Whether `let` may be reassigned, or needs a companion (`mut` / `var`) `[?]`
 - [ ] C-style function and declaration syntax alongside `fn`
-- [ ] `let` / `var` binding syntax `[?]`
-- [ ] Type inference for bindings `[?]`
 - [ ] Doc comments attached to declarations
 - [ ] Attributes/annotations on declarations `[?]`
 
@@ -302,7 +304,8 @@ hidden escape hatch.
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
 [`docs/roadmap.md`](docs/roadmap.md); the lexer design and its research
-references are in [`docs/lexer.md`](docs/lexer.md).
+references are in
+[`docs/architectures/lexer.md`](docs/architectures/lexer.md).
 
 ## Build
 
