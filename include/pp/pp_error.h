@@ -54,6 +54,10 @@ enum class PPErrorCode : std::uint8_t {
   ExpressionSyntax,           // `#if` operand that is not a constant expression
   UndefinedIdentifier,        // a name in `#if` that is not a macro (-Wundef)
 
+  // Operators the preprocessor gives no meaning to where they were written:
+  // a `#` that does not start a line, or a `##` outside a macro body.
+  StrayHashOperator,
+
   // Includes.
   IncludeNotFound,       // nothing on the search list resolved the path
   IncludeSelfReference,  // the include chain names this file again

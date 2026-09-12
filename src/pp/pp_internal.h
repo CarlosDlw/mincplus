@@ -16,18 +16,15 @@
 
 namespace minc::pp::detail {
 
-// True when `token` is the `#` that starts a directive. The lexer has no
-// `Hash` kind on purpose (see `lexer.md`, decision 13): `#` is not part of the
-// language, so a raw token stream reports it as an invalid byte and this stage
-// claims it. Distinguishing it from any other invalid byte is by spelling.
-[[nodiscard]] inline bool isHash(const lex::Token& token, std::string_view text) {
-  return token.is(lex::TokenKind::Invalid) && token.length == 1 && token.offset < text.size() &&
-         text[token.offset] == '#';
+// The `#` that a directive can start with. It is an ordinary token: the lexer
+// classifies the byte, and only *position* turns a `Hash` into a directive
+// introducer. Nothing here inspects a spelling to find one.
+[[nodiscard]] inline bool isHash(const lex::Token& token) {
+  return token.is(lex::TokenKind::Hash);
 }
 
-[[nodiscard]] inline bool isHash(const PPToken& token, const TokenText& text) {
-  const std::string_view spelling = text.spelling(token);
-  return token.is(lex::TokenKind::Invalid) && spelling.size() == 1 && spelling.front() == '#';
+[[nodiscard]] inline bool isHash(const PPToken& token) {
+  return token.is(lex::TokenKind::Hash);
 }
 
 [[nodiscard]] inline bool isSignificant(const PPToken& token) {

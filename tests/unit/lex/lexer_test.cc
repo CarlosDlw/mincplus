@@ -92,6 +92,8 @@ TEST(LexerTest, EveryPunctuatorSpelling) {
   } kCases[] = {
       {"<<=", TokenKind::LessLessEqual},
       {">>=", TokenKind::GreaterGreaterEqual},
+      {"##", TokenKind::HashHash},
+      {"#", TokenKind::Hash},
       {"->", TokenKind::Arrow},
       {"++", TokenKind::PlusPlus},
       {"--", TokenKind::MinusMinus},
@@ -381,9 +383,33 @@ TEST(LexerTest, WhitespaceAndNewlines) {
 }
 
 TEST(LexerTest, InvalidBytes) {
-  EXPECT_EQ(lexFirst("#").kind, TokenKind::Invalid);
   EXPECT_EQ(lexFirst("@").kind, TokenKind::Invalid);
+  EXPECT_EQ(lexFirst("`").kind, TokenKind::Invalid);
   EXPECT_EQ(lexFirst("\x01").kind, TokenKind::Invalid);
+}
+
+TEST(LexerTest, PreprocessorOperatorsAreTokens) {
+  // `#` and `##` are punctuators, and longest match applies to them like any
+  // other: `# #` is two spellings and `##` is one. The preprocessor's whole
+  // notion of a paste operator rests on that distinction, so it is pinned here
+  // rather than discovered downstream.
+  const std::string_view spaced = "# #";
+  EXPECT_EQ(lexOne(spaced, 0).kind, TokenKind::Hash);
+  EXPECT_EQ(lexOne(spaced, 0).length, 1u);
+  EXPECT_EQ(lexOne(spaced, 2).kind, TokenKind::Hash);
+  EXPECT_EQ(lexFirst("##").kind, TokenKind::HashHash);
+  EXPECT_EQ(lexFirst("##").length, 2u);
+
+  // A lone `#` is a token, not an error, so a file full of directives lexes
+  // cleanly. Whether the `#` means anything is decided later, by position.
+  EXPECT_EQ(lexFirst("#define X 1\n").kind, TokenKind::Hash);
+}
+
+TEST(LexerTest, PreprocessorOperatorsAreTheirOwnCategory) {
+  EXPECT_TRUE(isPreprocessorOp(TokenKind::Hash));
+  EXPECT_TRUE(isPreprocessorOp(TokenKind::HashHash));
+  EXPECT_FALSE(isPreprocessorOp(TokenKind::Plus));
+  EXPECT_FALSE(isPreprocessorOp(TokenKind::Invalid));
 }
 
 TEST(LexerTest, NonAsciiCharacterIsOneToken) {

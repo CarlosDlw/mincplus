@@ -266,10 +266,12 @@ The preprocessor is a **client of the lexer**, not a stage before it. That is
 Clang's arrangement and it is the only one that keeps one tokenizer: a macro body
 is stored as tokens, a paste is re-lexed by the same `lexOne`, and there is no
 second spelling of "what is an identifier". It also means the preprocessor never
-sees a character that the lexer did not classify, so the "`#` is not a token"
-decision from [`lexer.md`](lexer.md) pays off here: `#` belongs to this stage,
-and `mincc lex` showing `Invalid` for it is the correct answer for "lex without
-preprocessing".
+sees a character that the lexer did not classify: `#` and `##` arrive as the
+`Hash` and `HashHash` tokens of [`lexer.md`](lexer.md) (decision 13), and this
+stage supplies the only thing the lexer could not — *position*. Being a client
+is also what makes `mincc lex` meaningful on a real file: tokenizing does not
+depend on directives existing, so a file full of them has no lexical errors in
+it.
 
 `pp` links `minc_lex` and `minc_span`, and **not** `minc_diag`: like the lexer
 and the parser, it reports errors as values, and `minc_pp_report` is the separate
@@ -698,15 +700,22 @@ without answering anything; `mincc parse` is where whitespace is visible.
 Lexical errors are reported for **every file the run read**, not just the one
 named on the command line: the preprocessor is the only stage that knows a
 header was opened, so it is the only stage that can report a bad byte in one.
-The `#` that starts a directive is not such a byte -- the lexer has no `#` kind
-on purpose (`lexer.md`, decision 13), and the filter that keeps it out of the
-lexical report is in `pp_report`, where the claim lives.
+The `Hash` and `HashHash` tokens are the one thing filtered out of that report,
+not because they are questionable but because they are already correct tokens:
+whether a `#` sits at the start of a line is a fact this stage owns and the
+lexical pass cannot see, so `pp_report` leaves them to the code that decides it
+(the filter, and the claim, live in `pp_report`).
 
-`mincc lex` deliberately does **not** do any of this: it is the raw, single-file
-view of the lexer, which is why a directive in its input is
-`lex-invalid-character` there and absent here. `mincc parse` runs the whole
-front end (`source -> lex -> preprocess -> parse`), so a file with directives has
-a tree; `mincc pp` is the token-level view of the same unit; `mincc lex` is the
+A `#` that starts no directive and a `##` outside a macro body are the
+preprocessor's own error, `pp-stray-hash`, reported once with the caret on the
+operator. The token is still emitted, so the stream stays lossless and the
+tree the parser builds from it still contains every byte.
+
+`mincc lex` reports no preprocessing errors because it does no preprocessing:
+its job is the lexical grammar, and `#` is part of the lexical grammar. `mincc
+parse` runs the whole front end (`source -> lex -> preprocess -> parse`), so a
+file with directives has a tree; `mincc pp` is the token-level view of the same
+unit; `mincc lex` is the
 stage-level view of one file.
 
 ## How the claims above are checked

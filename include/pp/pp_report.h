@@ -27,12 +27,13 @@ namespace minc::pp {
 
 // Reports the lexical problems of every file the run read, in read order.
 //
-// The `#` of a directive is skipped: the lexer has no `#` kind on purpose
-// (`lexer.md`, decision 13), so on this path those bytes belong to the
-// preprocessor and reporting them as an invalid character would blame the stage
-// that is not wrong. Nothing else is filtered, so an invalid byte in a header is
-// an error like it is in the main file -- which is the only way a reader learns
-// which header is broken.
+// `Hash` and `HashHash` are skipped: they are ordinary tokens of the lexical
+// grammar, and whether a `#` is a directive introducer or a `##` is a paste is
+// decided by position, which this stage owns and the lexical pass cannot see.
+// Calling either an invalid character would blame the stage that is not wrong.
+// Nothing else is filtered, so an invalid byte in a header is an error like it
+// is in the main file -- which is the only way a reader learns which header is
+// broken.
 [[nodiscard]] std::size_t reportLexedFileErrors(const PPResult& result, support::DiagBag& diags);
 
 // Adds one error diagnostic per error, preserving order, each followed by a note

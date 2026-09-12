@@ -161,6 +161,11 @@ PPOutcome invalidHashOperand() {
 PPOutcome missingMacroName() {
   return PPFixture().source("#define\n").run();
 }
+PPOutcome strayHashOperator() {
+  // A `#` with something other than whitespace before it on its line: the
+  // preprocessor has no directive to open and no macro body to paste in.
+  return PPFixture().source("let x = 1 + # 2;\n").run();
+}
 PPOutcome expansionDepth() {
   std::string text;
   for (int i = 0; i < 300; ++i) {
@@ -242,6 +247,7 @@ constexpr CodeTrigger kTriggers[] = {
     {"pp-invalid-paste", "## forming two tokens", &invalidPaste},
     {"pp-invalid-hash-operand", "# before a non-parameter", &invalidHashOperand},
     {"pp-missing-macro-name", "#define without a name", &missingMacroName},
+    {"pp-stray-hash", "a '#' that starts no line", &strayHashOperator},
     {"pp-expansion-depth", "300 chained macros", &expansionDepth},
     {"pp-expansion-budget", "lowered token budget", &expansionBudget},
     {"pp-expression-syntax", "an incomplete expression", &expressionSyntax},

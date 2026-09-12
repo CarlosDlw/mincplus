@@ -244,8 +244,10 @@ Design record: [`docs/architectures/lexer.md`](architectures/lexer.md).
 Design record: [`docs/architectures/preprocessor.md`](architectures/preprocessor.md).
 
 - It is a **client of the lexer**, never a second tokenizer: it walks
-  `TokenStream`s and re-lexes a paste with the same `lexOne`. The `#` of a
-  directive is claimed here, which is why the lexer has no `#` kind at all.
+  `TokenStream`s and re-lexes a paste with the same `lexOne`. `#` and `##` are
+  `Hash` and `HashHash` tokens coming out of the lexer; this stage supplies the
+  one thing the lexer cannot — *position* — and reports `pp-stray-hash` when a
+  `#` starts no line and a `##` sits outside a macro body.
 - Directives are recognised only while the expansion stack is empty -- that is
   literally "this token was written in a file, not produced by a macro".
 - The output is the preprocessed **text** plus the tokens that tile it, trivia

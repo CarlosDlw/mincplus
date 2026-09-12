@@ -106,7 +106,7 @@ TEST(LexReportTest, EveryFlagIsReachableFromSomeInput) {
       {"escape past the last scalar", "\"\\U00110000\"", "lex-escape-out-of-range"},
       {"empty char literal", "''", "lex-empty-char"},
       {"hex with no digits", "0x", "lex-missing-digits"},
-      {"byte outside the alphabet", "#", "lex-invalid-character"},
+      {"byte outside the alphabet", "`", "lex-invalid-character"},
   };
 
   std::set<std::string> seen;
@@ -149,10 +149,10 @@ TEST(LexReportTest, SpanPointsAtTheOffendingToken) {
 
 TEST(LexReportTest, PrintableInvalidCharacterIsQuoted) {
   support::DiagBag bag;
-  report("let x = #;\n", bag);
+  report("let x = `;\n", bag);
   ASSERT_EQ(bag.size(), 1u);
   EXPECT_EQ(bag.all()[0].code, "lex-invalid-character");
-  EXPECT_EQ(bag.all()[0].message, "unexpected character '#'");
+  EXPECT_EQ(bag.all()[0].message, "unexpected character '`'");
   EXPECT_EQ(bag.all()[0].span.begin, 8u);
   EXPECT_EQ(bag.all()[0].span.end, 9u);
 }

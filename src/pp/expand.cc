@@ -374,7 +374,6 @@ void Preprocessor::substitute(const MacroInfo& macro, const PPToken& nameToken,
 
   for (std::size_t i = 0; i < macro.body.size(); ++i) {
     const MacroBodyToken& body = macro.body[i];
-    const std::string_view text = macro.spellingOf(i);
 
     if (body.variadicOptOpen) {
       // The marker itself is never emitted; only its content is, and only when
@@ -390,7 +389,7 @@ void Preprocessor::substitute(const MacroInfo& macro, const PPToken& nameToken,
       continue;
     }
 
-    if (text == "#" && i + 1 < macro.body.size()) {
+    if (detail::isHash(body.token) && i + 1 < macro.body.size()) {
       const std::uint8_t slot = macro.body[i + 1].param;
       const std::vector<PPToken>& argument = slotArgument(slot, /*raw=*/true);
       const std::string literal = stringifyTokens(*this, argument);
@@ -402,7 +401,7 @@ void Preprocessor::substitute(const MacroInfo& macro, const PPToken& nameToken,
       continue;
     }
 
-    if (text == "##") {
+    if (body.token.is(lex::TokenKind::HashHash)) {
       PPToken marker = body.token;
       marker.flags = flagOf(PPTokenFlag::PasteOperator);
       marker.loc.expansion = expansion;

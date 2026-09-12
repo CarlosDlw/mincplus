@@ -13,12 +13,11 @@
 namespace minc::pp {
 namespace {
 
-// The `#` that starts a directive. It is `Invalid` to the lexer by design, so it
-// is the one byte the preprocessor claims and the lexical report must not call
-// an error.
-[[nodiscard]] bool isDirectiveHash(const lex::Token& token, std::string_view text) {
-  return token.is(lex::TokenKind::Invalid) && token.length == 1 && token.offset < text.size() &&
-         text[token.offset] == '#';
+// The tokens the preprocessor gives meaning to, which the lexical report must
+// therefore not call errors. Position decides whether they are legal, and
+// position is this stage's business, not the lexer's.
+[[nodiscard]] bool isPreprocessorToken(const lex::Token& token, std::string_view) {
+  return lex::isPreprocessorOp(token.kind);
 }
 
 // The notes that turn "unknown identifier" into "in expansion of macro 'MAX'".
@@ -84,7 +83,7 @@ std::size_t reportLexedFileErrors(const PPResult& result, support::DiagBag& diag
   const std::size_t before = diags.size();
   for (const std::shared_ptr<const lex::TokenStream>& stream : result.lexed) {
     if (stream != nullptr) {
-      (void)lex::reportLexErrors(*stream, diags, &isDirectiveHash);
+      (void)lex::reportLexErrors(*stream, diags, &isPreprocessorToken);
     }
   }
   return diags.size() - before;

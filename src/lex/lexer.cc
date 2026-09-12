@@ -24,10 +24,12 @@ namespace {
 // rather than split between a table and the code that indexes it. `tests/unit/lex`
 // pins every spelling in this block to its kind, so a missing row fails loudly.
 //
-// `#` is deliberately absent. It introduces a preprocessor directive, and the
-// preprocessor is a separate layer that owns it; outside a directive `#` is
-// not part of the language. The raw dump therefore shows it as `Invalid`,
-// which is the honest answer for "lex this file with no preprocessing".
+// `#` and `##` are here because they are punctuators of the lexical grammar,
+// not because the preprocessor wants them: the tokenizer's job is to say what
+// the bytes *are*, and only the preprocessor's job is to say what a `#` at the
+// start of a line *means*. Longest match applies to `##` as it does everywhere
+// else, so `# #` (two spellings) and `##` (one) stay distinguishable -- which
+// is exactly the distinction the preprocessor has to make.
 [[nodiscard]] std::optional<Token> scanPunctuator(std::string_view text, std::uint32_t offset) {
   const std::size_t size = text.size();
   const char c0 = text[offset];
@@ -108,6 +110,8 @@ namespace {
     return punct(offset, 1, TokenKind::Question);
   case '.':
     return punct(offset, 1, TokenKind::Dot);
+  case '#':
+    return c1 == '#' ? punct(offset, 2, TokenKind::HashHash) : punct(offset, 1, TokenKind::Hash);
   default:
     return std::nullopt;
   }

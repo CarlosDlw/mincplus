@@ -90,12 +90,18 @@ parser. It audits the invariant while building:
 lex, and a deterministic pseudo-random byte-soup test asserts it for 2000
 inputs on every platform with no extra tooling.
 
-### 4. Preprocessor — `src/lex/pp` (planned)
+### 4. Preprocessor — `src/pp`
 
 Directives and macro expansion belong here, on the token stream, producing a new
 stream with spans that map back to the original spelling. It owns `#include`,
 conditionals, and macro expansion, and it must never see a keyword as a macro
 name — which is the C rule and the reason keywords are classified during lexing.
+
+It is a **client of this module, not a pass before it**: it drives the same
+`lexOne`, so there is one spelling of "what is an identifier" and a macro body is
+stored as the tokens this lexer produced. See
+[`preprocessor.md`](preprocessor.md) for the design and `docs/architecture.md`
+for where it sits in the pipeline.
 
 ### 5. `Session` holds the derived tables
 
@@ -183,7 +189,7 @@ the bytes.
 | 10 | Implicit octal (`010`) | **Rejected.** Leading zero without a prefix is plain decimal; octal is spelled `0o`. C's implicit octal is a well-known footgun and `.mx` states widths explicitly elsewhere too. |
 | 11 | Literal suffixes (`10u`, `1.0f`) | **Open.** The lexer consumes the numeric core and leaves a following letter to start an identifier, so `10u` is `10` then `u`. Suffixes tie into the type system, so they are decided with it, not ahead of it. |
 | 12 | Unicode identifiers | **Not supported.** Names are ASCII; a non-ASCII byte outside a comment or string is one `Invalid` token covering the whole character. |
-| 13 | `#` in the lexer | **Not a token.** `#` introduces a preprocessor directive, and the preprocessor is a separate layer that owns it ([`preprocessor.md`](preprocessor.md)). `mincc lex` shows it as `Invalid`, which is the honest answer for "lex this file with no preprocessing". |
+| 13 | `#` and `##` in the lexer | **Tokens, `Hash` and `HashHash`.** They are punctuators of the lexical grammar, not a preprocessor concept: Clang spells them `tok::hash`/`tok::hashhash` and GCC's cpplib `CPP_HASH`/`CPP_HASHHASH`. Only their *meaning* is positional, and position is the preprocessor's business ([`preprocessor.md`](preprocessor.md)). Classifying them here is what keeps the later stages small — no stage has to identify a directive by sniffing the spelling of a byte the lexer refused to classify, and no stage has to reassemble a `##` out of two adjacent `#` bytes. Longest match applies as it does everywhere else, so `##` is one token and `# #` is two, which is exactly the distinction a paste operator needs. |
 
 ## The lexical grammar as implemented
 
@@ -210,7 +216,10 @@ the bytes.
   `empty-char`; `'ab'` does not, because what a multi-character literal means is
   a type question.
 - **Punctuators**: longest match over the full set — assignment, arithmetic,
-  bitwise, logical, comparison, and the delimiters.
+  bitwise, logical, comparison, the delimiters, and the preprocessor's `#` and
+  `##`. `#`/`##` are classified here and *interpreted* later: a `Hash` that
+  starts no directive and a `HashHash` outside a macro body are diagnosed by the
+  preprocessor, which is the only stage that knows what position they are in.
 - **Anything else**: one `Invalid` token per byte, except that a non-ASCII lead
   byte takes its continuation bytes with it so one character is one token.
 

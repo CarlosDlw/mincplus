@@ -201,28 +201,15 @@ bool Preprocessor::buildReplacementList(const std::vector<PPToken>& definition, 
     return false;
   };
 
-  // The body, with `##` merged into a single two-character token. Merging here
-  // means the expander and the identical-redefinition check both see one `##`
-  // and never have to re-derive it from adjacency.
+  // The body, trivia removed. `##` needs no reassembly: the lexer's longest
+  // match already made it one token, and `# #` two, which is precisely the
+  // distinction the paste operator depends on.
   std::vector<PPToken> tokens;
   for (; index < definition.size(); ++index) {
     const PPToken& token = definition[index];
-    if (!isSignificant(token)) {
-      continue;
+    if (isSignificant(token)) {
+      tokens.push_back(token);
     }
-    if (!tokens.empty() && isHash(token, *this) && spelling(tokens.back()) == "#" &&
-        tokens.back().loc.spelling.valid() && token.loc.spelling.valid() &&
-        tokens.back().loc.spelling.end() == token.loc.spelling.offset) {
-      // `#` `#` written next to each other is the paste operator.
-      PPToken paste = tokens.back();
-      paste.length = 2;
-      paste.loc.spelling =
-          SourceLoc{tokens.back().loc.spelling.file, tokens.back().loc.spelling.offset, 2};
-      paste.scratch = addScratch("##");
-      tokens.back() = paste;
-      continue;
-    }
-    tokens.push_back(token);
   }
 
   out.spellings.clear();
@@ -315,14 +302,14 @@ bool Preprocessor::buildReplacementList(const std::vector<PPToken>& definition, 
   }
 
   for (std::size_t i = 0; i < out.body.size(); ++i) {
-    const std::string_view text = out.spellingOf(i);
-    if (text == "#") {
+    const lex::TokenKind kind = out.body[i].token.kind;
+    if (isHash(out.body[i].token)) {
       if (i + 1 >= out.body.size() || out.body[i + 1].param == kNotAParameter) {
         return fail(out.body[i].token, "'#' must be followed by a parameter of this macro",
                     PPErrorCode::InvalidHashOperand);
       }
       markRaw(out.body[i + 1].param, /*withHash=*/true);
-    } else if (text == "##") {
+    } else if (kind == lex::TokenKind::HashHash) {
       if (i == 0 || i + 1 >= out.body.size()) {
         return fail(out.body[i].token,
                     "'##' cannot appear at the beginning or end of a replacement list",

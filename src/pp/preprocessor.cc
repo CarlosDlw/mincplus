@@ -550,7 +550,7 @@ bool Preprocessor::startsDirective() const {
   if (frame.index >= frame.stream->size()) {
     return false;
   }
-  return isHash((*frame.stream)[frame.index], frame.stream->text());
+  return isHash((*frame.stream)[frame.index]);
 }
 
 void Preprocessor::readDirectiveLine(std::vector<PPToken>& line) {
@@ -768,6 +768,23 @@ PPResult Preprocessor::run(support::FileId mainFile) {
     }
     if (token.is(lex::TokenKind::Identifier) && tryExpand(token, /*emitPath=*/true)) {
       continue;
+    }
+    if (lex::isPreprocessorOp(token.kind)) {
+      // Reaching here means the `#` did not start a directive (something other
+      // than whitespace preceded it on its line) or the `##` was not inside a
+      // macro's replacement list. The preprocessor is the only stage that can
+      // attach a meaning to either, and it has none to attach, so it says so.
+      //
+      // The token is still emitted: dropping it would break the lossless
+      // invariant, and the parser's "unexpected token" on top of this is the
+      // honest follow-on, not a duplicate.
+      pushError(PPError{token.loc.spelling.span(),
+                        token.is(lex::TokenKind::Hash)
+                            ? "stray '#' in program; a directive starts with '#' at the "
+                              "beginning of a line"
+                            : "stray '##' in program; it is only valid inside a macro's "
+                              "replacement list",
+                        PPErrorCode::StrayHashOperator, token.loc.expansion});
     }
     emit(token);
   }

@@ -10,18 +10,11 @@
 #include <utility>
 #include <vector>
 
+#include "pp_internal.h"
 #include "support/fs/fs.h"
 
 namespace minc::pp {
 namespace {
-
-// True when the token is the `#` that starts a directive. The lexer does not
-// know preprocessor directives, so `#` arrives as an invalid one-byte token; the
-// preprocessor owns it from here on (see `lexer.md`, decision 13).
-[[nodiscard]] bool isHash(const lex::Token& token, std::string_view text) {
-  return token.is(lex::TokenKind::Invalid) && token.length == 1 && token.offset < text.size() &&
-         text[token.offset] == '#';
-}
 
 // The significant tokens of a stream, with the `#` tokens readable as such.
 struct DirectiveToken {
@@ -170,7 +163,7 @@ std::optional<support::SymId> sniffIncludeGuard(const lex::TokenStream& stream,
   }
   std::size_t cursor = 0;
   const auto expectHash = [&]() {
-    if (cursor >= significant.size() || !isHash(*significant[cursor].token, text)) {
+    if (cursor >= significant.size() || !detail::isHash(*significant[cursor].token)) {
       return false;
     }
     ++cursor;
@@ -202,7 +195,7 @@ std::optional<support::SymId> sniffIncludeGuard(const lex::TokenStream& stream,
   int depth = 1;
   while (cursor < significant.size()) {
     const DirectiveToken& token = significant[cursor];
-    if (!isHash(*token.token, text)) {
+    if (!detail::isHash(*token.token)) {
       ++cursor;
       continue;
     }

@@ -43,7 +43,7 @@ constexpr const char* kEllipsis = "...";
   if (isLiteral(kind)) {
     return kLiteralColor;
   }
-  if (isOperator(kind) || isPunctuation(kind)) {
+  if (isOperator(kind) || isPunctuation(kind) || isPreprocessorOp(kind)) {
     return kOperatorColor;
   }
   if (kind == TokenKind::Identifier) {

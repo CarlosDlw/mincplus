@@ -57,6 +57,18 @@ enum class TokenKind : std::uint8_t {
   Dot,
   Arrow,
 
+  // The preprocessor's operators. `#` and `##` are punctuators of the lexical
+  // grammar -- Clang spells them `tok::hash` and `tok::hashhash`, GCC's cpplib
+  // `CPP_HASH` and `CPP_HASHHASH` -- and only their *meaning* is positional.
+  //
+  // Classifying them here is what keeps every later stage small: the
+  // preprocessor asks "is this a `Hash` at the start of a line?" instead of
+  // asking "is this an unknown byte whose spelling happens to be `#`?", and it
+  // never has to rebuild a `##` out of two adjacent `#` bytes. A file full of
+  // directives is then a file with no lexical errors in it, which is the truth.
+  Hash,
+  HashHash,
+
   // Arithmetic.
   Plus,
   Minus,
@@ -198,6 +210,20 @@ enum class TokenKind : std::uint8_t {
   case TokenKind::Question:
   case TokenKind::Dot:
   case TokenKind::Arrow:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// The two operators that carry meaning only for the preprocessor. Position
+// decides what they do, and position is the preprocessor's business, so a
+// `Hash` that starts no directive and a `HashHash` outside a macro body are
+// diagnosed there rather than rejected here. Neither ever reaches the parser.
+[[nodiscard]] constexpr bool isPreprocessorOp(TokenKind kind) {
+  switch (kind) {
+  case TokenKind::Hash:
+  case TokenKind::HashHash:
     return true;
   default:
     return false;

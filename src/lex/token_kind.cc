@@ -103,6 +103,10 @@ const char* toString(TokenKind kind) {
     return "Dot";
   case TokenKind::Arrow:
     return "Arrow";
+  case TokenKind::Hash:
+    return "Hash";
+  case TokenKind::HashHash:
+    return "HashHash";
   case TokenKind::Plus:
     return "Plus";
   case TokenKind::Minus:
