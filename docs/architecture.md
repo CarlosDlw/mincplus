@@ -182,6 +182,12 @@ checks all three. The load-bearing decisions:
 
 ## Where the next stages plug in
 
+Planned pipeline: `source -> preprocess -> lex -> parse (AST) -> sema -> ir ->
+backend -> C interop`, with the driver orchestrating the stages.
+
+- **preprocess** turns a `SourceFile` into a token stream with `#include`
+  resolution; it owns file inclusion and macro expansion, and reports through
+  `DiagBag` with spans that survive expansion.
 - **lex** reads `SourceFile::text` (already trusted UTF-8), emits tokens
   carrying `Span`, and reports through `DiagBag`. It should not re-validate
   encoding or re-derive limits.
