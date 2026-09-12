@@ -74,6 +74,23 @@ Fallible<FileId> SourceManager::loadFromDisk(const std::string& path) {
   return addFile(path, std::move(bytes.value()));
 }
 
+Fallible<void> SourceManager::replaceText(FileId id, std::string text) {
+  if (id >= files_.size()) {
+    return makeUnexpected<std::string>("no source file with id " + std::to_string(id));
+  }
+
+  SourceFile& file = files_[id];
+  Fallible<std::string> normalized = normalizeSource(file.path, std::move(text));
+  if (!normalized) {
+    // Leave the previous revision intact: a rejected edit must not corrupt a
+    // document the editor still believes is loaded.
+    return makeUnexpected<std::string>(normalized.error());
+  }
+
+  file.resetText(std::move(normalized.value()));
+  return Fallible<void>{};
+}
+
 const SourceFile* SourceManager::find(FileId id) const {
   if (id >= files_.size()) {
     return nullptr;

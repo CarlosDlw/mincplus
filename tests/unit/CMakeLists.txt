@@ -47,6 +47,7 @@ minc_add_executable(minc_unit_tests
     support/mem/arena_test.cc
     support/expected/expected_test.cc
     support/intern/interner_test.cc
+    support/session/session_test.cc
     support/utf8/utf8_test.cc
     driver/cli_test.cc
   DEPS

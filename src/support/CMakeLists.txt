@@ -5,6 +5,7 @@ add_subdirectory(diag)
 add_subdirectory(mem)
 add_subdirectory(intern)
 add_subdirectory(utf8)
+add_subdirectory(session)
 
 add_library(minc_support INTERFACE)
 target_link_libraries(minc_support INTERFACE
@@ -15,5 +16,6 @@ target_link_libraries(minc_support INTERFACE
   minc_mem
   minc_intern
   minc_utf8
+  minc_session
 )
 target_include_directories(minc_support INTERFACE ${PROJECT_SOURCE_DIR}/include)

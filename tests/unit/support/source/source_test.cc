@@ -182,5 +182,38 @@ TEST(FileIoTest, ReadsExactBytes) {
   std::remove(path.c_str());
 }
 
+TEST(SourceManagerTest, ReplaceTextBumpsRevisionAndRebuildsLines) {
+  SourceManager sm;
+  const FileId id = sm.addFile("m.mx", "a\n").value();
+  const SourceFile* file = sm.find(id);
+  ASSERT_NE(file, nullptr);
+  EXPECT_EQ(file->revision, 0u);
+  EXPECT_EQ(file->lineCount(), 2u);
+
+  ASSERT_TRUE(sm.replaceText(id, "x\ny\nz").hasValue());
+  file = sm.find(id);
+  ASSERT_NE(file, nullptr);
+  EXPECT_EQ(file->revision, 1u);
+  EXPECT_EQ(file->lineCount(), 3u);
+  EXPECT_EQ(file->text, "x\ny\nz");
+}
+
+TEST(SourceManagerTest, ReplaceTextRejectsBadInputAndKeepsTheOldText) {
+  SourceManager sm;
+  const FileId id = sm.addFile("m.mx", "good").value();
+  std::string withNul("no\0way", 6);
+
+  EXPECT_FALSE(sm.replaceText(id, withNul).hasValue());
+  const SourceFile* file = sm.find(id);
+  ASSERT_NE(file, nullptr);
+  EXPECT_EQ(file->text, "good");
+  EXPECT_EQ(file->revision, 0u);
+}
+
+TEST(SourceManagerTest, ReplaceUnknownIdFails) {
+  SourceManager sm;
+  EXPECT_FALSE(sm.replaceText(7, "x").hasValue());
+}
+
 } // namespace
 } // namespace minc::support

@@ -24,7 +24,12 @@ minc_support               INTERFACE alias over the support libraries
   ├── minc_utf8
   ├── minc_mem             Arena
   ├── minc_intern          Interner
-  └── (expected)           header-only: Expected / Unexpected / Fallible
+  ├── (expected)           header-only: Expected / Unexpected / Fallible
+  └── minc_session         per-compilation state
+        ├── minc_source      (sources, symbols, diagnostics, node arena)
+        ├── minc_diag
+        ├── minc_intern
+        └── minc_mem
 ```
 
 Rules:
@@ -36,6 +41,8 @@ Rules:
 - Targets are created with `minc_add_library` / `minc_add_executable`, which
   apply the include dirs, the C++ standard, and the shared warning set. A new
   module is a directory with a three-line `CMakeLists.txt`.
+- Cross-phase state lives only in `Session`. Stages take a `Session&` instead
+  of owning or reaching for sources, symbols, or diagnostics.
 
 ## Module contracts
 
@@ -117,6 +124,21 @@ Rules:
   stable for the interner's lifetime; `clear()` is the only invalidating call.
 - `contains` and the lookup path are allocation-free.
 - `intern` returns `kInvalidSym` once the `SymId` space is exhausted.
+
+### `session`
+
+- `Session` owns one `SourceManager`, `Interner`, `DiagBag`, and `Arena`. It is
+  not copyable or movable, so member addresses, and everything they hand out
+  (`SourceFile` pointers, interned views), stay stable for its lifetime.
+- Stages take `Session&`; nothing else owns cross-phase state.
+- `updateFile` is the editor path: it keeps the `FileId` stable, validates the
+  new bytes, rebuilds the line table, and bumps `SourceFile::revision`. On
+  failure the previous revision is left untouched, so a rejected edit cannot
+  corrupt a document the editor still believes is loaded.
+- **Revision rule.** A span, token, or offset-keyed diagnostic is only valid
+  for the revision it was produced from, because byte offsets do not survive an
+  edit. Caches key on `(FileId, revision)` and a bumped revision invalidates
+  derived data rather than repairing it.
 
 ### `driver`
 

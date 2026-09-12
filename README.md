@@ -290,6 +290,8 @@ hidden escape hatch.
   - `intern/` deduplicated symbols
   - `utf8/` strict decoding, validation, and BOM detection
   - `expected/` `Expected`/`Unexpected` and the `Fallible<T>` alias
+  - `session/` central per-compilation state: sources, symbols, diagnostics,
+    and the node arena, with per-file revisions for editor use
 - `src/driver/` — `mincc` entry point: `cli` (parsing), `help_text` (help and
   version output), `exit_code`. The version header is generated from
   `cmake/version.h.in`; the source tree holds no second copy.
@@ -299,7 +301,8 @@ hidden escape hatch.
 
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
-[`docs/roadmap.md`](docs/roadmap.md).
+[`docs/roadmap.md`](docs/roadmap.md); the lexer design and its research
+references are in [`docs/lexer.md`](docs/lexer.md).
 
 ## Build
 

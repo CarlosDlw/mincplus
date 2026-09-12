@@ -3,6 +3,7 @@
 #include "support/source/source_file.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace minc::support {
 
@@ -12,6 +13,12 @@ SourceFile::SourceFile(FileId fileId, std::string filePath, std::string fileText
   // moved from, and reading it here used to leave every file with a single
   // line, so all diagnostics pointed at line 1.
   lines.rebuild(this->text);
+}
+
+void SourceFile::resetText(std::string fileText) {
+  text = std::move(fileText);
+  lines.rebuild(text);
+  ++revision;
 }
 
 std::optional<std::string_view> SourceFile::lineText(std::uint32_t line) const {

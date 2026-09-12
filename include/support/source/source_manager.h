@@ -28,6 +28,15 @@ public:
   // Read a file from disk. Error is a human-readable message naming the path.
   [[nodiscard]] Fallible<FileId> loadFromDisk(const std::string& path);
 
+  // Replaces the text of an existing file, keeping its FileId and bumping its
+  // revision. This is the editor/LSP path: the id stays stable so open
+  // documents keep their identity while the contents change underneath.
+  //
+  // On failure the file is left exactly as it was. On success every span,
+  // token, and offset-keyed diagnostic derived from the previous revision is
+  // stale, because byte offsets do not survive an edit.
+  [[nodiscard]] Fallible<void> replaceText(FileId id, std::string text);
+
   [[nodiscard]] const SourceFile* find(FileId id) const;
   [[nodiscard]] std::uint32_t fileCount() const {
     return static_cast<std::uint32_t>(files_.size());

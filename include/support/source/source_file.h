@@ -20,12 +20,22 @@ namespace minc::support {
 
 struct SourceFile {
   FileId id = kInvalidFile;
+  // Bumped every time the text is replaced. Byte offsets are only meaningful
+  // within one revision: inserting a character at the front shifts every
+  // later offset, so a span, token, or diagnostic taken from revision N must
+  // never be applied to revision N+1. Caches key on this value.
+  std::uint32_t revision = 0;
   std::string path;
   std::string text;
   LineTable lines;
 
   SourceFile() = default;
   SourceFile(FileId fileId, std::string filePath, std::string fileText);
+
+  // Replaces the text and rebuilds the line table. Not part of the public
+  // flow because callers must go through SourceManager, which validates and
+  // bumps the revision.
+  void resetText(std::string fileText);
 
   [[nodiscard]] std::uint32_t size() const {
     return static_cast<std::uint32_t>(text.size());
