@@ -21,7 +21,8 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 - [x] ASan + UBSan preset (`cmake --preset sanitize`) as one build-wide switch,
       so no module can be left uninstrumented by accident
 - [x] Architecture contract map in [`architecture.md`](architecture.md), lexer
-      design in [`architectures/lexer.md`](architectures/lexer.md)
+      design in [`architectures/lexer.md`](architectures/lexer.md), parser and
+      syntax-tree design in [`architectures/parser.md`](architectures/parser.md)
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
@@ -74,21 +75,45 @@ lossless per-file token buffer.
 - [x] AddressSanitizer + UndefinedBehaviorSanitizer preset, run in CI
 - [ ] Fuzz target wired to a fuzzing engine (libFuzzer/AFL) in CI
 
-## 3. Parser — `src/parse` · AST — `src/ast`
+## 3. Parser — `src/parse` · syntax tree + AST — `src/syntax`
 
-- [ ] AST node model on `Arena`: kind, children, `Span`, no owning pointers
-- [ ] AST dump/pretty-printer for snapshot tests
-- [ ] Declarations: variables, functions, typedefs, `struct`/`union`/`enum`
-- [ ] Declarators: pointers, arrays, function pointers, the full C
-      "declaration mirrors use" grammar
-- [ ] Statements: compound, `if`/`else`, `switch`, all loops, `goto`/labels,
-      `return`, `break`, `continue`
-- [ ] Expressions with C precedence and associativity, including comma and
-      conditional operators
-- [ ] Initializers, including designated initializers
-- [ ] Type names and `sizeof`/`alignof`/casts
-- [ ] The `fn` extension syntax alongside the C-compatible forms
-- [ ] Error recovery that produces multiple diagnostics per run
+Design decided in [`architectures/parser.md`](architectures/parser.md): a
+hand-written recursive-descent parser that emits **events**, consumed by a
+separate builder into a **lossless, untyped green tree**, with a cursor and a
+typed AST view on top.
+
+- [ ] `TokenSource` over the significant-token index: the parser is trivia-blind
+- [ ] Event stream (`Start`/`Finish`/`Token`/`Error`) plus a side error list;
+      the parser allocates no tree and links no diagnostics
+- [ ] `TreeBuilder` consuming events and the full token stream, attaching trivia
+      into the node under construction (the only component that sees trivia)
+- [ ] Arena-backed green nodes/tokens: position-free and parent-free, with a
+      per-revision node cache for structural sharing
+- [ ] Cursor layer (parent, absolute offset, range, traversal); identity is
+      `(FileId, range)`, never a pointer
+- [ ] Unified `SyntaxKind` (u16) covering tokens and nodes, pinned to
+      `TokenKind` by a `static_assert`
+- [ ] Typed AST accessors over the untyped tree, every field optional so
+      half-written code is representable
+- [ ] Expressions: precedence climbing over one operator table, C precedence
+      and associativity; left-associative chains via `precede`/`forward_parent`
+- [ ] Type positions (`fn` return type, `: T`) parsed by position, so no token
+      kind for a type name and no lexer feedback
+- [ ] Error recovery: missing zero-width tokens, `Error` nodes, synchronization
+      sets, and a bail-out cap
+- [ ] Stack-safety guard on every recursive entry (`kMaxNestingDepth`), so deep
+      nesting is a diagnostic rather than a crash
+- [ ] `SyntaxTreeStore` in `Session`, keyed `(FileId, revision)`
+- [ ] Tree dump for inspection (`mincc parse <files...>`, `--no-trivia`)
+- [ ] Golden-file tests (`tests/parse/data/*.mx` with expected tree and errors)
+      and a lossless-reconstruction check over every example
+- [ ] Declarations: functions and the `let`/`const` forms
+- [ ] Statements and blocks
+- [ ] `if`/`else`, loops, `break`/`continue`, `switch` — when their syntax is
+      decided
+- [ ] `struct`/`union`/`enum`, typedefs, and the full C declarator grammar
+- [ ] Initializers, `sizeof`/`alignof`, casts, and the C-compatible `fn` forms
+- [ ] Reserved syntax kinds for macro calls, token trees, and attributes
 - [ ] Grammar documented next to the code it implements
 
 ## 4. Semantic analysis — `src/sema`

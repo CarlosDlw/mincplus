@@ -328,7 +328,10 @@ hidden escape hatch.
   version output), `error_report` (the one error format), `lex_command` (the
   `lex` subcommand), `exit_code`. The version header is generated from
   `cmake/version.h.in`; the source tree holds no second copy.
-- `src/lex/pp|parse|ast|sema|ir|backend|cinterop/` — planned.
+- `src/parse/` and `src/syntax/` — planned: the parser (events over a token
+  source) and the lossless syntax tree with its cursor and typed AST view.
+  Design in [`docs/architectures/parser.md`](docs/architectures/parser.md).
+- `src/lex/pp|sema|ir|backend|cinterop/` — planned.
 - `tests/unit/` — gtest suites, one per support module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
   `tests/unit/lex/examples_test.cc`, so an example cannot drift into syntax the

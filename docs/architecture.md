@@ -320,9 +320,13 @@ backend -> C interop`, with the driver orchestrating the stages.
   limits, or resolve names — it answers "what is here", never "what does it
   mean". Keyword classification is the one thing it does store, because the
   preprocessor must not expand a keyword as a macro name.
-- **parse** takes the token stream plus an `Arena` for AST nodes. It filters
-  trivia itself (or walks `significantIndices()`); the lexer deliberately does
-  not pre-filter, because that decision is irreversible.
+- **parse** (`src/parse`) walks the significant-token index and emits a stream
+  of **events**, never a node; it links no diagnostics, so a grammar change is
+  testable without a `Session`. **`src/syntax`** consumes those events and the
+  full token stream into a lossless, untyped **green tree** (arena-backed,
+  position-free) with a cursor and a typed AST view. Design record:
+  [`architectures/parser.md`](architectures/parser.md). The lexer deliberately
+  does not pre-filter trivia; the tree builder is the layer that attaches it.
 - **driver** links `minc_support`, `minc_lex`, and `minc_lex_report`, picks
   `ColorMode` per stream with `support/term`, and renders `DiagBag` with
   `DiagRenderer`.
