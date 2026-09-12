@@ -356,7 +356,7 @@ then a pinned `FetchContent` download; pass `-DMINC_FETCH_GTEST=OFF` to forbid
 the download. ccache is used when present.
 
 ```sh
-cmake --preset dev      # dev (Debug) | release | ci (warnings as errors)
+cmake --preset dev      # dev (Debug) | release | ci | sanitize
 cmake --build --preset dev
 ctest --preset dev
 ```
@@ -372,7 +372,17 @@ find include src tests \( -name '*.h' -o -name '*.cc' \) -print0 \
 clang-tidy -p build/dev $(find src -name '*.cc')
 ```
 
-`cmake --preset ci` and `ctest --preset ci` are what CI runs on every platform.
+```sh
+# AddressSanitizer + UndefinedBehaviorSanitizer over the whole project
+cmake --preset sanitize
+cmake --build --preset sanitize
+ctest --preset sanitize
+```
+
+`cmake --preset ci` and `ctest --preset ci` (warnings as errors) are what CI runs
+on every platform, and `--preset sanitize` is a Linux job there too. The
+sanitizer switch is build-wide rather than per-target, so a new module cannot be
+added to the tree and quietly left uninstrumented.
 
 ## Conventions
 

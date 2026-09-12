@@ -50,7 +50,7 @@ std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags) 
   const std::size_t before = diags.size();
 
   for (const Token& token : stream.tokens()) {
-    if (token.kind == TokenKind::Invalid) {
+    if (token.is(TokenKind::Invalid)) {
       reportInvalid(stream, token, diags);
     }
     if (!token.hasAnyFlag()) {

@@ -301,6 +301,26 @@ TEST(LexerTest, UnknownAndShortEscapes) {
   EXPECT_FALSE(lexFirst("\"\\U0001F600\"").hasAnyFlag());
 }
 
+// The arity of `\u`/`\U` was checked but not the value, which is half a check:
+// the digits can all be there and still name something that cannot be encoded.
+TEST(LexerTest, UnicodeEscapeMustBeAScalarValue) {
+  EXPECT_FALSE(lexFirst("\"\\u00e9\"").has(TokenFlag::InvalidEscapeValue));
+  EXPECT_FALSE(lexFirst("\"\\uD7FF\"").has(TokenFlag::InvalidEscapeValue));
+  EXPECT_FALSE(lexFirst("\"\\uE000\"").has(TokenFlag::InvalidEscapeValue));
+  EXPECT_FALSE(lexFirst("\"\\U0010FFFF\"").has(TokenFlag::InvalidEscapeValue));
+
+  EXPECT_TRUE(lexFirst("\"\\uD800\"").has(TokenFlag::InvalidEscapeValue));
+  EXPECT_TRUE(lexFirst("\"\\uDFFF\"").has(TokenFlag::InvalidEscapeValue));
+  EXPECT_TRUE(lexFirst("\"\\U00110000\"").has(TokenFlag::InvalidEscapeValue));
+  EXPECT_TRUE(lexFirst("\"\\UFFFFFFFF\"").has(TokenFlag::InvalidEscapeValue));
+
+  // A short escape is missing digits, not out of range: only one thing is
+  // wrong with it, and it is reported once.
+  const Token shortEscape = lexFirst("\"\\u12\"");
+  EXPECT_TRUE(shortEscape.has(TokenFlag::MissingDigits));
+  EXPECT_FALSE(shortEscape.has(TokenFlag::InvalidEscapeValue));
+}
+
 TEST(LexerTest, Comments) {
   const std::string_view line = "// c\nx";
   const Token comment = lexFirst(line);

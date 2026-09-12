@@ -14,8 +14,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 include(minc_cxx)
 include(minc_warnings)
+include(minc_sanitizers)
 include(minc_module)
 include(GNUInstallDirs)
+
+# Before any target exists, so instrumentation cannot be missed by a module.
+minc_enable_sanitizers()
 
 # Fast builds: use ccache when available.
 find_program(MINC_CCACHE ccache)

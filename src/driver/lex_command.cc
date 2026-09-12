@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <iostream>
+#include <ostream>
 #include <string>
 #include <utility>
 
@@ -38,35 +39,28 @@ namespace {
 
 } // namespace
 
-int runLex(const CliOptions& options) {
-  if (options.inputs.empty()) {
-    return usageError("no input files");
-  }
-
+int lexInputs(const LexRequest& request, std::ostream& out, std::ostream& err) {
   // One session for the whole invocation, which is what the sources, the
   // diagnostics, and the interner are meant to be owned by. Nothing here
   // reaches for a global.
   support::Session session;
 
-  // Color is decided per stream: a redirected stdout must stay clean even when
-  // the terminal the user is watching can render colors on stderr.
-  const support::DiagRenderer renderer(
-      &session.sources(),
-      support::RenderOptions{support::colorModeFrom(support::stderrSupportsColor()), 4});
-  const lex::DumpOptions dumpOptions{support::colorModeFrom(support::stdoutSupportsColor())};
+  const support::DiagRenderer renderer(&session.sources(),
+                                       support::RenderOptions{request.diagnosticColor, 4});
+  const lex::DumpOptions dumpOptions{request.dumpColor};
 
   bool failed = false;
-  for (const std::string& name : options.inputs) {
+  for (const std::string& name : request.inputs) {
     const support::Fallible<support::FileId> id = loadInput(session, name);
     if (!id.hasValue()) {
-      printError(id.error());
+      printError(err, id.error());
       failed = true;
       continue;
     }
 
     const support::SourceFile* file = session.sources().find(id.value());
     if (file == nullptr) {
-      printError("internal error: an input file vanished after loading");
+      printError(err, "internal error: an input file vanished after loading");
       failed = true;
       continue;
     }
@@ -78,14 +72,14 @@ int runLex(const CliOptions& options) {
     session.diags().clear();
     const std::size_t problems = lex::reportLexErrors(stream, session.diags());
 
-    std::cout << lex::dumpTokens(stream, file->path, dumpOptions);
-    // Flush before the diagnostics: when stdout and stderr are the same
-    // terminal, this keeps each file's table next to its errors.
-    std::cout.flush();
+    out << lex::dumpTokens(stream, file->path, dumpOptions);
+    // Flush before the diagnostics: when the two streams are the same terminal,
+    // this keeps each file's table next to its errors.
+    out.flush();
 
     if (!session.diags().empty()) {
-      std::cerr << renderer.renderAll(session.diags());
-      std::cerr.flush();
+      err << renderer.renderAll(session.diags());
+      err.flush();
     }
     if (problems != 0) {
       failed = true;
@@ -93,6 +87,20 @@ int runLex(const CliOptions& options) {
   }
 
   return exitCode(failed ? ExitCode::Failure : ExitCode::Ok);
+}
+
+int runLex(const CliOptions& options) {
+  if (options.inputs.empty()) {
+    return usageError("no input files");
+  }
+
+  LexRequest request;
+  request.inputs = options.inputs;
+  // Color is decided per stream: a redirected stdout must stay clean even when
+  // the terminal the user is watching can render colors on stderr.
+  request.dumpColor = support::colorModeFrom(support::stdoutSupportsColor());
+  request.diagnosticColor = support::colorModeFrom(support::stderrSupportsColor());
+  return lexInputs(request, std::cout, std::cerr);
 }
 
 } // namespace minc::driver

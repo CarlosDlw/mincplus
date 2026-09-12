@@ -38,4 +38,12 @@ inline constexpr std::size_t kMaxRenderLineCols = 240;
 // Maximum diagnostics kept per bag; prevents OOM on cascading errors.
 inline constexpr std::size_t kMaxDiagnostics = 1024;
 
+// Largest single block the Arena will ask the allocator for. A runaway size --
+// a SIZE_MAX from bad arithmetic, a corrupted length field -- must never reach
+// operator new: what it does with an absurd request is implementation-defined
+// (AddressSanitizer aborts rather than returning null), and Arena promises to
+// report failure by returning nullptr on every platform. 2 GiB is far above any
+// legitimate single AST/IR allocation while staying clear of that edge.
+inline constexpr std::size_t kMaxArenaAllocation = std::size_t{1} << 31;
+
 } // namespace minc::support

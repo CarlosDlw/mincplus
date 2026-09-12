@@ -83,6 +83,7 @@ TEST(TokenStreamTest, SignificantIndicesSkipTriviaInOrder) {
 TEST(TokenStreamTest, SpanOfCoversTheLexeme) {
   const std::string_view text = "let x;";
   const TokenStream stream = TokenStream::lex(7, text);
+  EXPECT_EQ(stream.file(), 7u);
   const Token& token = stream.significantAt(1); // `x`
   const support::Span span = stream.spanOf(token);
   EXPECT_EQ(span.file, 7u);
@@ -130,6 +131,64 @@ TEST(TokenStreamTest, OffsetsResolveThroughTheLineTable) {
   EXPECT_EQ(pos.col, 6u); // `y */ let`
 }
 
+// Every input of length <= 3 the lexer can be handed, decided rather than
+// sampled: an exhaustive sweep is the strongest thing that runs in a test suite
+// with no extra tooling, and it is where an off-by-one in a lookahead shows up.
+// The sanitizer build makes it a read-past-the-end check as well.
+namespace {
+
+void expectLexesCleanly(std::string_view text) {
+  const TokenStream stream = TokenStream::lex(0, text);
+  ASSERT_TRUE(stream.lossless());
+  std::uint32_t offset = 0;
+  for (const Token& token : stream.tokens()) {
+    ASSERT_EQ(token.offset, offset);
+    offset = token.end();
+  }
+  ASSERT_EQ(offset, text.size());
+  ASSERT_EQ(stream.back().kind, TokenKind::EndOfFile);
+}
+
+} // namespace
+
+TEST(TokenStreamExhaustiveTest, EverySingleByte) {
+  for (int value = 0; value <= 0xFF; ++value) {
+    const char byte = static_cast<char>(value);
+    const TokenStream stream = TokenStream::lex(0, std::string_view(&byte, 1));
+    // One byte must produce exactly one one-byte token: no skipping, no
+    // reading beyond the buffer.
+    ASSERT_EQ(stream.size(), 2u) << value;
+    EXPECT_NE(stream[0].kind, TokenKind::EndOfFile) << value;
+    EXPECT_EQ(stream[0].length, 1u) << value;
+  }
+}
+
+TEST(TokenStreamExhaustiveTest, EveryTwoByteInput) {
+  for (int high = 0; high <= 0xFF; ++high) {
+    for (int low = 0; low <= 0xFF; ++low) {
+      const char bytes[2] = {static_cast<char>(high), static_cast<char>(low)};
+      expectLexesCleanly(std::string_view(bytes, 2));
+    }
+  }
+}
+
+// The bytes that actually change how a token is scanned: digits, base and
+// exponent markers, quotes, backslashes, comment openers, every operator
+// character, and a few interesting byte values.
+TEST(TokenStreamExhaustiveTest, EveryThreeByteInputOverInterestingBytes) {
+  constexpr std::string_view kInteresting =
+      "01axXbBoOeEpP.+-*/%<>=!&|^~?:;,(){}[]_#\"'\\ \t\n\r\v\x01\x7f\xC3\xA9";
+
+  for (const char first : kInteresting) {
+    for (const char second : kInteresting) {
+      for (const char third : kInteresting) {
+        const char bytes[3] = {first, second, third};
+        expectLexesCleanly(std::string_view(bytes, 3));
+      }
+    }
+  }
+}
+
 // Deterministic byte soup. This is the property a fuzzer would check, kept in
 // the suite so it runs on every platform with no extra tooling: whatever the
 // bytes are, lexing terminates, tiles the input, and never loses a byte.
@@ -155,6 +214,19 @@ TEST(TokenStreamTest, LosslessOnArbitraryBytes) {
     ASSERT_TRUE(stream.lossless()) << "iteration " << iteration;
     expectTilesExactly(stream, text);
   }
+}
+
+// `SourceManager` rejects an embedded NUL, so a real compilation never sees
+// one -- but the raw lexer takes any `string_view`, and "total for every byte
+// string" is a property a fuzz harness depends on. A NUL is not whitespace, an
+// identifier byte, or a punctuator, so it is one `Invalid` token.
+TEST(TokenStreamTest, EmbeddedNulIsAnInvalidToken) {
+  const std::string text("a\0b", 3);
+  const TokenStream stream = TokenStream::lex(0, text);
+  expectTilesExactly(stream, text);
+  ASSERT_EQ(stream.size(), 4u);
+  EXPECT_EQ(stream[1].kind, TokenKind::Invalid);
+  EXPECT_EQ(stream[1].length, 1u);
 }
 
 TEST(TokenStreamTest, LexingIsPureAndRepeatable) {

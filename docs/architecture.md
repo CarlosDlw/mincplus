@@ -133,6 +133,10 @@ Rules:
   caller before `rewind()`/`release()`.
 - It never throws. `allocate`/`create`/`createArray` return `nullptr` on out of
   memory, on an alignment above `kMaxAlignment`, and on an unsatisfiable size.
+- A size above `kMaxArenaAllocation` is refused *before* the allocator is asked.
+  What `operator new` does with an impossible size is implementation-defined --
+  AddressSanitizer aborts rather than returning null -- so relying on it would
+  break the "returns nullptr" contract on some builds and not others.
 - Blocks are allocated aligned and freed with the matching aligned delete.
   `rewind()` keeps the blocks for the next unit; `release()` frees them.
 
@@ -165,9 +169,13 @@ Rules:
   colored takes a `ColorMode` instead of a `bool`, so "is it colored?" and
   "which escape sequences?" stay one decision with one implementation.
 - Color is off when the stream is not a terminal (so pipes and logs stay
-  clean), when `NO_COLOR` is set to anything, when `TERM=dumb`, or when the
-  Windows console refuses virtual-terminal mode. On Windows the enabling call
-  is attempted once and a failure means plain text, never an error.
+  clean), when `NO_COLOR` is set to anything -- including the empty string,
+  which is what the convention says -- when `TERM=dumb`, or when the Windows
+  console refuses virtual-terminal mode. On Windows the enabling call is
+  attempted once, and a failure means plain text, never an error.
+- The two environment rules are exposed as pure predicates over the variable's
+  value, so they are tested directly instead of by mutating the process
+  environment. The answer is stable: asking twice never disagrees.
 
 ### `lex` — the raw lexer
 
@@ -215,12 +223,17 @@ Design record: [`docs/architectures/lexer.md`](architectures/lexer.md).
   command the dispatch still refuses.
 - `error_report.h`: the one way a driver-level error is written. Every
   subcommand uses it, so the prefix, the hint, and the exit code are identical
-  whichever command hit the problem.
+  whichever command hit the problem. Each function also has a stream-taking
+  form, which is what pins the exact text in a test and lets a command that is
+  handed its streams report through the same code path.
 - `help_text.h`: ASCII-only output, built from that same table.
 - `exit_code.h`: the process contract — `0` success, `1` failure, `2` usage.
 - `lex_command.h`: the `lex` subcommand. Token dump on stdout, diagnostics on
   stderr, and each stream picks its own `ColorMode`, so a redirected stdout
-  stays clean even when stderr is a capable terminal.
+  stays clean even when stderr is a capable terminal. The body is split into
+  `lexInputs()` (the command, with the streams injected) and `runLex()` (the
+  choice of streams and colors), so the contract -- which stream carries what,
+  in what order, and which exit code -- is tested without spawning a process.
 - The version string comes from `cmake/version.h.in` via CMake; the source
   tree carries no second copy.
 
@@ -250,6 +263,7 @@ sync, and keep the source limit strictly below the `uint32` offset ceiling.
 | `kMaxSymbols` | `0xFFFFFFFF` | `Interner::intern` |
 | `kMaxRenderLineCols` | 240 | `DiagRenderer` |
 | `kMaxDiagnostics` | 1024 | `DiagBag::add` |
+| `kMaxArenaAllocation` | 2 GiB | `Arena::newBlock` |
 
 ## Cross-platform guarantees
 
@@ -280,6 +294,16 @@ checks all three. The load-bearing decisions:
   test binary (which is what breaks cross-compilation and Windows CI).
 - Regression tests are expected for every fixed bug, and they are expected to
   fail on the pre-fix code.
+- The lexer is checked **exhaustively** where the input space is small enough:
+  every 1-byte and 2-byte input, and every 3-byte combination of the bytes that
+  change scanning. A property test over deterministic byte soup covers longer
+  input.
+- `cmake --preset sanitize` builds the whole project with AddressSanitizer and
+  UndefinedBehaviorSanitizer, and `-fno-sanitize-recover` makes a finding abort
+  the run instead of scrolling past. The preset is one switch rather than
+  per-target flags, so a new module cannot be left uninstrumented. CI runs it on
+  Linux; MSVC has no UBSan, so the preset reports that instead of
+  half-instrumenting.
 
 ## Where the next stages plug in
 

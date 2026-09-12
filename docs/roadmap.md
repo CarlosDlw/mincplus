@@ -18,6 +18,8 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
       `--help`/`--version`, and the `lex` subcommand
 - [x] `term` — `ColorMode` and tty detection, the only platform-specific module
 - [x] Build system, presets, cross-platform CI, format and tidy gates
+- [x] ASan + UBSan preset (`cmake --preset sanitize`) as one build-wide switch,
+      so no module can be left uninstrumented by accident
 - [x] Architecture contract map in [`architecture.md`](architecture.md), lexer
       design in [`architectures/lexer.md`](architectures/lexer.md)
 - [x] `Session` — per-compilation state container with per-file revisions, so
@@ -65,8 +67,11 @@ lossless per-file token buffer.
       are wanted, not in the token
 - [ ] Literal suffixes (`10u`, `1.0f`) and digit separators `[?]`
 - [ ] String prefixes (`L`, `u8`, `u`, `U`) and raw/multiline strings `[?]`
+- [x] Exhaustive short-input coverage: every 1-byte and 2-byte input, and every
+      3-byte combination of the bytes that change scanning
 - [x] A deterministic byte-soup property test asserting losslessness over
       arbitrary input
+- [x] AddressSanitizer + UndefinedBehaviorSanitizer preset, run in CI
 - [ ] Fuzz target wired to a fuzzing engine (libFuzzer/AFL) in CI
 
 ## 3. Parser — `src/parse` · AST — `src/ast`

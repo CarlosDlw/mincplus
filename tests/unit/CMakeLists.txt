@@ -58,6 +58,7 @@ minc_add_executable(minc_unit_tests
     support/expected/expected_test.cc
     support/intern/interner_test.cc
     support/session/session_test.cc
+    support/term/terminal_test.cc
     support/utf8/utf8_test.cc
     lex/lexer_test.cc
     lex/token_stream_test.cc
@@ -65,6 +66,8 @@ minc_add_executable(minc_unit_tests
     lex/lex_report_test.cc
     lex/examples_test.cc
     driver/cli_test.cc
+    driver/error_report_test.cc
+    driver/lex_command_test.cc
   DEPS
     minc_support
     minc_lex

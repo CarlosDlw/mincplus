@@ -142,6 +142,31 @@ Rejected, with the reason:
 | Position (line/col) in the token | Derived data, recomputable from offset plus the line table, and it would go stale on edit. `dumpTokens` derives it on the fly. |
 | A resumable state machine | Not needed while trivia is emitted, comments cannot nest, and literals cannot cross a line. See above. |
 
+### Facts that are derived instead of stored
+
+Clang stores several contextual facts on the token rather than in the text:
+`IsAtStartOfLine`, `HasLeadingSpace`, `HasLeadingEmptyMacro`, and the
+comment/whitespace tokens a client can request. The first two are worth
+addressing directly, because the preprocessor needs them (a directive only
+starts at the beginning of a line, and stringification cares about whitespace).
+
+`minc+` does not store them, and does not need to, because it retains the fact
+they are derived from: **the trivia is in the stream**. For any token at index
+`i`:
+
+| Clang flag | Derived as |
+| --- | --- |
+| `IsAtStartOfLine` | `i == 0`, or `tokens[i - 1]` is a `Newline` |
+| `HasLeadingSpace` | `tokens[i - 1]` is a `Whitespace` |
+| number of blank lines before | count consecutive `Newline` tokens before it |
+| column | the token's offset through the line table |
+
+Storing a copy would create a second source of truth: a formatter that inserts
+or removes a blank line would have to remember to fix the flags, and any code
+path that builds tokens another way would have to remember to set them. With
+trivia retained, the answer is always recomputable and always consistent with
+the bytes.
+
 ## Decisions, now fixed
 
 | # | Question | Decision |
@@ -177,8 +202,13 @@ Rejected, with the reason:
   `missing-digits`, not a split, so the caret underlines the whole prefix.
 - **Strings and chars**: `"..."` and `'...'`, never crossing a line. Escapes are
   scanned (they must be, or `\'` would end a literal early) and a malformed one
-  sets `unknown-escape` or `missing-digits`. `''` sets `empty-char`; `'ab'` does
-  not, because what a multi-character literal means is a type question.
+  sets `unknown-escape`, `missing-digits`, or `escape-out-of-range`. That last
+  one covers `\uD800` and `\U00110000`: the digits are all present but they do
+  not name a character UTF-8 can encode. Checking it is the same call the
+  escape alphabet already gets -- an encoding constraint, not a type question --
+  and C constrains universal character names the same way. `''` sets
+  `empty-char`; `'ab'` does not, because what a multi-character literal means is
+  a type question.
 - **Punctuators**: longest match over the full set — assignment, arithmetic,
   bitwise, logical, comparison, and the delimiters.
 - **Anything else**: one `Invalid` token per byte, except that a non-ASCII lead
@@ -197,6 +227,27 @@ drift apart.
 That is enforced by the build graph, which is why `mincc lex` links
 `minc_lex_report` separately and why a test can exercise the lexer with no
 `Session` in sight.
+
+## How the claims above are checked
+
+Every property this document asserts has a test that fails if it stops being
+true, and the interesting ones are exhaustive rather than sampled:
+
+| Claim | Checked by |
+| --- | --- |
+| Every byte belongs to exactly one token | `lossless()` audited on every lex, plus a byte-for-byte reconstruction test |
+| Every token boundary is a restart point | re-lexing from each boundary of a whole file |
+| No byte is unhandled, nothing reads past the end | exhaustive over all 1-byte and 2-byte inputs, and all 3-byte combinations of the bytes that change scanning |
+| Arbitrary input terminates and tiles | 2000 deterministic pseudo-random byte soups |
+| One pass finds every problem | multi-error source, plus a token wrong in two ways at once |
+| The invariants hold under a tool that watches memory | the `sanitize` preset: ASan + UBSan, `-fno-sanitize-recover`, run in CI |
+| The examples stay lexable | `tests/unit/lex/examples_test.cc` lexes every file in `examples/` |
+
+The sanitizer preset earned its place immediately: it turned
+`Arena::allocate(SIZE_MAX)` from "returns nullptr on this platform" into a hard
+AddressSanitizer abort, because handing an impossible size to `operator new` is
+implementation-defined. The arena now refuses such a request itself
+(`kMaxArenaAllocation`), which is what its documented contract promised.
 
 ## Non-goals for the lexer
 

@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <limits>
 
+#include "support/limits.h"
+
 namespace minc::support {
 
 void Arena::BlockDeleter::operator()(char* memory) const noexcept {
@@ -15,6 +17,15 @@ Arena::Arena(std::size_t blockSize)
     : blockSize_(blockSize < kMaxAlignment ? kMaxAlignment : blockSize) {}
 
 char* Arena::newBlock(std::size_t bytes) noexcept {
+  // A size the allocator cannot possibly satisfy is refused here instead of
+  // being handed to operator new. What operator new does with an absurd request
+  // is implementation-defined -- with AddressSanitizer's default settings it is
+  // a hard abort, not a null return -- and the arena's contract is that it
+  // always reports failure by returning nullptr. This is the only call site that
+  // grows a block, so one check covers every path into the allocator.
+  if (bytes > kMaxArenaAllocation) {
+    return nullptr;
+  }
   // Aligned, non-throwing: the arena reports failure by returning nullptr.
   return static_cast<char*>(::operator new(bytes, std::align_val_t(kMaxAlignment), std::nothrow));
 }

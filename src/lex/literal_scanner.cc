@@ -5,6 +5,8 @@
 #include "literal_scanner.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <string_view>
 
 #include "byte_class.h"
 
@@ -39,6 +41,23 @@ namespace {
     return marker;
   }
   return scanDigits(text, i, 10);
+}
+
+// Value of a run of hex digits, which the caller has already verified are all
+// hex digits. Four digits fit in 16 bits, eight in 32.
+[[nodiscard]] constexpr std::uint32_t hexValueOf(std::string_view digits) {
+  std::uint32_t value = 0;
+  for (const char c : digits) {
+    value = value * 16U + hexValue(static_cast<Byte>(c));
+  }
+  return value;
+}
+
+// A `\u`/`\U` escape may name any code point UTF-8 can encode: in range, and
+// not a surrogate half. C constrains universal character names the same way,
+// and the alternative is a literal that cannot be represented at all.
+[[nodiscard]] constexpr bool isUnicodeScalarValue(std::uint32_t value) {
+  return value <= 0x10FFFFU && (value < 0xD800U || value > 0xDFFFU);
 }
 
 struct NumberParts {
@@ -168,13 +187,20 @@ struct NumberParts {
   case static_cast<Byte>('U'): {
     const std::size_t want = c == static_cast<Byte>('u') ? 4U : 8U;
     ++i;
-    std::size_t seen = 0;
-    while (seen < want && i < text.size() && isHexDigit(static_cast<Byte>(text[i]))) {
+    const std::size_t digitsBegin = i;
+    while (i - digitsBegin < want && i < text.size() && isHexDigit(static_cast<Byte>(text[i]))) {
       ++i;
-      ++seen;
     }
-    if (seen != want) {
+    if (i - digitsBegin != want) {
       flags |= flagOf(TokenFlag::MissingDigits);
+      return true;
+    }
+    // The digits are all there, but the value still has to name a character
+    // that exists. Checking it here rather than later is the same call the
+    // escape alphabet already gets: it is an encoding constraint, not a type
+    // question, so the type system is not needed to decide it.
+    if (!isUnicodeScalarValue(hexValueOf(text.substr(digitsBegin, want)))) {
+      flags |= flagOf(TokenFlag::InvalidEscapeValue);
     }
     return true;
   }

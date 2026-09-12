@@ -49,14 +49,8 @@ public:
   [[nodiscard]] std::size_t size() const {
     return tokens_.size();
   }
-  [[nodiscard]] bool empty() const {
-    return tokens_.empty();
-  }
   [[nodiscard]] const Token& operator[](std::size_t index) const {
     return tokens_[index];
-  }
-  [[nodiscard]] const Token& at(std::size_t index) const {
-    return tokens_.at(index);
   }
   [[nodiscard]] const Token& back() const {
     return tokens_.back();

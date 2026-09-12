@@ -29,14 +29,18 @@ namespace minc::lex {
 // flag would be a shift that does not fit in eight bits, and the enumerator
 // value would no longer be representable in the underlying type, so the build
 // fails instead of silently truncating the flag to nothing.
+//
+// The enumerators are ordered to match `flagInfos()`, which is the order
+// diagnostics are reported in.
 enum class TokenFlag : std::uint8_t {
   None = 0,
   UnterminatedString = 1U << 0U,
   UnterminatedChar = 1U << 1U,
   UnterminatedBlockComment = 1U << 2U,
-  UnknownEscape = 1U << 3U,    // `\q`
-  EmptyCharLiteral = 1U << 4U, // `''`
-  MissingDigits = 1U << 5U,    // `0x`, `\u`, `1e+`
+  UnknownEscape = 1U << 3U,      // `\q`
+  InvalidEscapeValue = 1U << 4U, // `\uD800`, `\U00110000`
+  EmptyCharLiteral = 1U << 5U,   // `''`
+  MissingDigits = 1U << 6U,      // `0x`, `\u`, `1e+`
 };
 
 using TokenFlags = std::uint16_t;
@@ -49,7 +53,8 @@ using TokenFlags = std::uint16_t;
   return (flags & flagOf(flag)) != 0;
 }
 
-// Every flag, so consumers can iterate instead of hard-coding the list.
+// Every flag, derived from the `flagInfos()` table rather than listed a second
+// time, so there is exactly one place to add a flag.
 [[nodiscard]] std::span<const TokenFlag> allTokenFlags();
 
 // Short stable name used by the dump and the tests (`unterminated-string`).

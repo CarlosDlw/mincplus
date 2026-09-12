@@ -26,24 +26,19 @@
 namespace minc::support {
 namespace {
 
-// The NO_COLOR convention (https://no-color.org): if the variable is present at
-// all, color is off -- the value is deliberately ignored.
-[[nodiscard]] bool colorDisabledByEnvironment() {
+// getenv is flagged as unsafe by MSVC's CRT deprecation warnings. The concern is
+// thread safety with a concurrently-modified environment, and these read the
+// environment during single-threaded startup.
 #if defined(_MSC_VER)
-  // getenv is flagged as unsafe by MSVC's CRT deprecation warnings. The concern
-  // is thread safety, and this runs during single-threaded startup.
-#pragma warning(suppress : 4996)
+#pragma warning(push)
+#pragma warning(disable : 4996)
 #endif
-  return std::getenv("NO_COLOR") != nullptr;
+[[nodiscard]] const char* environmentValue(const char* name) {
+  return std::getenv(name);
 }
-
-// TERM=dumb is the POSIX way of saying "no control sequences". Honored on every
-// platform so the same environment produces the same output under MSYS2 and
-// under Linux.
-[[nodiscard]] bool terminalIsDumb() {
-  const char* term = std::getenv("TERM");
-  return term != nullptr && std::string_view(term) == "dumb";
-}
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 #if defined(_WIN32)
 
@@ -76,7 +71,8 @@ namespace {
 #endif
 
 [[nodiscard]] bool supportsColor(std::FILE* stream) {
-  if (colorDisabledByEnvironment() || terminalIsDumb()) {
+  if (colorDisabledByEnvironmentValue(environmentValue("NO_COLOR")) ||
+      terminalIsDumbForValue(environmentValue("TERM"))) {
     return false;
   }
 #if defined(_WIN32)
@@ -87,6 +83,10 @@ namespace {
 }
 
 } // namespace
+
+bool terminalIsDumbForValue(const char* termValue) {
+  return termValue != nullptr && std::string_view(termValue) == "dumb";
+}
 
 bool stdoutSupportsColor() {
   return supportsColor(stdout);
