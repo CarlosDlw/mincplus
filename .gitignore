@@ -1,0 +1,15 @@
+# Build output
+build/
+.cache/
+compile_commands.json
+Testing/
+
+# Machine-local CMake presets and caches
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store

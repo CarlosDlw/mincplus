@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# Superseded runs on the same ref are cancelled instead of queueing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build-test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake ccache libgtest-dev
+      - name: Install toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja cmake ccache googletest
+      - name: Install toolchain (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y ninja cmake
+
+      # GTest is resolved by tests/unit/CMakeLists.txt: package config, then
+      # pkg-config, then a pinned FetchContent download. The package installs
+      # above are a speed-up, not a requirement, so a runner that cannot find
+      # GTest still builds.
+      - name: Configure
+        run: cmake --preset ci
+      - name: Build
+        run: cmake --build --preset ci
+      - name: Test
+        run: ctest --preset ci
+
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+      - name: Check formatting
+        run: |
+          # Keep this version close to the one developers run locally: a newer
+          # formatter can reflow code the older one accepted.
+          clang-format --version
+          find include src tests \( -name '*.h' -o -name '*.cc' \) -print0 \
+            | xargs -0 clang-format --dry-run --Werror
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang and clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-tidy ninja-build cmake ccache
+      - name: Configure
+        # clang-tidy cannot consume a GNU compile database (GCC emits flags
+        # such as -fmodules-ts that it does not understand), so this job
+        # configures with clang++.
+        run: cmake --preset ci -DCMAKE_CXX_COMPILER=clang++
+      - name: Run clang-tidy
+        run: |
+          clang-tidy --version
+          clang-tidy -p build/ci --warnings-as-errors='*' \
+            $(find src -name '*.cc')

@@ -1,0 +1,22 @@
+# Normalize everything to LF in the repository, so a Windows checkout with
+# core.autocrlf enabled cannot introduce CRLF-only diffs. The compiler accepts
+# CRLF, but the sources themselves should have a single canonical form.
+* text=auto eol=lf
+
+# Windows batch and command scripts require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets are never touched.
+*.png binary
+*.jpg binary
+*.ico binary
+*.a   binary
+*.lib binary
+*.o   binary
+*.obj binary
+
+# Keep these as text even though they may look binary to heuristics.
+*.md text
+*.yml text
+*.yaml text
