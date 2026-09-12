@@ -375,8 +375,9 @@ hidden escape hatch.
   grammar change is testable without a `Session`; `minc_parse_report` is the
   separate library that turns its errors into diagnostics.
 - `src/syntax/` — the tree: a lossless, hash-consed, arena-backed green tree of
-  that event stream, a parentless cursor over it, a typed AST view, and the
-  `mincc parse` dump. Design in
+  that event stream, a parentless cursor over it, a typed AST view, the
+  `TreeStore` that keeps trees keyed by `(FileId, revision)` and shares one node
+  cache across them, and the `mincc parse` dump. Design in
   [`docs/architectures/parser.md`](docs/architectures/parser.md).
 - `src/lex/pp|sema|ir|backend|cinterop/` — planned.
 - `tests/unit/` — gtest suites, one per module.

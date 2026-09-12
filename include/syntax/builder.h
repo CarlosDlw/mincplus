@@ -18,7 +18,6 @@
 
 #include "lex/token_stream.h"
 #include "parse/event.h"
-#include "support/mem/arena.h"
 #include "syntax/green.h"
 #include "syntax/tree.h"
 
@@ -32,16 +31,18 @@ struct BuildResult {
 // Builds a green tree from `events` and the token stream they describe.
 //
 // `events` is consumed (forward-parent targets are tombstoned as they are
-// used), which is why it is taken by mutable reference. Returns nullopt only
-// when the arena is exhausted; the tree is otherwise always total, because
+// used), which is why it is taken by mutable reference. `cache` is passed in
+// rather than owned, so every tree built through one `TreeStore` shares nodes
+// with the others instead of deduplicating only within itself. Returns nullopt
+// only when the arena is exhausted; the tree is otherwise always total, because
 // every byte of the stream ends up under some leaf.
-[[nodiscard]] std::optional<BuildResult> buildGreenTree(support::Arena& arena,
+[[nodiscard]] std::optional<BuildResult> buildGreenTree(GreenCache& cache,
                                                         std::vector<parse::Event>& events,
                                                         const lex::TokenStream& stream);
 
-// The whole front end for one file: parse `stream` and build its tree. `arena`
-// must outlive the returned tree.
+// The whole front end for one file: parse `stream` and build its tree. `cache`
+// and the arena behind it must outlive the returned tree.
 [[nodiscard]] std::optional<SyntaxTree>
-buildSyntaxTree(support::Arena& arena, const lex::TokenStream& stream, std::uint32_t revision);
+buildSyntaxTree(GreenCache& cache, const lex::TokenStream& stream, std::uint32_t revision);
 
 } // namespace minc::syntax

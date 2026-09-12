@@ -5,8 +5,10 @@
 // Precedence and associativity are asserted by *shape* -- which operand is
 // nested inside which -- because that is the property that matters and the one
 // a misplaced table row breaks silently.
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -166,13 +168,52 @@ TEST(ParserTest, GarbageIsWrappedNotDropped) {
 
 TEST(ParserTest, DeeplyNestedInputIsADiagnosticNotACrash) {
   // Twice the limit, so the guard is what stops it rather than luck.
-  const std::string many(kMaxNestingDepth * 2U, '(');
+  const std::string many(support::kMaxNestingDepth * 2U, '(');
   const ParseFixture fixture(fnBody("return " + many + "1;"));
   EXPECT_GT(fixture.errorCount(), 0u);
   EXPECT_TRUE(fixture.bailedOut());
   // Even after giving up, every byte is still in the tree.
   EXPECT_TRUE(fixture.tree().validate());
   EXPECT_EQ(fixture.reconstruct(), fixture.source());
+}
+
+// Each of these shapes recurses through a production that does not pass back
+// through the expression entry point on the way down, so a guard on the entry
+// point alone leaves input that overflows the stack. They were real crashes
+// before each production guarded itself, which is why they are pinned here
+// rather than folded into the parenthesis case above.
+TEST(ParserTest, EveryRecursiveProductionGuardsItself) {
+  const std::size_t depth = static_cast<std::size_t>(support::kMaxNestingDepth) * 2U;
+
+  std::string assignmentChain;
+  std::string conditionalChain = "1";
+  for (std::size_t i = 0; i < depth; ++i) {
+    assignmentChain += "a = ";
+    conditionalChain += " ? 2 : 1";
+  }
+
+  struct Case {
+    const char* label;
+    std::string source;
+  };
+  const std::vector<Case> cases = {
+      {"prefix chain", fnBody("return " + std::string(depth, '-') + "1;")},
+      {"logical-not chain", fnBody("return " + std::string(depth, '!') + "1;")},
+      {"assignment chain", fnBody(assignmentChain + "1;")},
+      {"conditional chain", fnBody("return " + conditionalChain + ";")},
+      {"nested blocks",
+       "fn i32 main() " + std::string(depth, '{') + std::string(depth, '}') + "\n"},
+  };
+
+  for (const Case& testCase : cases) {
+    const ParseFixture fixture(testCase.source);
+    ASSERT_TRUE(fixture.built()) << testCase.label;
+    EXPECT_TRUE(fixture.bailedOut()) << testCase.label << " should hit the depth guard";
+    EXPECT_GT(fixture.errorCount(), 0u) << testCase.label;
+    // Giving up is a recovery, not a shortcut: every byte is still in the tree.
+    EXPECT_TRUE(fixture.tree().validate()) << testCase.label;
+    EXPECT_EQ(fixture.reconstruct(), fixture.source()) << testCase.label;
+  }
 }
 
 TEST(ParserTest, EverySingleByteParsesWithoutCrashing) {

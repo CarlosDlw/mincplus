@@ -10,6 +10,7 @@
 #include "parse/parse_fixture.h"
 #include "parse/syntax_kind.h"
 #include "syntax/ast.h"
+#include "syntax/dump.h"
 #include "syntax/node.h"
 
 namespace minc::syntax {
@@ -165,6 +166,44 @@ TEST(TreeTest, DumpIsAlignedAndDeterministic) {
   // is what lets the golden files be compared.
   EXPECT_EQ(withTrivia.find("0x"), std::string::npos);
   EXPECT_EQ(fixture.dump(true), withTrivia);
+}
+
+// The whole front end, pinned. Everything above checks one property; this
+// checks the exact bytes a reviewer would read, so a change in shape, offsets,
+// or shared-node counting has to be intentional. It is a golden file kept
+// inline: no data directory to keep in sync, and a mismatch prints both texts.
+TEST(TreeTest, DumpOfTheCanonicalProgramIsStable) {
+  const ParseFixture fixture("fn i32 main() { return 0; }\n");
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+
+  DumpOptions options;
+  options.showTrivia = false;
+  const std::string actual = dumpTree(fixture.tree(), "snapshot.mx", options);
+
+  const std::string expected =
+      R"TREE(== snapshot.mx  (28 bytes, 18 tokens, 8 nodes, 0 errors, depth 5)
+
+File@0..28
+  FnDecl@0..27
+    KwFn@0..2 "fn"
+    Type@2..6
+      Identifier@3..6 "i32"
+    Name@6..11
+      Identifier@7..11 "main"
+    LParen@11..12 "("
+    ParamList@12..12
+    RParen@12..13 ")"
+    Block@13..27
+      LBrace@14..15 "{"
+      ReturnStmt@15..25
+        KwReturn@16..22 "return"
+        LiteralExpr@22..24
+          IntegerLiteral@23..24 "0"
+        Semicolon@24..25 ";"
+      RBrace@26..27 "}"
+  EndOfFile@28..28
+)TREE";
+  EXPECT_EQ(actual, expected);
 }
 
 TEST(TreeTest, AppendTextReproducesASubtree) {

@@ -267,13 +267,15 @@ Design record: [`architecture/parser.md`](architectures/parser.md).
   reads a file's significant tokens; macro expansion will read a token tree. If
   the grammar talked to the concrete stream, that second source would be a
   rewrite of the grammar instead of a second implementation of one tiny class.
-- **Two bounded-work guards, both tested.** `kMaxNestingDepth` (256, the same
-  number as Clang's `-fbracket-depth`) makes `DepthGuard` refuse to descend, so
-  deeply nested input cannot overflow the stack; and after
-  `kMaxParseErrors` (4096) the parser bails out, wrapping the unparsed
+- **Two bounded-work guards, both tested.** `support::kMaxNestingDepth` (1024
+  guarded frames, about 250 nesting levels) makes `DepthGuard` refuse to
+  descend, so deeply nested input cannot overflow the stack; and after
+  `support::kMaxParseErrors` (4096) the parser bails out, wrapping the unparsed
   remainder in one `Error` node, so a pathological file costs bounded work
   instead of a quadratic error cascade. In both cases the tree still covers
-  every byte.
+  every byte. Every production that can call itself takes a guard -- not just
+  the expression entry point, because `parseUnary`, `parseAssign`, and
+  `parseConditional` recurse without passing back through it.
 - `TokenKind`/`SyntaxKind` share a numeric space: token kinds are exactly their
   `lex::TokenKind` value below `kFirstNodeKind` (256), node kinds sit at or
   above it. Generic tree code -- the dump, the validator, a future highlighter
@@ -293,6 +295,13 @@ Design record: [`architecture/parser.md`](architectures/parser.md).
   mechanism a future incremental reparse uses to recognise an unchanged
   subtree without comparing it. The cache lives beside the arena in the tree
   store, so an empty `()` is one node however many functions have one.
+- **`TreeStore` is the keyed owner**, and the reason the node cache lives where
+  it does: one store per invocation owns the trees keyed by
+  `(FileId, revision)` *and* the shared `GreenCache`, so identical subtrees in
+  two different files are the same pointer. A newer revision of a file
+  replaces its tree instead of being kept beside it. The store takes the
+  session's arena by reference rather than owning one, and it cannot live in
+  `support` because `support` is syntax-free by contract.
 - **Nothing here owns memory.** Green nodes come from the `Session`'s `Arena`
   and leaf text is a view into the `Session`'s source, so a `SyntaxTree` is
   valid exactly as long as its `Session` -- the same lifetime the sources have.
@@ -379,6 +388,8 @@ sync, and keep the source limit strictly below the `uint32` offset ceiling.
 | `kMaxSymbols` | `0xFFFFFFFF` | `Interner::intern` |
 | `kMaxRenderLineCols` | 240 | `DiagRenderer` |
 | `kMaxDiagnostics` | 1024 | `DiagBag::add` |
+| `kMaxNestingDepth` | 1024 guarded frames | `parse::DepthGuard` |
+| `kMaxParseErrors` | 4096 | `Parser::error` (then one bail-out) |
 | `kMaxArenaAllocation` | 2 GiB | `Arena::newBlock` |
 
 ## Cross-platform guarantees

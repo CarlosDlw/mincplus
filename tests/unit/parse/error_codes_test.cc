@@ -52,7 +52,7 @@ constexpr CodeCase kCases[] = {
 
 [[nodiscard]] std::string deepInput() {
   // Twice the nesting limit, so the guard is what stops it rather than luck.
-  return "fn i32 main() { return " + std::string(kMaxNestingDepth * 2U, '(') + "1; }\n";
+  return "fn i32 main() { return " + std::string(support::kMaxNestingDepth * 2U, '(') + "1; }\n";
 }
 
 [[nodiscard]] std::set<std::string> codesOf(const ParseFixture& fixture) {

@@ -30,8 +30,8 @@ namespace {
 //     anything.
 class TreeBuilder {
 public:
-  TreeBuilder(support::Arena& arena, const lex::TokenStream& stream)
-      : stream_(&stream), cache_(arena) {}
+  TreeBuilder(GreenCache& cache, const lex::TokenStream& stream)
+      : stream_(&stream), cache_(cache) {}
 
   [[nodiscard]] std::optional<BuildResult> build(std::vector<parse::Event>& events) {
     std::vector<parse::SyntaxKind> parents;
@@ -194,7 +194,8 @@ private:
   }
 
   const lex::TokenStream* stream_;
-  GreenCache cache_;
+  // Shared with every other tree built through the same store; see builder.h.
+  GreenCache& cache_;
   std::vector<Frame> stack_;
   std::size_t raw_ = 0;
   std::uint32_t covered_ = 0;
@@ -207,19 +208,19 @@ private:
 
 } // namespace
 
-std::optional<BuildResult> buildGreenTree(support::Arena& arena, std::vector<parse::Event>& events,
+std::optional<BuildResult> buildGreenTree(GreenCache& cache, std::vector<parse::Event>& events,
                                           const lex::TokenStream& stream) {
-  TreeBuilder builder(arena, stream);
+  TreeBuilder builder(cache, stream);
   return builder.build(events);
 }
 
-std::optional<SyntaxTree> buildSyntaxTree(support::Arena& arena, const lex::TokenStream& stream,
+std::optional<SyntaxTree> buildSyntaxTree(GreenCache& cache, const lex::TokenStream& stream,
                                           std::uint32_t revision) {
   auto source = parse::makeTokenStreamSource(stream);
   parse::Parser parser(*source);
   parse::ParseOutput output = parser.run();
 
-  std::optional<BuildResult> built = buildGreenTree(arena, output.events, stream);
+  std::optional<BuildResult> built = buildGreenTree(cache, output.events, stream);
   if (!built.has_value()) {
     return std::nullopt;
   }

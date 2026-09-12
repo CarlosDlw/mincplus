@@ -20,22 +20,14 @@
 #include "parse/parse_error.h"
 #include "parse/syntax_kind.h"
 #include "parse/token_source.h"
+#include "support/limits.h"
 #include "support/span/span.h"
 
 namespace minc::parse {
 
-// How deeply recursive-descent parsing may nest before it refuses to go on.
-//
-// This is a stack-safety limit, not a language limit: 256 nested constructs is
-// far more than real code has, and it is low enough that the deepest case still
-// fits a Windows thread's 1 MiB stack *with sanitizers on* (which use larger
-// frames). Clang's `-fbracket-depth` default is the same number.
-inline constexpr std::uint32_t kMaxNestingDepth = 256;
-
-// After this many errors the parser stops trying and consumes the rest of the
-// input into one `Error` node. Pathological input then costs bounded work
-// instead of a quadratic error cascade.
-inline constexpr std::size_t kMaxParseErrors = 4096;
+// The parser's two bounds -- `support::kMaxNestingDepth` and
+// `support::kMaxParseErrors` -- live in `support/limits.h` with every other
+// limit, so there is one place to look and one place to change.
 
 struct ParseOutput {
   std::vector<Event> events;
@@ -184,6 +176,10 @@ private:
   friend class DepthGuard;
 
   [[nodiscard]] std::uint32_t reserveSlot();
+  // Reports the depth limit once and returns the empty `Error` node that keeps
+  // the tree total while the parser unwinds. One implementation, so every
+  // guarded entry point fails the same way.
+  [[nodiscard]] CompletedMarker recursionLimitError();
 
   TokenSource& source_;
   std::vector<Event> events_;
@@ -199,7 +195,7 @@ private:
 class DepthGuard {
 public:
   explicit DepthGuard(Parser& parser)
-      : parser_(parser), entered_(parser.depth_ < kMaxNestingDepth) {
+      : parser_(parser), entered_(parser.depth_ < support::kMaxNestingDepth) {
     if (entered_) {
       ++parser_.depth_;
     }

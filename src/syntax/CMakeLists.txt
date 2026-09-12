@@ -6,6 +6,7 @@ minc_add_library(minc_syntax
     tree.cc
     builder.cc
     ast.cc
+    store.cc
     dump.cc
   DEPS minc_parse minc_lex minc_span minc_mem
 )

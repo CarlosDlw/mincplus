@@ -25,7 +25,7 @@ class ParseFixture {
 public:
   explicit ParseFixture(std::string text) : text_(std::move(text)) {
     stream_.emplace(lex::TokenStream::lex(support::kInvalidFile, text_));
-    tree_ = syntax::buildSyntaxTree(arena_, *stream_, /*revision=*/0);
+    tree_ = syntax::buildSyntaxTree(cache_, *stream_, /*revision=*/0);
   }
 
   ParseFixture(const ParseFixture&) = delete;
@@ -78,11 +78,18 @@ public:
     return out;
   }
 
+  // The node cache, exposed so a test can ask how much sharing happened.
+  [[nodiscard]] const syntax::GreenCache& cache() const {
+    return cache_;
+  }
+
 private:
-  // Declared first so it outlives the tree, whose leaves are views into it.
+  // Declared first so it outlives the tree, whose leaves are views into it,
+  // and the arena before the cache, which points at it.
   std::string text_;
   std::optional<lex::TokenStream> stream_;
   support::Arena arena_;
+  syntax::GreenCache cache_{arena_};
   std::optional<syntax::SyntaxTree> tree_;
 };
 

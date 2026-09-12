@@ -35,6 +35,23 @@ inline constexpr std::size_t kMaxSymbols = 0xFFFFFFFFu;
 // Longest line rendered in diagnostics before truncation (display columns).
 inline constexpr std::size_t kMaxRenderLineCols = 240;
 
+// How many guarded parser entries may be live at once. This counts *frames*,
+// not constructs: one nested parenthesis is four (expression, assignment,
+// conditional, unary), so it is about 250 levels of nesting -- the same order
+// as Clang's `-fbracket-depth` default of 256.
+//
+// It is a stack-safety limit, not a language limit, and it is sized for the
+// worst case rather than the best: the deepest input must survive a sanitizer
+// build on Windows' 1 MiB thread stack, not just a release build on Linux.
+// Raising it trades a diagnostic for a crash, which is why it is not larger.
+inline constexpr std::uint32_t kMaxNestingDepth = 1024;
+
+// After this many syntax errors the parser stops descending and consumes the
+// rest of the input into a single error node, so pathological input costs
+// bounded work instead of a quadratic error cascade. Same role as
+// `kMaxDiagnostics`, one stage earlier.
+inline constexpr std::size_t kMaxParseErrors = 4096;
+
 // Maximum diagnostics kept per bag; prevents OOM on cascading errors.
 inline constexpr std::size_t kMaxDiagnostics = 1024;
 

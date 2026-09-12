@@ -75,7 +75,7 @@ void Parser::error(std::string message, ParseErrorCode code) {
     return;
   }
   errors_.push_back(ParseError{currentSpan(), std::move(message), code});
-  if (errors_.size() >= kMaxParseErrors) {
+  if (errors_.size() >= support::kMaxParseErrors) {
     bailOut("too many syntax errors");
   }
 }

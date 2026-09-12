@@ -108,8 +108,10 @@ typed AST view on top.
 - [x] Lossless-reconstruction check over every example
 - [x] Declarations: functions and the `let`/`const` forms
 - [x] Statements and blocks
-- [ ] `SyntaxTreeStore` in `Session`, keyed `(FileId, revision)` — the tree
-      carries its revision today; the keyed store lands with the editor path
+- [x] `TreeStore`, keyed `(FileId, revision)`, owning the shared node cache so
+      identical subtrees in two files are one node. It lives in `src/syntax`
+      rather than in `Session` because `support` is syntax-free by contract; it
+      builds into the session's arena by reference
 - [ ] Golden-file tests (`tests/parse/data/*.mx` with expected tree and errors)
 - [ ] `if`/`else`, loops, `break`/`continue`, `switch` — when their syntax is
       decided
@@ -201,8 +203,8 @@ typed AST view on top.
 
 - [x] Unit tests per shipped module (support, lexer, parser, syntax tree,
       driver); preprocessor, sema, and IR suites land with those stages
-- [x] Negative tests: the lexer's and parser's diagnostic paths are covered by
-      a test that triggers them
+- [x] Negative tests: every lexical flag code and every parse error code has a
+      test that triggers it, and a sweep fails if a code becomes unreachable
 - [ ] Snapshot tests for AST dumps and rendered diagnostics (golden files)
 - [ ] End-to-end tests: every `examples/*.mx` compiles, links, runs, and its
       output is asserted

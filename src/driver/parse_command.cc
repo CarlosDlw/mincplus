@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <iostream>
-#include <optional>
 #include <ostream>
 #include <string>
 
@@ -19,15 +18,19 @@
 #include "support/session/session.h"
 #include "support/source/source_file.h"
 #include "support/term/terminal.h"
-#include "syntax/builder.h"
 #include "syntax/dump.h"
+#include "syntax/store.h"
 
 namespace minc::driver {
 
 int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& err) {
-  // One session for the whole invocation: it owns the sources, the diagnostics,
-  // and the arena the tree is built into, so nothing here reaches for a global.
+  // One session and one tree store for the whole invocation: together they own
+  // the sources, the diagnostics, the arena the trees are built into, and the
+  // node cache, so nothing here reaches for a global. Because the store is per
+  // invocation, identical subtrees in two different inputs are the same green
+  // node.
   support::Session session;
+  syntax::TreeStore store(session.arena());
 
   const support::DiagRenderer renderer(&session.sources(),
                                        support::RenderOptions{request.diagnosticColor, 4});
@@ -60,9 +63,8 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
     // token is a consequence, and showing the cause first reads better.
     const std::size_t lexical = lex::reportLexErrors(stream, session.diags());
 
-    const std::optional<syntax::SyntaxTree> tree =
-        syntax::buildSyntaxTree(session.arena(), stream, file->revision);
-    if (!tree.has_value()) {
+    const syntax::SyntaxTree* tree = store.parse(stream, file->revision);
+    if (tree == nullptr) {
       printError(err, name + ": out of memory while building the syntax tree");
       failed = true;
       continue;

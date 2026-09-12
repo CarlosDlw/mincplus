@@ -62,7 +62,8 @@ TEST(ExamplesParseTest, EveryExampleParsesWithoutErrors) {
 
     const lex::TokenStream stream = lex::TokenStream::lex(file->id, file->text);
     support::Arena arena;
-    const std::optional<SyntaxTree> tree = buildSyntaxTree(arena, stream, file->revision);
+    GreenCache cache(arena);
+    const std::optional<SyntaxTree> tree = buildSyntaxTree(cache, stream, file->revision);
     ASSERT_TRUE(tree.has_value()) << name;
 
     // Report each error individually: a bare count would hide which one went
@@ -99,7 +100,8 @@ TEST(ExamplesParseTest, EveryExampleDeclaresMain) {
 
     const lex::TokenStream stream = lex::TokenStream::lex(file->id, file->text);
     support::Arena arena;
-    const std::optional<SyntaxTree> tree = buildSyntaxTree(arena, stream, file->revision);
+    GreenCache cache(arena);
+    const std::optional<SyntaxTree> tree = buildSyntaxTree(cache, stream, file->revision);
     ASSERT_TRUE(tree.has_value()) << name;
 
     bool hasMain = false;

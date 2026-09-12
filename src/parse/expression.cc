@@ -6,6 +6,15 @@
 // first, then a new node adopts it and takes `- c`. The adoption is a link on
 // the event stream (`CompletedMarker::precede`), so no node is ever moved and
 // the tree is never re-walked.
+//
+// Every production that can call itself -- directly, or through a cycle that
+// does not pass back through `parseExpr` -- takes a `DepthGuard`. Which ones
+// those are is not guesswork: `-` 200000 times recurses `parseUnary`,
+// `a = a = ...` recurses `parseAssign`, `a ? b : a ? b : ...` recurses
+// `parseConditional`, and none of them goes through `parseExpr` on the way, so
+// guarding only the entry point leaves an input that overflows the stack on
+// Windows' 1 MiB thread stack. `parseBinary` needs no guard: its recursion is
+// bounded by the number of precedence levels, which is a fixed 16.
 #include "parse/parser.h"
 
 #include <cstdint>
@@ -14,18 +23,29 @@
 
 namespace minc::parse {
 
+CompletedMarker Parser::recursionLimitError() {
+  tooDeep();
+  Marker bad = start();
+  return bad.complete(SyntaxKind::Error);
+}
+
 void Parser::parseExpr() {
   DepthGuard depth(*this);
   if (!depth.ok()) {
-    tooDeep();
-    Marker bad = start();
-    bad.complete(SyntaxKind::Error);
+    // This entry point has nothing to hand the node back to; the marker still
+    // closes an `Error` node so the tree stays total.
+    static_cast<void>(recursionLimitError());
     return;
   }
   parseAssign();
 }
 
 CompletedMarker Parser::parseAssign() {
+  DepthGuard depth(*this);
+  if (!depth.ok()) {
+    return recursionLimitError();
+  }
+
   CompletedMarker lhs = parseConditional();
   if (isAssignmentOperator(current())) {
     Marker assign = lhs.precede();
@@ -37,6 +57,11 @@ CompletedMarker Parser::parseAssign() {
 }
 
 CompletedMarker Parser::parseConditional() {
+  DepthGuard depth(*this);
+  if (!depth.ok()) {
+    return recursionLimitError();
+  }
+
   CompletedMarker condition = parseBinary(kLowestBinaryPrecedence);
   if (!at(lex::TokenKind::Question)) {
     return condition;
@@ -70,6 +95,11 @@ CompletedMarker Parser::parseBinary(std::uint8_t minPrecedence) {
 }
 
 CompletedMarker Parser::parseUnary() {
+  DepthGuard depth(*this);
+  if (!depth.ok()) {
+    return recursionLimitError();
+  }
+
   if (isPrefixOperator(current())) {
     Marker prefix = start();
     bump();       // the operator

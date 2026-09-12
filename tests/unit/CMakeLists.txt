@@ -70,6 +70,7 @@ minc_add_executable(minc_unit_tests
     parse/error_codes_test.cc
     parse/examples_parse_test.cc
     syntax/tree_test.cc
+    syntax/store_test.cc
     driver/cli_test.cc
     driver/error_report_test.cc
     driver/lex_command_test.cc

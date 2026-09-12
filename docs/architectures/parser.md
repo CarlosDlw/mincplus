@@ -46,7 +46,7 @@ earlier edit"; the green graph is a DAG, and a node cache makes the sharing real
 (55% hit rate on the C# codebase). Incremental reparse happens in the *lexer*
 blender, which interleaves old nodes and new lexed tokens.
 
-- Take: position-free, parent-free, interned green nodes; the node cache; the
+- Take: position-free, parent-free, hash-consed green nodes; the node cache; the
   red layer as a lazy view.
 - Leave: the parser being welded to the node builder, and the incremental
   blender (it needs a text-diff input we will not have until the LSP).
@@ -105,7 +105,7 @@ TokenStream (lossless, from lex)
         │                                    │
         │ errors → diagnostics               │ stored in Session, keyed (FileId, revision)
         ▼                                    ▼
-   parse_report                          SyntaxTreeStore
+   parse_report                          TreeStore
 ```
 
 The parser never builds a node, never writes a diagnostic, and never allocates
@@ -170,9 +170,10 @@ pipeline, so it uses the arena:
   safety"), because an arena tree has the same recursion shape as any other.
 
 `GreenNode` and `GreenToken` are trivially destructible, which is exactly the
-`Arena` contract ("destructors do not run"). A `GreenToken` stores an interned
-text id and a width, so it is a fixed-size value; a `GreenNode` is a header plus
-a contiguous child array, allocated as one block like rowan's DST.
+`Arena` contract ("destructors do not run"). A `GreenToken` is a kind plus a
+view of its source text; a `GreenNode` is a kind, its cached width, and a span
+of children, all allocated from the arena. See §5 for why the text is a view
+rather than an interned id.
 
 ### The tree is untyped, the AST is a checked cast
 
@@ -212,14 +213,19 @@ small, and it is the seam a macro expansion will plug into:
 ```cpp
 class TokenSource {
 public:
-  virtual SyntaxKind current() const = 0;      // significant token only
-  virtual SyntaxKind nth(int n) const = 0;     // bounded lookahead
-  virtual void bump() = 0;                     // consume; never past EndOfFile
-  virtual support::Span spanOfCurrent() const = 0;   // for error ranges
+  virtual lex::TokenKind current() const = 0;   // significant token only
+  virtual lex::TokenKind nth(uint32_t n) const = 0;  // clamped lookahead
+  virtual void bump() = 0;                      // consume; never past EndOfFile
+  virtual support::Span spanOfCurrent() const = 0;    // for error ranges
   virtual bool atEnd() const = 0;
   virtual ~TokenSource() = default;
 };
 ```
+
+The source speaks `TokenKind`, not `SyntaxKind`: the parser decides what a token
+*means* in its position, and the tag space is unified only once the tree exists.
+`nth` is clamped rather than erroring, so the grammar can look ahead without
+bounds checks of its own.
 
 The only implementation today walks `TokenStream::significantIndices()`. A
 second implementation over a macro *token tree* is what the interface is for;
@@ -236,12 +242,19 @@ Produces `Vec<Event>` and `Vec<ParseError>` over the token source. Files:
 - `parser.cc` — the core: markers, `expect`, recovery, the item loop.
 - `expression.cc` — precedence climbing and the operator table.
 - `statement.cc` — statements and blocks.
-- `declaration.cc` — items (`fn`) and the `let`/`const` forms.
-- `type.cc` — the type grammar.
+- `declaration.cc` — items (`fn`), the type grammar, and the `let`/`const` forms.
+- `parse_error.cc` — the closed error-code table.
+- `syntax_kind.cc`, `token_spelling.cc` — the kind table and the spellings
+  `expect` quotes back.
 
 Splitting is not cosmetic: the operator table, the synchronization sets, and the
 node-kind list are each one thing in one place, which is what the lexer's
 keyword table already does and what makes the "add one row" change safe.
+
+Error codes are a closed `ParseErrorCode` set with one table behind them, so a
+call site cannot invent a code, two sites cannot spell the same condition two
+ways, and a test can require every code to be reachable from some input. That is
+the same shape as the lexer's `TokenFlag` table.
 
 Contract:
 
@@ -262,10 +275,17 @@ Contract:
   work, and it is worth stating once, clearly, because it looks like a bug until
   it does not.
 - `green.cc` — node/token allocation and the node cache.
-- `tree.cc` — `SyntaxTree`: root, token stream, errors, `FileId`, revision.
-- `node.cc` — the cursor (`SyntaxNode` / `SyntaxToken`): parent, offset, range,
-  children, traversal.
-- `ast*.cc` — typed accessors.
+- `tree.cc` — `SyntaxTree`: root, text, errors, `FileId`, revision, and the
+  `validate()`/`reconstruct()` pair that audits losslessness.
+- `node.cc` — the cursor (`SyntaxNode` / `SyntaxToken`): offset, width, children,
+  kind lookups. A cursor carries **no parent pointer** on purpose: a green node
+  is shared, so it has no single parent, and identity is `(FileId, byte range)`
+  rather than a node. Navigation goes down from the root; SwiftSyntax makes the
+  same trade. Everything here is a value -- a green pointer plus an offset -- so
+  a traversal pays only for the path it walks.
+- `ast.cc` — the typed view: a checked cast plus accessors whose every field is
+  optional, so a half-written function is representable.
+- `store.cc` — `TreeStore`, the keyed owner of trees and of the node cache.
 - `dump.cc` — pure formatting for `mincc parse`; writes nothing.
 
 ### 4. Report — `src/parse/parse_report.cc` (target `minc_parse_report`)
@@ -274,20 +294,35 @@ Turns `ParseError` into `Diagnostic`. `minc_parse` does not link `minc_diag`, so
 "the parser does not report" is guaranteed by the build graph, exactly as for
 the lexer.
 
-### 5. Session — the store the request asked for
+### 5. The store — `syntax/store.h`
 
-The lexer work put `Session` in `support/session`. The syntax layer adds:
+The lexer work put `Session` in `support/session`, and `Session` owns the arena.
+The syntax layer adds `TreeStore` on top of it:
 
-- `SyntaxTreeStore` — owns each `SyntaxTree` keyed by `(FileId, revision)`,
-  mirroring how `SourceManager` owns files. A bumped revision invalidates rather
-  than repairs, because byte offsets do not survive an edit.
-- **The node cache lives in the store, per revision, not per tree.** Roslyn
-  keeps one per compilation so the `()` of one method is the `()` of another;
-  that cross-file sharing is the point, and a per-session store is where it
-  belongs.
-- The **interner already in `Session`** is what green tokens point at, so a
-  token's text is one `SymId` and common spellings (keywords, punctuation,
-  indentation runs) are one entry regardless of occurrence count.
+- `TreeStore` owns each `SyntaxTree` keyed by `(FileId, revision)`, mirroring how
+  `SourceManager` owns files. A new revision of a file replaces its tree instead
+  of being kept beside it, because the old tree's offsets no longer describe the
+  file. `drop` and `clear` report what they did.
+- **The node cache lives in the store, not in a tree** -- that is the whole
+  reason the store exists. Roslyn keeps one cache per compilation so the `()` of
+  one method is the `()` of another; a per-tree cache would deduplicate only
+  within that tree. `TreeStoreTest.IdenticalTreesShareNodesAcrossFiles` asserts
+  the cross-file case by parsing the same bytes as two files and requiring the
+  cache to grow by zero entries.
+- **Why the store is not in `support`.** `support` is syntax-free by contract,
+  so the component that owns parsed trees cannot live below the thing it stores.
+  It takes the session's arena by reference instead of owning one, so there is
+  still exactly one arena per compilation.
+
+**Green tokens hold a view of the source, not an interned `SymId`.** This
+reverses an earlier decision in this document, and the reason is losslessness: a
+leaf's text has to be the exact source bytes, because `width` and every offset
+above it are derived from that text and `reconstruct()` has to reproduce the
+file byte for byte. Interning puts an allocation between the tree and the text
+and buys nothing that the hash-consed token cache does not already give --
+identical spellings already come back as the same `GreenToken*`. If a profile
+ever shows token storage dominating the tree, interning is a drop-in change
+behind `GreenToken::text`.
 
 No new global state, no singletons: the parse of a file is a value in the store,
 and dropping the revision drops it.
@@ -445,17 +480,29 @@ The stack it overflows is platform- and build-dependent:
 
 So "it works on my machine" is exactly the wrong test. The design:
 
-1. **A single depth guard.** A `DepthGuard` is taken in every recursive entry
-   (expression, statement, declaration, type, block). It increments a depth
-   counter, and refuses past `kMaxNestingDepth` (256, the value Clang uses for
-   `-fbracket-depth`). Refusing means: record one error, consume the rest of the
-   construct into an `Error` node, do not recurse. The counter is checked in one
-   place, so it cannot be forgotten in a new parse function.
-2. **The limit is sized for the worst case, not the best.** 256 must survive an
-   ASan build on Windows' 1 MiB stack, not just a release build on Linux. There
-   is a test that nests to the limit plus one and asserts a diagnostic instead
-   of a crash; the sanitizer preset in CI is what exercises the worst-case frame
-   size.
+1. **A `DepthGuard` in every production that can call itself.** It increments a
+   depth counter on entry and refuses past `support::kMaxNestingDepth`.
+   Refusing means: record one error, stop descending, and let the caller's
+   unwind put the rest of the input under one `Error` node.
+
+   **Guarding the entry point is not enough, and that is the trap.** The first
+   implementation guarded `parseExpr` and `parseBlock` only. That looks right --
+   those are the recursive entries -- but three productions recurse without
+   passing back through `parseExpr`: `parseUnary` (`- - - - x`), `parseAssign`
+   (`a = a = a`), and `parseConditional` (`a ? b : a ? b : ...`). Each one
+   segfaulted on 100k-200k tokens of input, which is a stack overflow, not a
+   diagnostic. `ParserTest.EveryRecursiveProductionGuardsItself` now pins all
+   four shapes plus nested blocks. `parseBinary` needs no guard: its recursion
+   is bounded by the number of precedence levels, a fixed 16.
+2. **The limit counts frames, not constructs, and is sized for the worst case.**
+   One nested parenthesis is four guarded frames (expr, assign, conditional,
+   unary), so 1024 frames is about 250 levels -- the same order as Clang's
+   `-fbracket-depth` default of 256. It must survive an ASan build on Windows'
+   1 MiB stack, not just a release build on Linux. Tests nest past the limit and
+   assert a diagnostic instead of a crash; the sanitizer preset in CI is what
+   exercises the worst-case frame size. It is deliberately not larger: past a
+   point the guard stops being a safety net and becomes the stack-overflow risk
+   itself.
 3. **Iterativity wherever it is free.** Binary operator chains are already
    iterative (precedence climbing); statement and item lists are loops, not
    recursion; blocks recurse because nesting is real. Recursion is used only
@@ -466,8 +513,12 @@ So "it works on my machine" is exactly the wrong test. The design:
    different threshold rather than into an error. The depth guard is the
    guarantee; a bigger stack would only be an optimization on top of it.
 
-The same reasoning applies to the cursor and the dump: neither may recurse
-without a guard, because a tree produced by the parser can be handed to them.
+The same reasoning applies to the cursor and the dump, because a tree produced
+by the parser can be handed to them. Both are **iterative with an explicit
+stack** -- `validate`, `reconstruct`, `appendText`, and `dumpTree` -- so deep
+tree is not a way back into a recursion limit that the parser's guard was
+supposed to have bounded. The builder holds its own explicit stack for the same
+reason.
 
 ## Node identity, retention, and what is stored where
 
@@ -484,11 +535,11 @@ What is stored, and why:
 | --- | --- | --- |
 | `SyntaxKind` on every node/token | green tree | it *is* the data |
 | Children (contiguous) | green tree | it *is* the data |
-| Interned token text id | green token | text is the only thing a leaf holds |
-| Parent | cursor, computed | an immutable shared node cannot store it |
+| Token text (a view of the source) | green token | text is the only thing a leaf holds, and a leaf's width is its text length |
+| Parent | **not stored or computed** | a shared green node has no single parent; identity is `(FileId, byte range)` |
 | Absolute offset/range | cursor, computed | same reason; would go stale on reuse |
 | `ParseError` list | `SyntaxTree` | rust-analyzer keeps errors out of the tree |
-| Node cache | `SyntaxTreeStore` | enables sharing; per-revision so an edit resets it |
+| Node cache | `TreeStore` | enables sharing across files; keyed by `(FileId, revision)` |
 
 Derived rather than stored, explicitly:
 
@@ -538,8 +589,8 @@ decisions keep them possible — and which would foreclose them.
 | 7 | Left recursion | `precede` via `forward_parent`; no tree rewriting, no re-walking. |
 | 8 | Backtracking | Bounded and marker-based. No unbounded PEG backtracking. |
 | 9 | Type names | **Never a token kind.** Types are recognized by *position*, never by asking a symbol table from the parser. |
-| 10 | Recursion | Every recursive entry takes a `DepthGuard`; `kMaxNestingDepth` = 256. |
-| 11 | Error cap | Past `kMaxParseErrors` the parser bails out into one `Error` node. |
+| 10 | Recursion | Every production that can call itself takes a `DepthGuard`; `support::kMaxNestingDepth` = 1024 guarded frames (~250 nesting levels). |
+| 11 | Error cap | Past `support::kMaxParseErrors` the parser bails out into one `Error` node. |
 | 12 | Memory | `Arena`, not `Arc`; sharing through a per-revision node cache. |
 | 13 | Node identity | `(FileId, byte range)`, never a pointer. |
 | 14 | Diagnostics | `minc_parse` has no diag dependency; `minc_parse_report` converts errors. |
@@ -610,19 +661,25 @@ File@0..98
 
 | Claim | Checked by |
 | --- | --- |
-| The tree is lossless | `SyntaxTree::validate()` reconstruction: concatenating leaf lexemes equals the source bytes |
-| A recovered tree is still a tree | `validate()` on every golden file, including the malformed ones |
+| The tree is lossless | `SyntaxTree::validate()` / `reconstruct()`: concatenating leaf lexemes equals the source bytes |
+| A recovered tree is still a tree | `validate()` after every malformed input in the suites, and after each of the 256 single-byte and 200 byte-soup parses |
 | The parser terminates and makes progress | exhaustive over all 1- and 2-byte inputs; deterministic byte soup; a hang is a test failure |
-| Deep nesting is a diagnostic, not a crash | a test that nests past `kMaxNestingDepth`, run under the sanitizer preset |
-| One table really is one table | every operator, every synchronization token, and every kind is exercised by a test that reads the table |
-| Errors are the ones intended | golden files: `tests/parse/data/*.mx` + `*.tree` (`--no-trivia`) + `*.errors` |
+| Deep nesting is a diagnostic, not a crash | one test per self-recursive production (prefix, assignment, conditional, blocks, parentheses), run under the sanitizer preset |
+| Cross-file sharing is real | `TreeStoreTest`: the same bytes parsed as a second file must add zero cache entries |
+| One table really is one table | every operator and every kind is exercised by a test that reads the table |
+| Every error code is reachable | `error_codes_test.cc`: one named input per code, plus a sweep over `allParseErrorCodes()` |
 | Grammar edits are caught | `examples/*.mx` must parse with zero errors, as for the lexer |
-| Precedence is C's | table-driven tests per level, plus associativity tests (`a - b - c`, `a = b = c`) |
+| The tree's shape is pinned | a full `--no-trivia` dump of the canonical program, inline in `tree_test.cc` |
+| Precedence is C's | precedence and associativity tests (`1 + 2 * 3`, `a - b - c`, `a = b = c`, `a ? b : c ? d : e`) |
 | The engine survives memory *and* UB bugs | `cmake --preset sanitize` (ASan + UBSan) in CI |
 
-Golden files are the core of it: the input and the expected tree live side by
-side, a mismatch prints a diff, and updating an expectation is an explicit act
-rather than an accident.
+**Still to add: the golden corpus.** A `tests/parse/data/*.mx` next to its
+`*.tree` and `*.errors` is the strongest form of the shape-and-errors check --
+the input and the expectation live side by side, a mismatch prints a diff, and
+updating an expectation is an explicit act. The inline snapshot above covers the
+canonical program, and the example suite covers the grammar, so what is missing
+is breadth: malformed inputs worth reviewing as text. It is a `[ ]` in
+`docs/roadmap.md` rather than a claim here.
 
 ## Non-goals for the parser and the tree
 
