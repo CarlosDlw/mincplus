@@ -99,6 +99,12 @@ enum class TokenKind : std::uint8_t {
   CaretEqual,
   LessLessEqual,
   GreaterGreaterEqual,
+
+  // Sentinel, never produced by the lexer. It gives the token range a bound at
+  // compile time, so the syntax layer can pin its first node kind above every
+  // token kind with a static_assert rather than a hand-maintained maximum that
+  // would silently rot when a token kind is added.
+  Last,
 };
 
 [[nodiscard]] constexpr bool isTrivia(TokenKind kind) {

@@ -17,6 +17,7 @@ constexpr const char* kOptionsBlock =
     "Options:\n"
     "  -h, --help       Print this help and exit\n"
     "  -V, --version    Print version information and exit\n"
+    "  --no-trivia      Omit whitespace and comments from dump output\n"
     "  --               Treat every following argument as a file, not an option\n";
 
 constexpr const char* kExitStatusBlock = "Exit status:\n"

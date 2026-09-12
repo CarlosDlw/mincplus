@@ -169,6 +169,10 @@ const char* toString(TokenKind kind) {
     return "LessLessEqual";
   case TokenKind::GreaterGreaterEqual:
     return "GreaterGreaterEqual";
+  case TokenKind::Last:
+    // The sentinel names no token, so it has no name. Listed explicitly because
+    // the switch has no `default:` on purpose.
+    return "Unknown";
   }
   return "Unknown";
 }

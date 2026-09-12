@@ -65,16 +65,29 @@ minc_add_executable(minc_unit_tests
     lex/token_dump_test.cc
     lex/lex_report_test.cc
     lex/examples_test.cc
+    parse/syntax_kind_test.cc
+    parse/parser_test.cc
+    parse/error_codes_test.cc
+    parse/examples_parse_test.cc
+    syntax/tree_test.cc
     driver/cli_test.cc
     driver/error_report_test.cc
     driver/lex_command_test.cc
+    driver/parse_command_test.cc
   DEPS
     minc_support
     minc_lex
     minc_lex_report
+    minc_parse
+    minc_parse_report
+    minc_syntax
     minc_driver
     GTest::gtest_main
 )
+
+# The parse and syntax suites share `parse/parse_fixture.h`, so the test tree
+# itself is an include root.
+target_include_directories(minc_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 include(GoogleTest)
 # PRE_TEST discovery keeps the build step free of test-binary execution, which

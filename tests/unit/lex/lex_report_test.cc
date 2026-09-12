@@ -1,6 +1,7 @@
 // Copyright (c) 2026 minc+ contributors.
 // SPDX-License-Identifier: MIT
 #include <cstddef>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -82,6 +83,50 @@ TEST(LexReportTest, FlagInfosCoverEveryFlagExactlyOnce) {
     EXPECT_EQ(sameName, 1u) << info.name;
     EXPECT_EQ(sameCode, 1u) << info.code;
   }
+}
+
+// A flag no input can produce is a diagnostic the user will never see. This is
+// the lexer's half of the same guarantee the parser's error-code test makes:
+// every row of the table is reachable, and from the input that should produce
+// it. `lex-invalid-character` is the exception -- it is not a flag, so it is
+// checked here by name.
+TEST(LexReportTest, EveryFlagIsReachableFromSomeInput) {
+  struct Case {
+    const char* label;
+    std::string_view source;
+    const char* code;
+  };
+  // One tiny input per code, so a failure is its own reproduction.
+  const Case cases[] = {
+      {"unterminated string", "\"abc\n", "lex-unterminated-string"},
+      {"unterminated char", "'a\n", "lex-unterminated-char"},
+      {"unterminated comment", "/* x", "lex-unterminated-comment"},
+      {"unknown escape", "\"\\q\"", "lex-unknown-escape"},
+      {"surrogate escape", "\"\\uD800\"", "lex-escape-out-of-range"},
+      {"escape past the last scalar", "\"\\U00110000\"", "lex-escape-out-of-range"},
+      {"empty char literal", "''", "lex-empty-char"},
+      {"hex with no digits", "0x", "lex-missing-digits"},
+      {"byte outside the alphabet", "#", "lex-invalid-character"},
+  };
+
+  std::set<std::string> seen;
+  for (const Case& testCase : cases) {
+    support::DiagBag bag;
+    report(testCase.source, bag);
+    std::set<std::string> codes;
+    for (const support::Diagnostic& diagnostic : bag.all()) {
+      codes.insert(diagnostic.code);
+    }
+    EXPECT_EQ(codes.count(std::string(testCase.code)), 1u)
+        << testCase.label << ": expected " << testCase.code;
+    seen.merge(codes);
+  }
+
+  for (const FlagInfo& info : flagInfos()) {
+    EXPECT_EQ(seen.count(std::string(info.code)), 1u)
+        << "no input produces " << info.code << "; add one to the table above";
+  }
+  EXPECT_EQ(seen.count("lex-invalid-character"), 1u);
 }
 
 TEST(LexReportTest, MessageAndCodeComeFromTheSameRow) {

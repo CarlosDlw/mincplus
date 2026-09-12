@@ -17,7 +17,7 @@
 namespace minc::driver {
 
 // Subcommands the driver understands. Anything else is a usage error.
-enum class Command : std::uint8_t { Build, Run, Check, Lex };
+enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse };
 
 // Name, argument shape, and one-line description of a subcommand. Kept in one
 // table so the parser, error messages, and help text cannot drift apart.
@@ -39,6 +39,10 @@ struct CommandInfo {
 struct CliOptions {
   bool showHelp = false;
   bool showVersion = false;
+  // `--no-trivia`: leave whitespace and comments out of dump output. It is a
+  // display filter, not a lexer mode -- the token stream keeps every byte
+  // either way -- so it is a global option rather than a per-command one.
+  bool hideTrivia = false;
   std::optional<Command> command;
   std::vector<std::string> inputs; // files and pass-through arguments
   std::string error;               // non-empty => usage error; ignore the rest

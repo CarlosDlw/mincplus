@@ -1,0 +1,80 @@
+// Copyright (c) 2026 minc+ contributors.
+// SPDX-License-Identifier: MIT
+#include "parse/syntax_kind.h"
+
+#include <array>
+#include <cstddef>
+#include <utility>
+
+namespace minc::parse {
+namespace {
+
+// The node kinds, in one table. Adding a node kind is a row here plus an
+// enumerator in syntax_kind.h; the dump, the tests, and the derived
+// `allNodeKinds()` all read this instead of repeating the list.
+struct NodeKindInfo {
+  SyntaxKind kind;
+  const char* name;
+};
+
+constexpr std::array<NodeKindInfo, 26> kNodeKindInfos{{
+    {SyntaxKind::File, "File"},
+    {SyntaxKind::Error, "Error"},
+    {SyntaxKind::FnDecl, "FnDecl"},
+    {SyntaxKind::ParamList, "ParamList"},
+    {SyntaxKind::Param, "Param"},
+    {SyntaxKind::Block, "Block"},
+    {SyntaxKind::LetStmt, "LetStmt"},
+    {SyntaxKind::ConstStmt, "ConstStmt"},
+    {SyntaxKind::ReturnStmt, "ReturnStmt"},
+    {SyntaxKind::ExprStmt, "ExprStmt"},
+    {SyntaxKind::EmptyStmt, "EmptyStmt"},
+    {SyntaxKind::Name, "Name"},
+    {SyntaxKind::Type, "Type"},
+    {SyntaxKind::LiteralExpr, "LiteralExpr"},
+    {SyntaxKind::PathExpr, "PathExpr"},
+    {SyntaxKind::ParenExpr, "ParenExpr"},
+    {SyntaxKind::PrefixExpr, "PrefixExpr"},
+    {SyntaxKind::PostfixExpr, "PostfixExpr"},
+    {SyntaxKind::BinaryExpr, "BinaryExpr"},
+    {SyntaxKind::ConditionalExpr, "ConditionalExpr"},
+    {SyntaxKind::AssignExpr, "AssignExpr"},
+    {SyntaxKind::CallExpr, "CallExpr"},
+    {SyntaxKind::ArgList, "ArgList"},
+    {SyntaxKind::MacroCall, "MacroCall"},
+    {SyntaxKind::TokenTree, "TokenTree"},
+    {SyntaxKind::Attribute, "Attribute"},
+}};
+
+// Derived, not listed again: a kind added to the table above is picked up by
+// every consumer of allNodeKinds() without a second edit that could be
+// forgotten. The pack expansion initializes every slot from the table, so no
+// element is ever value-initialized to a zero that is not a valid `SyntaxKind`.
+template <std::size_t... Indexes>
+[[nodiscard]] constexpr auto kindsFromTable(std::index_sequence<Indexes...>) {
+  return std::array<SyntaxKind, sizeof...(Indexes)>{kNodeKindInfos[Indexes].kind...};
+}
+
+constexpr auto kAllNodeKinds = kindsFromTable(std::make_index_sequence<kNodeKindInfos.size()>{});
+
+} // namespace
+
+std::span<const SyntaxKind> allNodeKinds() {
+  return kAllNodeKinds;
+}
+
+std::string_view toString(SyntaxKind kind) {
+  // Leaves are named by the lexer, so there is one name per token kind and it
+  // is the same string the token dump prints.
+  if (isTokenKind(kind)) {
+    return lex::toString(toTokenKind(kind));
+  }
+  for (const NodeKindInfo& info : kNodeKindInfos) {
+    if (info.kind == kind) {
+      return info.name;
+    }
+  }
+  return "Unknown";
+}
+
+} // namespace minc::parse

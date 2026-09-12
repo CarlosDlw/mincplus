@@ -23,11 +23,12 @@ platform; the concrete guarantees are in
 
 ## Status
 
-Scaffold v0.1: the `src/support` foundation, the lexer (`src/lex`), and the
-`mincc` driver. `mincc lex <files...>` works and prints the token stream;
-`build`, `run`, and `check` parse correctly but report that they are not
-implemented, and there is no parser, semantic analysis, or backend yet.
-`--help` and `--version` are functional.
+Scaffold v0.1: the `src/support` foundation, the lexer (`src/lex`), the parser
+and syntax tree (`src/parse`, `src/syntax`), and the `mincc` driver.
+`mincc lex <files...>` prints the token stream and `mincc parse <files...>`
+prints the syntax tree; `build`, `run`, and `check` parse correctly but report
+that they are not implemented, and there is no semantic analysis or backend
+yet. `--help` and `--version` are functional.
 
 ```console
 $ mincc lex examples/002_variables.mx
@@ -48,6 +49,46 @@ Every byte of the file appears in exactly one token, including whitespace and
 comments, and lexical errors are reported as `file:line:col: error[code]` with
 a caret, without stopping at the first one. The design behind that is in
 [`docs/architectures/lexer.md`](docs/architectures/lexer.md).
+
+```console
+$ mincc parse examples/001_main_func.mx
+== examples/001_main_func.mx  (30 bytes, 19 tokens, 8 nodes, 0 errors, depth 5)
+
+File@0..30
+  FnDecl@0..29
+    KwFn@0..2 "fn"
+    Type@2..6
+      Whitespace@2..3 " "
+      Identifier@3..6 "i32"
+    Name@6..11
+      Whitespace@6..7 " "
+      Identifier@7..11 "main"
+    LParen@11..12 "("
+    ParamList@12..12
+    RParen@12..13 ")"
+    Block@13..29
+      Newline@13..14 "\n"
+      LBrace@14..15 "{"
+      ReturnStmt@15..27
+        Newline@15..16 "\n"
+        Whitespace@16..18 "  "
+        KwReturn@18..24 "return"
+        LiteralExpr@24..26
+          Whitespace@24..25 " "
+          IntegerLiteral@25..26 "0"
+        Semicolon@26..27 ";"
+      Newline@27..28 "\n"
+      RBrace@28..29 "}"
+  Newline@29..30 "\n"
+  EndOfFile@30..30
+```
+
+The tree is **lossless**: the leaves tile the file byte for byte, so its text is
+the source and a formatter or a refactor needs no second representation. The
+parser reports every syntax error it finds (not just the first), recovers from
+it and keeps going, and the tree still covers every byte of even a malformed
+file. The design behind that is in
+[`docs/architectures/parser.md`](docs/architectures/parser.md).
 
 ## Language features
 
@@ -325,17 +366,24 @@ hidden escape hatch.
   token dump, and the flag-to-diagnostic reporting split into a separate
   library (`minc_lex_report`) so the lexer itself links no diagnostics.
 - `src/driver/` — `mincc` entry point: `cli` (parsing), `help_text` (help and
-  version output), `error_report` (the one error format), `lex_command` (the
-  `lex` subcommand), `exit_code`. The version header is generated from
+  version output), `error_report` (the one error format), `input_source` (the
+  one way an input path or `-` is loaded), `lex_command`, `parse_command` (the
+  subcommands), `exit_code`. The version header is generated from
   `cmake/version.h.in`; the source tree holds no second copy.
-- `src/parse/` and `src/syntax/` — planned: the parser (events over a token
-  source) and the lossless syntax tree with its cursor and typed AST view.
-  Design in [`docs/architectures/parser.md`](docs/architectures/parser.md).
+- `src/parse/` — the parser: a recursive-descent grammar over a token *source*,
+  emitting events and error values. It links no diagnostics and no tree, so a
+  grammar change is testable without a `Session`; `minc_parse_report` is the
+  separate library that turns its errors into diagnostics.
+- `src/syntax/` — the tree: a lossless, hash-consed, arena-backed green tree of
+  that event stream, a parentless cursor over it, a typed AST view, and the
+  `mincc parse` dump. Design in
+  [`docs/architectures/parser.md`](docs/architectures/parser.md).
 - `src/lex/pp|sema|ir|backend|cinterop/` — planned.
-- `tests/unit/` — gtest suites, one per support module.
+- `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
-  `tests/unit/lex/examples_test.cc`, so an example cannot drift into syntax the
-  lexer does not accept.
+  `tests/unit/lex/examples_test.cc` and parsed by
+  `tests/unit/parse/examples_parse_test.cc`, so an example cannot drift into
+  syntax the lexer or the parser does not accept.
   - `001_main_func.mx` — the smallest program: one function and a `return`
   - `002_variables.mx` — `let` with an annotation and with inference
   - `003_types.mx` — the primitive type names and the C-compatible spellings,
@@ -347,9 +395,10 @@ hidden escape hatch.
 
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
-[`docs/roadmap.md`](docs/roadmap.md); the lexer design and its research
-references are in
-[`docs/architectures/lexer.md`](docs/architectures/lexer.md).
+[`docs/roadmap.md`](docs/roadmap.md); the lexer and parser designs and their
+research references are in
+[`docs/architectures/lexer.md`](docs/architectures/lexer.md) and
+[`docs/architectures/parser.md`](docs/architectures/parser.md).
 
 ## Build
 
@@ -419,5 +468,5 @@ These are contracts, not aspirations — the test suite enforces the first three
   enabled only for a real terminal, honors `NO_COLOR` and `TERM=dumb`, and on
   Windows turns on virtual-terminal processing first so an older console gets
   plain text instead of escape soup.
-- **Standard input.** `mincc lex -` reads stdin in binary mode on Windows, so a
-  piped file is byte-identical to opening it.
+- **Standard input.** `mincc lex -` and `mincc parse -` read stdin in binary
+  mode on Windows, so a piped file is byte-identical to opening it.

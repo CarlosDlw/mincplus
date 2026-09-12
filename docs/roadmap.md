@@ -82,37 +82,40 @@ hand-written recursive-descent parser that emits **events**, consumed by a
 separate builder into a **lossless, untyped green tree**, with a cursor and a
 typed AST view on top.
 
-- [ ] `TokenSource` over the significant-token index: the parser is trivia-blind
-- [ ] Event stream (`Start`/`Finish`/`Token`/`Error`) plus a side error list;
+- [x] `TokenSource` over the significant-token index: the parser is trivia-blind
+- [x] Event stream (`Start`/`Finish`/`Token`) plus a side list of error values;
       the parser allocates no tree and links no diagnostics
-- [ ] `TreeBuilder` consuming events and the full token stream, attaching trivia
+- [x] `TreeBuilder` consuming events and the full token stream, attaching trivia
       into the node under construction (the only component that sees trivia)
-- [ ] Arena-backed green nodes/tokens: position-free and parent-free, with a
-      per-revision node cache for structural sharing
-- [ ] Cursor layer (parent, absolute offset, range, traversal); identity is
-      `(FileId, range)`, never a pointer
-- [ ] Unified `SyntaxKind` (u16) covering tokens and nodes, pinned to
+- [x] Arena-backed green nodes/tokens: position-free and parent-free, with a
+      hash-consing node cache for structural sharing (the tree is a DAG)
+- [x] Cursor layer (absolute offset, range, traversal); identity is
+      `(FileId, range)`, never a pointer. A parent pointer is deliberately
+      absent -- a shared green node has no single parent
+- [x] Unified `SyntaxKind` (u16) covering tokens and nodes, pinned to
       `TokenKind` by a `static_assert`
-- [ ] Typed AST accessors over the untyped tree, every field optional so
+- [x] Typed AST accessors over the untyped tree, every field optional so
       half-written code is representable
-- [ ] Expressions: precedence climbing over one operator table, C precedence
+- [x] Expressions: precedence climbing over one operator table, C precedence
       and associativity; left-associative chains via `precede`/`forward_parent`
-- [ ] Type positions (`fn` return type, `: T`) parsed by position, so no token
+- [x] Type positions (`fn` return type, `: T`) parsed by position, so no token
       kind for a type name and no lexer feedback
-- [ ] Error recovery: missing zero-width tokens, `Error` nodes, synchronization
+- [x] Error recovery: missing zero-width tokens, `Error` nodes, synchronization
       sets, and a bail-out cap
-- [ ] Stack-safety guard on every recursive entry (`kMaxNestingDepth`), so deep
+- [x] Stack-safety guard on every recursive entry (`kMaxNestingDepth`), so deep
       nesting is a diagnostic rather than a crash
-- [ ] `SyntaxTreeStore` in `Session`, keyed `(FileId, revision)`
-- [ ] Tree dump for inspection (`mincc parse <files...>`, `--no-trivia`)
+- [x] Tree dump for inspection (`mincc parse <files...>`, `--no-trivia`)
+- [x] Lossless-reconstruction check over every example
+- [x] Declarations: functions and the `let`/`const` forms
+- [x] Statements and blocks
+- [ ] `SyntaxTreeStore` in `Session`, keyed `(FileId, revision)` — the tree
+      carries its revision today; the keyed store lands with the editor path
 - [ ] Golden-file tests (`tests/parse/data/*.mx` with expected tree and errors)
-      and a lossless-reconstruction check over every example
-- [ ] Declarations: functions and the `let`/`const` forms
-- [ ] Statements and blocks
 - [ ] `if`/`else`, loops, `break`/`continue`, `switch` — when their syntax is
       decided
 - [ ] `struct`/`union`/`enum`, typedefs, and the full C declarator grammar
 - [ ] Initializers, `sizeof`/`alignof`, casts, and the C-compatible `fn` forms
+- [ ] Generated typed AST layer, once the node count justifies the generator
 - [ ] Reserved syntax kinds for macro calls, token trees, and attributes
 - [ ] Grammar documented next to the code it implements
 
@@ -196,13 +199,16 @@ typed AST view on top.
 
 ## 11. Quality
 
-- [ ] Unit tests per module (lexer, preprocessor, parser, sema, IR)
-- [ ] Snapshot tests for AST dumps and rendered diagnostics
+- [x] Unit tests per shipped module (support, lexer, parser, syntax tree,
+      driver); preprocessor, sema, and IR suites land with those stages
+- [x] Negative tests: the lexer's and parser's diagnostic paths are covered by
+      a test that triggers them
+- [ ] Snapshot tests for AST dumps and rendered diagnostics (golden files)
 - [ ] End-to-end tests: every `examples/*.mx` compiles, links, runs, and its
       output is asserted
-- [ ] Negative tests: every diagnostic code has a test that triggers it
 - [ ] Fuzzing for lexer, preprocessor, parser, and UTF-8, with a seeded corpus
-- [ ] Sanitizer builds (ASan/UBSan) in CI, plus a TSAN run for the driver
+- [x] Sanitizer builds (ASan/UBSan) in CI
+- [ ] ThreadSanitizer run for the driver
 - [ ] Coverage reporting and compile-time/memory benchmarks
 - [ ] Cross-platform CI extended from `support` to the whole pipeline
 

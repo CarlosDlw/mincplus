@@ -8,10 +8,25 @@ callers, and what it is allowed to depend on.
 
 ```
 mincc                      driver: argv -> exit code
-  └── minc_driver          cli / help_text / error_report / lex_command
+  └── minc_driver          cli / help_text / error_report / input_source
+        │                  lex_command / parse_command
         ├── minc_support
         ├── minc_lex
-        └── minc_lex_report
+        ├── minc_lex_report
+        ├── minc_syntax
+        └── minc_parse_report
+
+minc_parse_report          syntax errors -> diagnostics (the only reporter)
+  ├── minc_parse
+  └── minc_diag
+
+minc_syntax                green tree + cursor + typed AST + dump
+  ├── minc_parse           events and errors only: no tree, no diagnostics
+  │     ├── minc_lex
+  │     └── minc_span
+  ├── minc_lex
+  ├── minc_span
+  └── minc_mem
 
 minc_lex_report            token flags -> diagnostics
   ├── minc_lex             raw lexer: tokens, lossless stream, dump
@@ -53,6 +68,11 @@ Rules:
   That is enforced by the build graph (`minc_lex` lists no diag target), not by
   a comment, and it is why the lexer can be tested and fuzzed without a
   `Session`.
+- `src/parse/` does not depend on diagnostics **or** on the tree. The parser
+  emits events and error *values*; `minc_parse_report` turns those into
+  diagnostics and `minc_syntax` turns the events into a tree. So a grammar
+  change is testable with neither layer linked, and a change to the tree layout
+  cannot reach the grammar.
 - `src/support/term` is the only module allowed to contain `#if defined(_WIN32)`
   and `<windows.h>` / `<unistd.h>`. Everything else asks it a yes/no question
   and stays platform-agnostic.
@@ -212,6 +232,94 @@ Design record: [`docs/architectures/lexer.md`](architectures/lexer.md).
   aligned whatever the file holds; it writes nothing and colors nothing that is
   not asked for.
 
+### `parse` — the grammar
+
+Design record: [`architecture/parser.md`](architectures/parser.md).
+
+- The parser emits **events**, never a node: `Start(kind)` / `Finish` / `Token`
+  as a flat `std::vector<Event>`. A separate builder turns them into the tree,
+  so the grammar holds no arena, no offsets, and no tree storage, and can be
+  tested with a trivial sink.
+- Errors are **values**, `ParseError{span, message, code}`, collected in a
+  vector. One run therefore reports every syntax error instead of stopping at
+  the first. `parse_report.h` is the only file that knows about `Span`,
+  severity, and `DiagBag`.
+- The code is an enumerator, not a string written at each call site: a closed
+  `ParseErrorCode` set with one table holding the code and its name, so the
+  parser cannot invent a code no test knows about and two sites cannot spell
+  the same condition two ways. `allParseErrorCodes()` is derived from that
+  table and a test requires every code to be reachable from some input, which
+  is the same guarantee the lexer's flag table gets.
+- **Trivia-blind by contract.** A `Token` event means "the next *significant*
+  token"; it carries no source index. The builder, which is the only component
+  that sees trivia, flushes the whitespace and comments before it. So the
+  grammar has no whitespace rules while the tree stays lossless.
+- **`forwardParent` is how left-associativity is built left to right.**
+  `a + b + c` parses `a + b` first and only then learns a parent exists;
+  instead of moving the finished node, its `Start` event records the distance
+  to the later `Start` that will adopt it, and the builder enters the parents
+  when it gets there.
+- **Missing tokens are a zero-width `Token` event** (`missing = true`). A `;`
+  slot is a `;` slot whether or not the character is present, so a node's shape
+  does not depend on how far the user has typed -- which is exactly the case an
+  editor sits in.
+- `TokenSource` is an **interface**, not `lex::TokenStream`. The parser today
+  reads a file's significant tokens; macro expansion will read a token tree. If
+  the grammar talked to the concrete stream, that second source would be a
+  rewrite of the grammar instead of a second implementation of one tiny class.
+- **Two bounded-work guards, both tested.** `kMaxNestingDepth` (256, the same
+  number as Clang's `-fbracket-depth`) makes `DepthGuard` refuse to descend, so
+  deeply nested input cannot overflow the stack; and after
+  `kMaxParseErrors` (4096) the parser bails out, wrapping the unparsed
+  remainder in one `Error` node, so a pathological file costs bounded work
+  instead of a quadratic error cascade. In both cases the tree still covers
+  every byte.
+- `TokenKind`/`SyntaxKind` share a numeric space: token kinds are exactly their
+  `lex::TokenKind` value below `kFirstNodeKind` (256), node kinds sit at or
+  above it. Generic tree code -- the dump, the validator, a future highlighter
+  -- never needs a special case for a leaf. The gap also means adding token
+  kinds never renumbers a node kind that a golden file pins.
+
+### `syntax` — the tree
+
+- **Green tree: immutable, untyped, position-free.** A `GreenNode` is its kind,
+  its byte width, and its children -- deliberately no parent and no absolute
+  offset, because one green node is shared by every place it appears and so has
+  no single parent or position. `SyntaxNode` / `SyntaxToken` (a green pointer
+  plus an absolute offset) add both back on the way down; nothing is allocated
+  or cached, and identity is `(file, byte range)`, never a pointer.
+- **Nodes are hash-consed through `GreenCache`**, so two identical subtrees come
+  back as the *same pointer*. That makes the structure a DAG, and it is the
+  mechanism a future incremental reparse uses to recognise an unchanged
+  subtree without comparing it. The cache lives beside the arena in the tree
+  store, so an empty `()` is one node however many functions have one.
+- **Nothing here owns memory.** Green nodes come from the `Session`'s `Arena`
+  and leaf text is a view into the `Session`'s source, so a `SyntaxTree` is
+  valid exactly as long as its `Session` -- the same lifetime the sources have.
+  It carries the source `revision`, because a byte offset is only meaningful
+  within one.
+- **`stats().lossless` is audited, not asserted.** The builder checks while it
+  runs that the leaves tile `[0, size())` exactly and every node's width is the
+  sum of its children's; `SyntaxTree::validate()` re-checks it and
+  `reconstruct()` is the canonical text. A formatter, a refactor, or a
+  language server all rely on that, so it is checked the way the token stream's
+  lossless invariant is.
+- **Tree walking is iterative, not recursive.** Any walk that could be as deep
+  as the parser's guard allows (validate, reconstruct, dump) uses an explicit
+  stack, so the tree can never overflow the stack even on input the parser had
+  to accept.
+- `dumpTree` is pure formatting for `mincc parse`: it returns a string, writes
+  nothing, and prints kinds, offsets, and lexemes -- never an address -- so the
+  same input gives byte-identical output on every run and every platform. Color
+  is computed on the uncolored text, so turning it on cannot shift a column.
+- `ast.h` is a **typed view** over the untyped tree: a `SyntaxNode` plus checked
+  accessors, every field optional on purpose -- a half-written function has a
+  name and no body, and the AST must be able to say so. Shared shape is
+  expressed with CRTP rather than a macro, so the compiler checks every member's
+  spelling and a reflow cannot cut a line continuation in half. When the node
+  count justifies it this layer is generated from one grammar description
+  (parser design decision 16), not hand-extended.
+
 ### `driver`
 
 - `cli.h`: `parseArgs` is pure — it never prints, exits, or throws. The first
@@ -234,6 +342,14 @@ Design record: [`docs/architectures/lexer.md`](architectures/lexer.md).
   `lexInputs()` (the command, with the streams injected) and `runLex()` (the
   choice of streams and colors), so the contract -- which stream carries what,
   in what order, and which exit code -- is tested without spawning a process.
+- `parse_command.h`: the `parse` subcommand, built on the same split
+  (`parseInputs()` / `runParse()`). It lexes, parses, and builds the tree, then
+  prints the tree on stdout and the lexical *and* syntax diagnostics on stderr,
+  so `mincc parse` shows exactly the syntax layer and nothing downstream of it.
+- `input_source.h`: the one way a file-taking subcommand loads an input.
+  `loadInput` handles a path or `-` (standard input) and returns the same
+  errors for both, so `lex` and `parse` cannot drift in how they treat `-` or
+  in what they say when a file cannot be read.
 - The version string comes from `cmake/version.h.in` via CMake; the source
   tree carries no second copy.
 
@@ -273,8 +389,9 @@ checks all three. The load-bearing decisions:
 - Line terminators (LF/CRLF/CR) are handled in `line`, not by callers.
 - Encoding is normalized once in `source`; nothing downstream re-checks it.
 - Paths go through `std::filesystem` as UTF-8; `/tmp` is never hard-coded.
-- Standard input is read in **binary** mode on Windows (`_setmode(_O_BINARY)`),
-  so piping a file through `mincc lex -` sees the same bytes as opening it.
+- Standard input is read in **binary** mode on Windows (`_setmode(_O_BINARY)`)
+  by `driver/input_source`, so piping a file through `mincc lex -` or
+  `mincc parse -` sees the same bytes as opening it.
 - ANSI color is enabled on Windows by turning on
   `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, and only after `GetConsoleMode`
   succeeds; a console that cannot do it gets plain text rather than escape
@@ -298,6 +415,10 @@ checks all three. The load-bearing decisions:
   every 1-byte and 2-byte input, and every 3-byte combination of the bytes that
   change scanning. A property test over deterministic byte soup covers longer
   input.
+- The examples are held to the parser as well: every `.mx` in `examples/` must
+  lex and parse with **zero** diagnostics and a `validate()`d, lossless tree, so
+  a grammar change that breaks the documented surface fails a test instead of
+  being noticed by hand.
 - `cmake --preset sanitize` builds the whole project with AddressSanitizer and
   UndefinedBehaviorSanitizer, and `-fno-sanitize-recover` makes a finding abort
   the run instead of scrolling past. The preset is one switch rather than
@@ -324,9 +445,10 @@ backend -> C interop`, with the driver orchestrating the stages.
   of **events**, never a node; it links no diagnostics, so a grammar change is
   testable without a `Session`. **`src/syntax`** consumes those events and the
   full token stream into a lossless, untyped **green tree** (arena-backed,
-  position-free) with a cursor and a typed AST view. Design record:
-  [`architectures/parser.md`](architectures/parser.md). The lexer deliberately
-  does not pre-filter trivia; the tree builder is the layer that attaches it.
-- **driver** links `minc_support`, `minc_lex`, and `minc_lex_report`, picks
+  position-free) with a cursor and a typed AST view. Both are shipped; design
+  record: [`architectures/parser.md`](architectures/parser.md). The lexer
+  deliberately does not pre-filter trivia; the tree builder is the layer that
+  attaches it.
+- **driver** links the support, lex, parse, and syntax libraries, picks
   `ColorMode` per stream with `support/term`, and renders `DiagBag` with
   `DiagRenderer`.

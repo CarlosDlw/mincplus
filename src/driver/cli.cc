@@ -7,11 +7,12 @@
 namespace minc::driver {
 namespace {
 
-constexpr std::array<CommandInfo, 4> kCommands{{
+constexpr std::array<CommandInfo, 5> kCommands{{
     {Command::Build, "build", "<files...>", "Compile sources and link an executable", false},
     {Command::Run, "run", "<files...>", "Build and run the resulting program", false},
     {Command::Check, "check", "<files...>", "Parse and type-check only; no code is emitted", false},
     {Command::Lex, "lex", "<files...>", "Print the token stream of each file", true},
+    {Command::Parse, "parse", "<files...>", "Parse each file and print its syntax tree", true},
 }};
 
 // A lone "-" and any argument not starting with '-' are positional. Doing this
@@ -37,6 +38,8 @@ const char* toString(Command command) {
     return "check";
   case Command::Lex:
     return "lex";
+  case Command::Parse:
+    return "parse";
   }
   return "unknown";
 }
@@ -71,6 +74,10 @@ CliOptions parseArgs(int argc, const char* const* argv) {
       }
       if (arg == "-V" || arg == "--version") {
         opts.showVersion = true;
+        continue;
+      }
+      if (arg == "--no-trivia") {
+        opts.hideTrivia = true;
         continue;
       }
       if (!isPositional(arg)) {
