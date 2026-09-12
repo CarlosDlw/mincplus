@@ -403,11 +403,12 @@ already ubiquitous:
 | Directive | Notes |
 | --- | --- |
 | `#define`, `#undef` | object-like, function-like, variadic; redefinition is diagnosed unless the replacement lists are **identical** (standard rule), and the `#undef`ed/`#define`d history is recorded for tooling |
-| `#include`, `#include_next` | `"..."` searches the current file's directory first, `<...>` only the search list; both are ordered explicit lists (see below) |
+| `#include`, `#include_next` | `"..."` searches the current file's directory first, `<...>` only the search list; both are ordered explicit lists (see below). The operand is a **header-name**, scanned from raw bytes -- see below |
 | `#if`, `#ifdef`, `#ifndef`, `#elif`, `#elifdef`, `#elifndef`, `#else`, `#endif` | the skip stack is explicit; any directive other than a conditional is diagnosed inside a skipped region only for the conditions the standard requires |
 | `#line` | accepted and validated; GNU line markers are **parsed** so that generated code can be consumed |
 | `#error`, `#warning` | `#warning` is a diagnostic at warning severity, not an extension |
-| `#pragma` | grammar defined, unknown pragmas **preserved** in the record and not diagnosed by default (`-Wunknown-pragmas` opt-in); `#pragma once` is honored; `_Pragma("...")` is an operator |
+| `#pragma` | grammar defined, unknown pragmas **preserved** in the record and not diagnosed by default (`-Wunknown-pragmas` opt-in); `#pragma once` is honored |
+| `_Pragma("...")` | the C99 operator form, registered as a builtin so the macro case works too: `#define PUSH _Pragma("...")` expands to the operator and rescanning meets it. It destringizes (`\"` to `"`, `\\` to `\`, and nothing else), lexes the result, and hands it to the same handler `#pragma` uses -- two spellings, one meaning. It emits no token, so nothing of it reaches the parser |
 | `#` alone on a line | a null directive, as the standard says |
 | `defined X` / `defined(X)` | an operator in `#if`, not a macro |
 
@@ -439,6 +440,43 @@ Reserved, with the decision recorded and the syntax *not* accepted yet:
   `#if` and, later, `const` evaluation. The interface is "evaluate this token
   sequence as an integer constant", and it lives in one file with two callers
   rather than being written twice.
+
+### Header-names: the operand is not a token sequence
+
+The operand of `#include` is a **header-name** (C 6.4.7), and the one thing that
+matters about it is that it is not a sequence of ordinary tokens:
+
+- `h-char` and `q-char` exclude only the newline and the closing delimiter, so
+  `//` and `/*` are ordinary characters inside a name. Read as tokens,
+  `#include <a//b.h>` becomes a line comment that swallows the `>`, and the
+  directive is reported as an unterminated `<...>` -- a wrong diagnostic on a
+  valid file;
+- escapes do not exist there either, so reading `#include "c:\dir\x.h"` as a
+  string literal draws "unknown escape" on a Windows path -- a *false* diagnostic
+  on valid code, which is the worst kind;
+- `>` is legal inside `"..."` and `"` is legal inside `<...>`, so no amount of
+  joining tokens can express both.
+
+The bytes are still there to read, which is why the token stream keeps trivia.
+`lex::scanHeaderName` re-reads them from the opening delimiter, and the directive
+line is rewritten so each operand is one `HeaderName` token. That is the same
+move Clang makes from the other direction (`LexHeaderName`), and it is why the
+scanner is a second entry point beside `lexOne` rather than a mode *inside* it:
+`lexOne` stays a pure, restartable function of `(text, offset)` that knows
+nothing about directives.
+
+The consequence for diagnostics is explicit: the run records the span of every
+header-name it read, and the lexical report skips any token that **begins**
+inside one. Beginning rather than fitting, because the plain lexer's reading of
+those bytes can run past the name -- `#include <a/*b.h>` is an unterminated block
+comment that swallows the newline -- and the bytes past the name are re-lexed
+rather than lost.
+
+`__has_include(<name>)` goes through the same scanner, so the operator and the
+directive cannot disagree about what a name is. A name produced by macro
+expansion is not a header-name by the standard's rules (a header-name cannot be
+formed by expansion); `<...>` from a macro is accepted anyway, as GCC accepts it,
+by re-reading the bytes where the `<` was written.
 
 ### Include resolution
 
@@ -820,6 +858,8 @@ Two rules fell out of (1) and are now load-bearing:
 | 18 | State | One `Preprocessor` per `Session`; no globals, no statics, reentrant |
 | 19 | Tooling information | A record (definitions, includes, branch decisions, expansion sites), always for diagnostics, optionally for the expansion map |
 | 20 | Reserved syntax | `#embed` and `#pragma` semantics recorded, not accepted until bounded; unknown directives are errors |
+| 21 | Header-names | Scanned from raw bytes by `lex::scanHeaderName`, one `HeaderName` token per operand, spliced in before a directive is handled. A header-name's bytes are *not* the tokens the plain lexer made of them, so the run records its spans and the lexical report skips what begins inside one. `#include` and `__has_include` go through the same scanner, so they cannot disagree about what a name is |
+| 22 | `_Pragma` | A builtin, not a scanner special case: post-expansion handling is the only way the `#define PUSH _Pragma("...")` form can work, and one handler shared with `#pragma` is the only way the two spellings can mean one thing |
 
 ## References
 

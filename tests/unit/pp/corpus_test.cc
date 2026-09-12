@@ -166,6 +166,10 @@ PPOutcome strayHashOperator() {
   // preprocessor has no directive to open and no macro body to paste in.
   return PPFixture().source("let x = 1 + # 2;\n").run();
 }
+PPOutcome invalidPragmaOperand() {
+  // `_Pragma` takes one string literal; a number names no pragma.
+  return PPFixture().source("_Pragma(123)\n").run();
+}
 PPOutcome expansionDepth() {
   std::string text;
   for (int i = 0; i < 300; ++i) {
@@ -248,6 +252,7 @@ constexpr CodeTrigger kTriggers[] = {
     {"pp-invalid-hash-operand", "# before a non-parameter", &invalidHashOperand},
     {"pp-missing-macro-name", "#define without a name", &missingMacroName},
     {"pp-stray-hash", "a '#' that starts no line", &strayHashOperator},
+    {"pp-invalid-pragma-operand", "_Pragma with a non-literal operand", &invalidPragmaOperand},
     {"pp-expansion-depth", "300 chained macros", &expansionDepth},
     {"pp-expansion-budget", "lowered token budget", &expansionBudget},
     {"pp-expression-syntax", "an incomplete expression", &expressionSyntax},

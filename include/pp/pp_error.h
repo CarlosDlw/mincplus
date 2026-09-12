@@ -57,6 +57,9 @@ enum class PPErrorCode : std::uint8_t {
   // Operators the preprocessor gives no meaning to where they were written:
   // a `#` that does not start a line, or a `##` outside a macro body.
   StrayHashOperator,
+  // `_Pragma` whose operand is not one string literal, so there is no pragma to
+  // name.
+  InvalidPragmaOperand,
 
   // Includes.
   IncludeNotFound,       // nothing on the search list resolved the path

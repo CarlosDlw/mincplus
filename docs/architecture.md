@@ -234,6 +234,11 @@ Design record: [`docs/architectures/lexer.md`](architectures/lexer.md).
   from the data and prints `line:col` by walking the stream, so the table is
   aligned whatever the file holds; it writes nothing and colors nothing that is
   not asked for.
+- `#` and `##` are `Hash`/`HashHash` tokens, and a file name in a directive is a
+  `HeaderName` -- the one token kind `lexOne` does not produce, because only the
+  directive it appears in says it is one. `lex::scanHeaderName` reads it from the
+  raw bytes; see `architectures/preprocessor.md` for why tokens cannot express
+  it. `lexOne` stays a pure function of `(text, offset)` either way.
 - A stream can describe **more than one file**: `fromPreprocessed` carries an
   origin span per token, so the parser's caret points at the header a token was
   written in while the tree is built over the preprocessed text. `spanOf`
@@ -261,6 +266,11 @@ Design record: [`docs/architectures/preprocessor.md`](architectures/preprocessor
   point at the header the bytes came from.
 - Errors are values, so nothing here prints and the stage links no diagnostics;
   `pp_report` is the only file that knows about `DiagBag`.
+- `_Pragma("...")` is registered as a builtin rather than special-cased in the
+  scanner, because that is what makes the macro form work: `#define PUSH
+  _Pragma("...")` only meets the operator after expansion. It emits no token and
+  goes through the same handler as `#pragma`, so the two spellings cannot mean
+  different things.
 - The result keeps **every file it lexed**, which is the only way a bad byte in
   a header can be reported: no other stage knows the header was opened.
 - A leaf's text is a view into the preprocessed text and the node cache is shared

@@ -8,6 +8,7 @@ minc_add_library(minc_lex
     token_kind.cc
     token.cc
     lexer.cc
+    header_name.cc
     literal_scanner.cc
     token_stream.cc
     token_dump.cc

@@ -297,5 +297,64 @@ TEST(DirectiveTest, RedefiningABuiltinIsDiagnosed) {
   EXPECT_TRUE(PPFixture().source("#define __LINE__ 1\n").run().hasError("pp-macro-redefined"));
 }
 
+// --- `_Pragma` ---------------------------------------------------------------
+
+TEST(DirectiveTest, PragmaOperatorProducesNothing) {
+  // `_Pragma` is an operator over a literal, not a value: it must leave no token
+  // behind, or every use would be a syntax error for the parser.
+  const PPOutcome out = PPFixture().source("_Pragma(\"GCC diagnostic push\")\nx\n").run();
+  EXPECT_TRUE(out.errors.empty());
+  EXPECT_EQ(out.concat(), "x");
+}
+
+TEST(DirectiveTest, PragmaOperatorIsTheSameThingAsTheDirective) {
+  // `_Pragma("once")` and `#pragma once` are two spellings of one pragma, and
+  // they go through one handler so they cannot drift: the second include of the
+  // header here is elided because the operator marked the file.
+  TempDir dir;
+  dir.write("h.h", "_Pragma(\"once\")\nlet ok = 1;\n");
+  const PPOutcome out =
+      PPFixture().source("#include \"h.h\"\n#include \"h.h\"\n").includeDir(dir.path()).run();
+  EXPECT_TRUE(out.errors.empty());
+  ASSERT_EQ(out.includes.size(), 2u);
+  EXPECT_EQ(out.includes[1].front(), '-');
+}
+
+TEST(DirectiveTest, PragmaOperatorWorksFromInsideAMacro) {
+  // The case that makes post-expansion handling necessary: the name is written
+  // in a replacement list, so nothing sees `_Pragma` until after expansion.
+  const PPOutcome out =
+      PPFixture().source("#define PUSH _Pragma(\"GCC diagnostic push\")\nPUSH\nx\n").run();
+  EXPECT_TRUE(out.errors.empty());
+  EXPECT_EQ(out.concat(), "x");
+}
+
+TEST(DirectiveTest, PragmaOperatorDestringizesQuotesAndBackslashes) {
+  // C11 6.10.9p1 replaces `\"` with `"` and `\\` with `\`, and nothing else.
+  // The pragma that reaches the handler is what the warning message shows.
+  const PPOutcome out = PPFixture().source("_Pragma(\"once\")\n").warnUnknownPragma().run();
+  // `once` is understood, so there is nothing to warn about -- which is itself
+  // the assertion that the operand text arrived intact.
+  EXPECT_TRUE(out.warnings.empty());
+
+  const PPOutcome unknown =
+      PPFixture().source("_Pragma(\"vendor magic\")\n").warnUnknownPragma().run();
+  EXPECT_TRUE(unknown.hasWarning("pp-unknown-pragma"));
+}
+
+TEST(DirectiveTest, PragmaOperatorNeedsOneStringLiteral) {
+  for (const std::string_view source :
+       {"_Pragma(123)\n", "_Pragma()\n", "_Pragma(x)\n", "_Pragma(\"a\" \"b\")\n"}) {
+    const PPOutcome out = PPFixture().source(std::string(source)).run();
+    EXPECT_TRUE(out.hasError("pp-invalid-pragma-operand")) << source;
+  }
+}
+
+TEST(DirectiveTest, PragmaOperatorCannotBeDefinedAway) {
+  // It is an operator, not a macro: redefining it is not a way to make it go
+  // somewhere else.
+  EXPECT_TRUE(PPFixture().source("#define _Pragma(x) x\n").run().hasError("pp-macro-redefined"));
+}
+
 } // namespace
 } // namespace minc::test

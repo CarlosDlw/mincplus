@@ -224,5 +224,72 @@ TEST(IncludeTest, TheExampleCorpusResolvesThroughTheIncludePath) {
   EXPECT_TRUE(elided);
 }
 
+// --- header-names -----------------------------------------------------------
+//
+// The operand of `#include` is a header-name, not a token sequence: inside it
+// `//` is not a comment, `/*` is not a comment, and `\d` is not an escape. These
+// assert the name that comes out, which is what the search would use.
+
+TEST(IncludeTest, SlashesInsideANameAreNotComments) {
+  // `#include <a//b.h>` used to be reported as an unterminated `<...>`, because
+  // the plain lexer read `//b.h>` as a line comment and the closing `>` went with
+  // it. The name is the whole point, so it is asserted directly.
+  const PPOutcome out = PPFixture().source("#include <a//b.h>\n").run();
+  EXPECT_TRUE(out.hasError("pp-include-not-found"));
+  for (const std::string& message : out.messages) {
+    EXPECT_EQ(message.find("unterminated"), std::string::npos) << message;
+    EXPECT_NE(message.find("'a//b.h'"), std::string::npos) << message;
+  }
+}
+
+TEST(IncludeTest, AnUnterminatedCommentInANameIsNotReported) {
+  // `<a/*b.h>` is one name. The lexical report must not blame the name's own
+  // bytes for looking like a comment, and the name must still be right.
+  const PPOutcome out = PPFixture().source("#include <a/*b.h>\n").run();
+  EXPECT_TRUE(out.hasError("pp-include-not-found"));
+  for (const std::string& message : out.messages) {
+    EXPECT_EQ(message.find("comment"), std::string::npos) << message;
+  }
+}
+
+TEST(IncludeTest, EscapesAreNotProcessedInAQuotedName) {
+  // The bug this replaces was a *false* diagnostic: `\d` and `\x` are not
+  // escapes in a q-char-sequence, so lexing the name as a string literal drew
+  // errors on valid code. There is no such error code in the result now.
+  const PPOutcome out = PPFixture().source("#include \"c:\\dir\\x.h\"\n").run();
+  EXPECT_TRUE(out.hasError("pp-include-not-found"));
+  for (const std::string& message : out.messages) {
+    EXPECT_EQ(message.find("escape"), std::string::npos) << message;
+    EXPECT_NE(message.find("c:\\dir\\x.h"), std::string::npos) << message;
+  }
+}
+
+TEST(IncludeTest, TheWrittenNameReachesTheResolverIntact) {
+  TempDir dir;
+  dir.write("a.h", "x\n");
+  // A name with a `>` in it is legal in the quoted form, and the search order
+  // still depends on the delimiters.
+  const PPOutcome out = PPFixture().source("#include <a.h>\nb\n").includeDir(dir.path()).run();
+  EXPECT_TRUE(out.errors.empty());
+  EXPECT_EQ(out.concat(), "xb");
+}
+
+TEST(IncludeTest, AMacroProducedAngleNameStillResolves) {
+  // A header-name cannot be produced by macro expansion by the standard's rules,
+  // but the form is accepted, and it must read the name the same way the written
+  // one does.
+  TempDir dir;
+  dir.write("a.h", "x\n");
+  const PPOutcome out =
+      PPFixture().source("#define H <a.h>\n#include H\n").includeDir(dir.path()).run();
+  EXPECT_TRUE(out.errors.empty());
+  EXPECT_EQ(out.concat(), "x");
+}
+
+TEST(IncludeTest, AnUnterminatedAngleNameIsStillDiagnosed) {
+  const PPOutcome out = PPFixture().source("#include <a.h\n").run();
+  EXPECT_TRUE(out.hasError("pp-invalid-directive"));
+}
+
 } // namespace
 } // namespace minc::test

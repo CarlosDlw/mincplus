@@ -90,7 +90,18 @@ parser. It audits the invariant while building:
 lex, and a deterministic pseudo-random byte-soup test asserts it for 2000
 inputs on every platform with no extra tooling.
 
-### 4. Preprocessor — `src/pp`
+### 4. Header-names — `src/lex/header_name.cc`
+
+A second entry point beside `lexOne`, not a mode inside it. `#include <a/b.h>`
+and `#include "a/b.h"` are header-names (C 6.4.7): context-sensitive, so the raw
+lexer cannot produce them (`lexOne` never returns `HeaderName`), and not
+expressible as tokens either, because inside a name `//` is not a comment, an
+escape is not an escape, and `>` is legal within `"..."`. `scanHeaderName`
+re-reads the bytes from the opening delimiter, which is what the preprocessor
+calls before handling the directive. `lexOne` stays a pure, restartable function
+of `(text, offset)` through all of it.
+
+### 5. Preprocessor — `src/pp`
 
 Directives and macro expansion belong here, on the token stream, producing a new
 stream with spans that map back to the original spelling. It owns `#include`,
@@ -103,7 +114,7 @@ stored as the tokens this lexer produced. See
 [`preprocessor.md`](preprocessor.md) for the design and `docs/architecture.md`
 for where it sits in the pipeline.
 
-### 5. `Session` holds the derived tables
+### 6. `Session` holds the derived tables
 
 `support/session/session.h` owns sources, interner, diagnostics, and arena. Once
 incremental analysis lands, the per-file token buffers are keyed by

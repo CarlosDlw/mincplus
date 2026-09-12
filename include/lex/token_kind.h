@@ -37,6 +37,12 @@ enum class TokenKind : std::uint8_t {
 
   Identifier,
 
+  // A `<...>` or `"..."` file name in a directive. Part of the lexical grammar
+  // (C 6.4.7) but recognized by context, so `lexOne` never returns it:
+  // `lex::scanHeaderName` does. See `lex/header_name.h` for why the operand
+  // cannot be reassembled from ordinary tokens.
+  HeaderName,
+
   // Keywords.
   KwFn,
   KwLet,

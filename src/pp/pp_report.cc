@@ -81,9 +81,10 @@ std::size_t reportPPWarnings(std::span<const PPError> warnings, const ExpansionT
 
 std::size_t reportLexedFileErrors(const PPResult& result, support::DiagBag& diags) {
   const std::size_t before = diags.size();
+  const lex::LexFilter filter{&isPreprocessorToken, result.headerNames};
   for (const std::shared_ptr<const lex::TokenStream>& stream : result.lexed) {
     if (stream != nullptr) {
-      (void)lex::reportLexErrors(*stream, diags, &isPreprocessorToken);
+      (void)lex::reportLexErrors(*stream, diags, filter);
     }
   }
   return diags.size() - before;

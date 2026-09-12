@@ -49,6 +49,7 @@
 #include <utility>
 #include <vector>
 
+#include "lex/header_name.h"
 #include "lex/token.h"
 #include "lex/token_stream.h"
 #include "pp/conditionals.h"
@@ -130,6 +131,15 @@ struct PPResult {
   // lexical problems of *all* of them: a bad byte in a header is a real error,
   // and the preprocessor is the only stage that knows the header was read.
   std::vector<std::shared_ptr<const lex::TokenStream>> lexed;
+  // The spans this run read as header-names: the `<...>` or `"..."` operand of
+  // `#include`, `#include_next`, and `__has_include`.
+  //
+  // Kept because those bytes are *not* the tokens the plain lexer made of them.
+  // Inside a header-name `//` is not a comment and `\d` is not an escape, so
+  // reporting the lexer's reading of them would be reporting on a reading nobody
+  // used -- `#include "c:\dir\x.h"` would draw an invalid-escape error on valid
+  // code. `reportLexedFileErrors` consults this instead.
+  std::vector<support::Span> headerNames;
   std::vector<PPError> errors;
   std::vector<PPError> warnings;
   support::FileId mainFile = support::kInvalidFile;
@@ -280,6 +290,13 @@ private:
   // current file. Trivia is included, because a definition's body and an
   // `#error` message are read from it.
   void readDirectiveLine(std::vector<PPToken>& line);
+  // Rewrites a directive line so each header-name is one `HeaderName` token,
+  // replacing the run of tokens the plain lexer made of it. Runs on every
+  // directive line: it is what makes `#include <a//b.h>` resolvable and what
+  // keeps `#include` and `__has_include` from disagreeing about a name.
+  void spliceHeaderNames(std::vector<PPToken>& line, std::string_view text);
+  void spliceHeaderName(std::vector<PPToken>& line, std::size_t index, const lex::HeaderName& name,
+                        support::FileId file);
   void handleDirective();
   void handleDefine(const std::vector<PPToken>& line, const SourceLoc& directive);
   void handleUndef(const std::vector<PPToken>& line, const SourceLoc& directive);
@@ -334,7 +351,11 @@ private:
   void drainContexts(std::size_t base, std::vector<PPToken>& out, bool expression);
   [[nodiscard]] bool preExpand(const std::vector<PPToken>& raw, std::vector<PPToken>& out);
   [[nodiscard]] bool tryExpandDefined(std::vector<PPToken>& out);
+  // `arguments` is the collected argument list for a function-like builtin. Only
+  // `_Pragma` reads it -- it needs the operand itself, not a replacement -- and
+  // it is passed rather than re-collected because the caller has just taken it.
   [[nodiscard]] bool expandBuiltin(const MacroInfo& macro, const PPToken& nameToken,
+                                   const std::vector<std::vector<PPToken>>& arguments,
                                    std::vector<PPToken>& out, std::optional<PPError>& error);
   [[nodiscard]] bool isMacroDisabled(support::SymId name) const;
   [[nodiscard]] bool isIneligible(const PPToken& token) const;
@@ -394,6 +415,8 @@ private:
   bool wroteSeparator_ = false;
   // Every file lexed by this run, in read order; becomes `PPResult::lexed`.
   std::vector<std::shared_ptr<const lex::TokenStream>> lexed_;
+  // Spans read as header-names; becomes `PPResult::headerNames`.
+  std::vector<support::Span> headerNames_;
   // Spellings of synthesized tokens, indexed by `PPToken::scratch`. A deque so
   // the views handed out by `spelling` stay valid as more are added.
   std::deque<std::string> scratch_;

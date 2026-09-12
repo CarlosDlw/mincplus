@@ -71,6 +71,8 @@ const char* toString(TokenKind kind) {
     return "StringLiteral";
   case TokenKind::Identifier:
     return "Identifier";
+  case TokenKind::HeaderName:
+    return "HeaderName";
   case TokenKind::KwFn:
     return "KwFn";
   case TokenKind::KwLet:

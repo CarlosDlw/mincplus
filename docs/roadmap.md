@@ -73,7 +73,9 @@ always-on budget, and provenance survives expansion.
       the header a token was written in
 - [x] Lexical errors of every file the run read, not just the one named on the
       command line
-- [ ] `_Pragma` (parsed today as a pragma, not executed)
+- [x] `_Pragma("...")`, the operator form of `#pragma`: it produces no token
+      and is routed through the same handler as the directive, so
+      `_Pragma("once")` elides a second include exactly as `#pragma once` does
 - [ ] `-isystem`, and the `#pragma GCC system_header` semantics that go with it
 - [ ] Target/ABI predefined macros (`__LP64__`, type widths) — they need the
       type table, so they land with sema

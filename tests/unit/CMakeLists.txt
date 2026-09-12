@@ -61,6 +61,7 @@ minc_add_executable(minc_unit_tests
     support/term/terminal_test.cc
     support/utf8/utf8_test.cc
     lex/lexer_test.cc
+    lex/header_name_test.cc
     lex/token_stream_test.cc
     lex/token_dump_test.cc
     lex/lex_report_test.cc

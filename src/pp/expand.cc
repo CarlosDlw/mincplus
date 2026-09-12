@@ -164,7 +164,7 @@ void Preprocessor::expandMacro(const MacroInfo& macro, const PPToken& nameToken,
   std::vector<PPToken> replacement;
   if (macro.isBuiltin()) {
     std::optional<PPError> error;
-    if (!expandBuiltin(macro, nameToken, replacement, error)) {
+    if (!expandBuiltin(macro, nameToken, arguments, replacement, error)) {
       if (error.has_value()) {
         pushError(std::move(*error));
       }
@@ -643,28 +643,33 @@ void Preprocessor::handleHasInclude(std::vector<PPToken>& out, std::size_t base,
     return;
   }
 
+  // The written operand was spliced into one `HeaderName` token by the directive
+  // scanner, so a name is never re-derived from tokens here -- which is what
+  // keeps `__has_include` and `#include` reading a name the same way.
   std::string name;
   bool angle = false;
-  if (expanded.front().is(lex::TokenKind::StringLiteral)) {
+  if (expanded.front().is(lex::TokenKind::HeaderName)) {
+    const std::string_view written = spelling(expanded.front());
+    angle = !written.empty() && written.front() == '<';
+    name = std::string(written.size() >= 2 ? written.substr(1, written.size() - 2) : written);
+  } else if (expanded.front().is(lex::TokenKind::StringLiteral)) {
     const std::string_view literal = spelling(expanded.front());
     name = literal.size() >= 2 ? std::string(literal.substr(1, literal.size() - 2)) : std::string();
   } else if (expanded.front().is(lex::TokenKind::Less)) {
+    // A macro that expands to `<...>`, accepted the same way `#include` accepts
+    // it: the bytes are re-read with the one scanner that knows the grammar.
     angle = true;
-    std::size_t close = expanded.size();
-    for (std::size_t i = 1; i < expanded.size(); ++i) {
-      if (expanded[i].is(lex::TokenKind::Greater)) {
-        close = i;
-        break;
-      }
-    }
-    const SourceLoc& first = expanded.front().loc.spelling;
-    const support::SourceFile* source = session_->sources().find(first.file);
-    if (close >= expanded.size() || source == nullptr) {
+    const support::SourceFile* source =
+        session_->sources().find(expanded.front().loc.spelling.file);
+    const std::optional<lex::HeaderName> header =
+        source == nullptr ? std::nullopt
+                          : lex::scanHeaderName(source->text, expanded.front().loc.spelling.offset);
+    if (!header.has_value()) {
       pushError(PPError{operatorToken.loc.spelling.span(), "malformed '<...>' in '__has_include'",
                         PPErrorCode::ExpressionSyntax});
       return;
     }
-    name = std::string(source->slice(first.end(), expanded[close].loc.spelling.offset));
+    name = std::string(header->text);
   } else {
     pushError(PPError{expanded.front().loc.spelling.span(),
                       "'__has_include' expects \"a file name\" or <a file name>",

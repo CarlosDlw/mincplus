@@ -43,6 +43,11 @@ constexpr const char* kEllipsis = "...";
   if (isLiteral(kind)) {
     return kLiteralColor;
   }
+  if (kind == TokenKind::HeaderName) {
+    // A name, not an operator, even though it is written with `<` and `>`. It
+    // reads as one thing, so it is colored as one thing.
+    return kLiteralColor;
+  }
   if (isOperator(kind) || isPunctuation(kind) || isPreprocessorOp(kind)) {
     return kOperatorColor;
   }

@@ -134,6 +134,7 @@ void Preprocessor::reset() {
   outputLength_.clear();
   outputOrigin_.clear();
   lexed_.clear();
+  headerNames_.clear();
   lastOrigin_ = support::Span{};
   wroteSeparator_ = false;
   scratch_.clear();
@@ -555,24 +556,134 @@ bool Preprocessor::startsDirective() const {
 
 void Preprocessor::readDirectiveLine(std::vector<PPToken>& line) {
   FileFrame& frame = files_.back();
+  const std::string_view text = frame.stream->text();
   while (frame.index < frame.stream->size()) {
     const lex::Token& raw = (*frame.stream)[frame.index];
     if (raw.is(lex::TokenKind::EndOfFile)) {
       // A file that does not end in a newline ends its last directive here.
-      return;
+      break;
     }
     if (raw.is(lex::TokenKind::Newline)) {
       // The newline ends the directive and is not part of it; the file's own
       // stream keeps it, so nothing is lost.
       ++frame.index;
       atLineStart_ = true;
-      return;
+      break;
     }
     ++frame.index;
     updateAtLineStart(raw);
     line.push_back(toPP(raw, frame.id));
   }
-  // End of file without a trailing newline: the directive ends here.
+  // After the tokens rather than while reading them: a header-name is recognized
+  // from the raw bytes, and its span can cover tokens the plain lexer produced
+  // under rules that do not apply to it. See `spliceHeaderNames`.
+  spliceHeaderNames(line, text);
+}
+
+void Preprocessor::spliceHeaderNames(std::vector<PPToken>& line, std::string_view text) {
+  if (line.size() < 2 || !isHash(line[0])) {
+    return;
+  }
+
+  // Where a header-name can begin, and nowhere else: C defines it as the operand
+  // of `#include`/`#include_next`, and C23 as an operand of `__has_include`.
+  std::vector<std::size_t> candidates;
+  std::size_t index = 1;
+  const PPToken* name = detail::nextSignificant(line, index);
+  if (name == nullptr || !name->is(lex::TokenKind::Identifier)) {
+    return;
+  }
+  const std::string_view directive = spelling(*name);
+
+  if (directive == "include" || directive == "include_next") {
+    ++index;
+    // `nextSignificant` leaves `index` on the token it returned, so that is the
+    // operand's index once it comes back non-null.
+    if (detail::nextSignificant(line, index) != nullptr) {
+      candidates.push_back(index);
+    }
+  } else if (directive == "if" || directive == "elif") {
+    // `__has_include(<name>)`: the name is one operand of an expression, so it
+    // can sit anywhere in the line, not only first.
+    for (std::size_t i = 1; i < line.size(); ++i) {
+      if (!line[i].is(lex::TokenKind::Identifier) || spelling(line[i]) != "__has_include") {
+        continue;
+      }
+      std::size_t cursor = i + 1;
+      const PPToken* open = detail::nextSignificant(line, cursor);
+      if (open == nullptr || !open->is(lex::TokenKind::LParen)) {
+        continue;
+      }
+      ++cursor;
+      if (detail::nextSignificant(line, cursor) != nullptr) {
+        candidates.push_back(cursor);
+      }
+    }
+  } else {
+    return;
+  }
+
+  // Back to front, so each splice leaves the indices of the ones before it
+  // untouched.
+  const support::FileId file = line.front().loc.spelling.file;
+  for (std::size_t i = candidates.size(); i > 0; --i) {
+    const std::size_t at = candidates[i - 1];
+    const std::optional<lex::HeaderName> header =
+        lex::scanHeaderName(text, line[at].loc.spelling.offset);
+    if (header.has_value()) {
+      spliceHeaderName(line, at, *header, file);
+    }
+  }
+}
+
+void Preprocessor::spliceHeaderName(std::vector<PPToken>& line, std::size_t index,
+                                    const lex::HeaderName& name, support::FileId file) {
+  // Every token whose bytes lie inside the name is covered: the opening
+  // delimiter, the pieces the plain lexer made of the path, the trivia between
+  // them (a space is an h-char, so it belongs to the name), and -- for
+  // `#include <a//b.h>` -- the line comment that used to swallow the `>`.
+  const std::uint32_t nameEnd = name.offset + name.length;
+  std::size_t end = index;
+  while (end < line.size() && line[end].loc.spelling.offset < nameEnd) {
+    ++end;
+  }
+
+  // The last covered token can stick out past the name. To the plain lexer,
+  // `__has_include(<a//b.h>)` is one line comment whose opening bytes are the
+  // name and whose closing byte is the `)` that ends the operand, and `#include
+  // <a/*b.h>` has the same shape. Those trailing bytes are the directive's own
+  // syntax, so they are re-lexed rather than disappearing with the comment: the
+  // comment's kind is not the reading that applies to any of them.
+  std::vector<PPToken> tail;
+  if (end > index) {
+    const SourceLoc& covered = line[end - 1].loc.spelling;
+    const support::SourceFile* source =
+        covered.end() > nameEnd ? session_->sources().find(covered.file) : nullptr;
+    for (std::uint32_t at = nameEnd; source != nullptr && at < covered.end();) {
+      const lex::Token raw = lex::lexOne(source->text, at);
+      // Bytes that are not a whole token under these rules are not delivered as
+      // a mangled one; nothing else can follow them inside the covered token.
+      if (raw.length == 0 || at + raw.length > covered.end()) {
+        break;
+      }
+      tail.push_back(toPP(raw, covered.file));
+      at += raw.length;
+    }
+  }
+
+  PPToken token;
+  token.kind = lex::TokenKind::HeaderName;
+  token.length = name.length;
+  // The spelling is the source bytes, delimiters included: the token is the
+  // whole `<...>` or `"..."`, so a caret underlines what the reader sees and
+  // the name is read back out of it where it is wanted.
+  token.loc.spelling = SourceLoc{file, name.offset, name.length};
+
+  headerNames_.push_back(token.loc.spelling.span());
+  line.erase(line.begin() + static_cast<std::ptrdiff_t>(index + 1),
+             line.begin() + static_cast<std::ptrdiff_t>(end));
+  line[index] = token;
+  line.insert(line.begin() + static_cast<std::ptrdiff_t>(index + 1), tail.begin(), tail.end());
 }
 
 void Preprocessor::handleDirective() {
@@ -795,6 +906,7 @@ PPResult Preprocessor::run(support::FileId mainFile) {
   result.text = std::move(outputText_);
   result.origins = std::move(outputOrigin_);
   result.lexed = std::move(lexed_);
+  result.headerNames = std::move(headerNames_);
   // The lexer view of the same output. Flags are dropped: they describe the
   // bytes as they were lexed, and these tokens were not lexed here.
   result.stream.reserve(result.tokens.size() + 1U);

@@ -429,45 +429,22 @@ void Preprocessor::handleInclude(const std::vector<PPToken>& line, const SourceL
     return;
   }
 
-  // The `<...>` form is read from the source text, not joined from tokens: a
-  // path is not a token sequence, and the `.` `/` `-` inside it are
-  // punctuation. The `"..."` form is a string literal, and anything else is the
-  // computed form, which is macro expanded first.
-  const auto angleName = [&](const std::vector<PPToken>& tokens, std::size_t open,
-                             std::string& out) {
-    std::size_t close = open + 1;
-    for (; close < tokens.size(); ++close) {
-      if (tokens[close].is(lex::TokenKind::Greater)) {
-        break;
-      }
-    }
-    if (close >= tokens.size()) {
-      return false;
-    }
-    const SourceLoc& first = tokens[open].loc.spelling;
-    const SourceLoc& last = tokens[close].loc.spelling;
-    const support::SourceFile* source = session_->sources().find(first.file);
-    if (source == nullptr || last.offset <= first.end()) {
-      return false;
-    }
-    out = std::string(source->slice(first.end(), last.offset));
-    return true;
-  };
-
+  // A written name arrived as one `HeaderName` token, spliced from the raw bytes
+  // of the line before this handler ran: the delimiters are part of its spelling
+  // and the name is what is between them. Anything else is the computed form,
+  // which is macro expanded first.
   std::string name;
   bool angle = false;
-  if (nameToken->is(lex::TokenKind::Less)) {
-    angle = true;
-    if (!angleName(
-            std::vector<PPToken>(line.begin() + static_cast<std::ptrdiff_t>(index), line.end()),
-            /*open=*/0, name)) {
-      pushError(PPError{directive.span(), "unterminated '<...>' in " + directiveName,
-                        PPErrorCode::InvalidDirective});
-      return;
-    }
-  } else if (nameToken->is(lex::TokenKind::StringLiteral)) {
-    const std::string_view literal = spelling(*nameToken);
-    name = literal.size() >= 2 ? std::string(literal.substr(1, literal.size() - 2)) : std::string();
+  if (nameToken->is(lex::TokenKind::HeaderName)) {
+    const std::string_view written = spelling(*nameToken);
+    angle = !written.empty() && written.front() == '<';
+    name = std::string(written.size() >= 2 ? written.substr(1, written.size() - 2) : written);
+  } else if (nameToken->is(lex::TokenKind::Less)) {
+    // A `<` here means the header-name scan found no closing `>`, which is the
+    // one thing it cannot report itself.
+    pushError(PPError{directive.span(), "unterminated '<...>' in " + directiveName,
+                      PPErrorCode::InvalidDirective});
+    return;
   } else {
     std::vector<PPToken> expanded;
     const std::size_t base = contexts_.size();
@@ -484,12 +461,24 @@ void Preprocessor::handleInclude(const std::vector<PPToken>& line, const SourceL
       name =
           literal.size() >= 2 ? std::string(literal.substr(1, literal.size() - 2)) : std::string();
     } else if (expanded.front().is(lex::TokenKind::Less)) {
-      angle = true;
-      if (!angleName(expanded, /*open=*/0, name)) {
+      // A macro that expands to `<...>`: not a header-name by the standard's
+      // rules -- a name cannot be produced by expansion -- but accepted, as GCC
+      // accepts it. The bytes are re-read from where the `<` was written with
+      // the same scanner the written form uses, so the two cannot disagree about
+      // what a name is.
+      const support::SourceFile* source =
+          session_->sources().find(expanded.front().loc.spelling.file);
+      const std::optional<lex::HeaderName> header =
+          source == nullptr
+              ? std::nullopt
+              : lex::scanHeaderName(source->text, expanded.front().loc.spelling.offset);
+      if (!header.has_value()) {
         pushError(PPError{directive.span(), "unterminated '<...>' in " + directiveName,
                           PPErrorCode::InvalidDirective});
         return;
       }
+      angle = true;
+      name = std::string(header->text);
     } else {
       pushError(PPError{expanded.front().loc.spelling.span(),
                         directiveName + " expects \"a file name\" or <a file name>",

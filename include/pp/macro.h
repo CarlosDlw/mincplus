@@ -66,6 +66,7 @@ enum class BuiltinKind : std::uint8_t {
   Date,       // `__DATE__`, gated on SOURCE_DATE_EPOCH
   Time,       // `__TIME__`, gated on SOURCE_DATE_EPOCH
   HasInclude, // `__has_include(...)`, valid only in `#if`
+  Pragma,     // `_Pragma("...")`, the operator form of `#pragma`
 };
 
 struct MacroParam {

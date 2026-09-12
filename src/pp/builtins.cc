@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 
+#include "lex/lexer.h"
 #include "pp_internal.h"
 #include "support/limits.h"
 
@@ -92,11 +93,18 @@ void Preprocessor::installPredefined() {
     info.body.push_back(entry);
     macros_.install(std::move(info));
   };
-  const auto builtin = [&](std::string_view name, BuiltinKind kind, MacroKind macroKind) {
+  const auto builtin = [&](std::string_view name, BuiltinKind kind, MacroKind macroKind,
+                           std::string_view parameter = {}) {
     MacroInfo info;
     info.name = session_->symbols().intern(name);
     info.kind = macroKind;
     info.builtin = kind;
+    // A builtin that takes a parenthesized operand declares the parameter, so
+    // the ordinary argument collector hands the operand over; one that finds its
+    // own operand (`__has_include`) declares none and is exempted instead.
+    if (!parameter.empty()) {
+      info.params.push_back(MacroParam{session_->symbols().intern(parameter)});
+    }
     macros_.install(std::move(info));
   };
 
@@ -118,9 +126,42 @@ void Preprocessor::installPredefined() {
   // but it is not *callable*: it exists only inside `#if`, and the expander
   // reports a stray use instead of pretending it has a value.
   builtin("__has_include", BuiltinKind::HasInclude, MacroKind::FunctionLike);
+
+  // `_Pragma` (C99) is the operator form of `#pragma`. Registering it as a
+  // function-like builtin rather than special-casing it in the scanner is what
+  // makes the macro case work at all: `#define PUSH _Pragma("once")` expands to
+  // `_Pragma ( "once" )` in the token stream, and rescanning meets it exactly as
+  // it meets a written one. It produces no tokens -- the pragma is an effect,
+  // not a value -- so nothing of it reaches the parser.
+  builtin("_Pragma", BuiltinKind::Pragma, MacroKind::FunctionLike, "__operand");
 }
 
+namespace {
+
+// `_Pragma`'s operand, destringized (C11 6.10.9p1): strip the quotes, then turn
+// `\"` into `"` and `\\` into `\`. *Only* those two, and only in that order --
+// the string is not a string literal here and none of the other escapes exist,
+// which is what lets `_Pragma("once")` and `_Pragma("a\\nb")` mean different
+// things. Reading the raw spelling rather than a decoded value is deliberate for
+// the same reason.
+[[nodiscard]] std::string destringize(std::string_view literal) {
+  const std::string_view inner =
+      literal.size() >= 2 ? literal.substr(1, literal.size() - 2) : std::string_view{};
+  std::string out;
+  out.reserve(inner.size());
+  for (std::size_t i = 0; i < inner.size(); ++i) {
+    if (inner[i] == '\\' && i + 1 < inner.size() && (inner[i + 1] == '"' || inner[i + 1] == '\\')) {
+      ++i;
+    }
+    out.push_back(inner[i]);
+  }
+  return out;
+}
+
+} // namespace
+
 bool Preprocessor::expandBuiltin(const MacroInfo& macro, const PPToken& nameToken,
+                                 const std::vector<std::vector<PPToken>>& arguments,
                                  std::vector<PPToken>& out, std::optional<PPError>& error) {
   // The site that matters is the innermost invocation, not where the builtin's
   // own name was written: that is what makes `__LINE__` inside a macro body
@@ -202,6 +243,41 @@ bool Preprocessor::expandBuiltin(const MacroInfo& macro, const PPToken& nameToke
     error = PPError{caret.span(), "'__has_include' is handled as an operator inside '#if'",
                     PPErrorCode::ExpressionSyntax};
     return false;
+  case BuiltinKind::Pragma: {
+    // One operand, and it must be one string literal: `_Pragma` is an operator
+    // over a literal, not a function that takes an expression.
+    const bool oneLiteral = arguments.size() == 1 && [&] {
+      const std::vector<PPToken> operand = detail::withoutTrivia(arguments.front());
+      return operand.size() == 1 && operand.front().is(lex::TokenKind::StringLiteral);
+    }();
+    if (!oneLiteral) {
+      error = PPError{caret.span(), "'_Pragma' expects a single string literal operand",
+                      PPErrorCode::InvalidPragmaOperand};
+      return false;
+    }
+
+    const std::vector<PPToken> operand = detail::withoutTrivia(arguments.front());
+    const std::string text = destringize(spelling(operand.front()));
+
+    // The text is lexed and handed to the same handler `#pragma` uses, so the
+    // two spellings of a pragma cannot mean different things. `#pragma once`
+    // written as `_Pragma("once")` marks the file for exactly that reason.
+    std::vector<PPToken> line;
+    line.push_back(makeScratchToken(lex::TokenKind::Hash, "#", caret, PPTokenFlag::None));
+    line.push_back(
+        makeScratchToken(lex::TokenKind::Identifier, "pragma", caret, PPTokenFlag::None));
+    for (std::uint32_t at = 0; at < text.size();) {
+      const lex::Token raw = lex::lexOne(text, at);
+      if (raw.length == 0) {
+        break;
+      }
+      line.push_back(
+          makeScratchToken(raw.kind, text.substr(at, raw.length), caret, PPTokenFlag::None));
+      at += raw.length;
+    }
+    handlePragma(line, caret);
+    return true;
+  }
   case BuiltinKind::None:
     break;
   }

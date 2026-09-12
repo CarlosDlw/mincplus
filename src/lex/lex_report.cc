@@ -44,17 +44,37 @@ void reportInvalid(const TokenStream& stream, const Token& token, support::DiagB
   diags.error(stream.spanOf(token), std::move(message), "lex-invalid-character");
 }
 
-} // namespace
-
-std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags) {
-  return reportLexErrors(stream, diags, nullptr);
+// "This token *begins* inside bytes the caller read under other rules."
+//
+// Beginning, not fitting: a token that starts inside a claimed range can run
+// past its end, and when it does the extra bytes are still not this token's.
+// The plain lexer sees `#include <a/*b.h>` as an unterminated block comment that
+// swallows the newline, so the comment is one byte longer than the name it
+// starts inside of; reporting it would be reporting the lexer's reading of a
+// name, which is the reading that does not apply. The caller re-lexes whatever
+// follows the range itself, so nothing past the end is lost either way.
+[[nodiscard]] bool isClaimed(const Token& token, support::FileId file,
+                             std::span<const support::Span> claimed) {
+  for (const support::Span& span : claimed) {
+    if (span.file == file && token.offset >= span.begin && token.offset < span.end) {
+      return true;
+    }
+  }
+  return false;
 }
 
-std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags, TokenSkip skip) {
+} // namespace
+
+std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags,
+                            const LexFilter& filter) {
   const std::size_t before = diags.size();
+  const support::FileId file = stream.file();
 
   for (const Token& token : stream.tokens()) {
-    if (skip != nullptr && skip(token, stream.text())) {
+    if (filter.skip != nullptr && filter.skip(token, stream.text())) {
+      continue;
+    }
+    if (isClaimed(token, file, filter.claimed)) {
       continue;
     }
     if (token.is(TokenKind::Invalid)) {
@@ -74,6 +94,10 @@ std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags, 
   }
 
   return diags.size() - before;
+}
+
+std::size_t reportLexErrors(const TokenStream& stream, support::DiagBag& diags) {
+  return reportLexErrors(stream, diags, LexFilter{});
 }
 
 } // namespace minc::lex
