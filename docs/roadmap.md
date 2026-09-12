@@ -14,7 +14,9 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 - [x] `support/` — spans, lines, UTF-8 (decoding, validation, BOM), sources,
       diagnostics, arena, interning, `Expected`
 - [x] `source` as the single validation boundary (size, BOM, NUL, UTF-8)
-- [x] `driver` shell: `cli`, `help_text`, `exit_code`, `--help`/`--version`
+- [x] `driver`: `cli`, `help_text`, `error_report`, `exit_code`,
+      `--help`/`--version`, and the `lex` subcommand
+- [x] `term` — `ColorMode` and tty detection, the only platform-specific module
 - [x] Build system, presets, cross-platform CI, format and tidy gates
 - [x] Architecture contract map in [`architecture.md`](architecture.md), lexer
       design in [`architectures/lexer.md`](architectures/lexer.md)
@@ -36,20 +38,36 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 
 ## 2. Lexer — `src/lex`
 
-- [ ] Design from [`architectures/lexer.md`](architectures/lexer.md): a pure,
-      resumable raw lexer producing
-      `{kind, length}` tokens with error flags, recorded into a lossless
-      per-file token buffer
-- [ ] Token kinds, token buffer with lookahead, and `Span` on every token
-- [ ] Identifiers and keywords interned through `Interner` (`SymId`)
-- [ ] Integer literals: bases, suffixes, digit separators, overflow diagnosis
-- [ ] Floating literals: decimal/hex floats, exponents, suffixes
-- [ ] Character and string literals with escapes, prefixes (`L`, `u8`, `u`, `U`)
-- [ ] Operators and punctuation with longest-match (`>>=`, `...`, `->`)
-- [ ] Comments `//`, `/* */` (nested `[?]`); line splicing with `\` at EOL
-- [ ] Raw bytes preserved for string literals (no premature decoding)
-- [ ] Error recovery: skip to a sync point, one diagnostic per bad token
-- [ ] Fuzz target over the lexer entry point
+Design decided in [`architectures/lexer.md`](architectures/lexer.md): a pure raw
+lexer producing `{kind, length}` tokens with error flags, recorded into a
+lossless per-file token buffer.
+
+- [x] Raw lexer `lexOne(text, offset)`: pure, allocation-free, total, and
+      resumable from any token boundary with no state parameter
+- [x] Token kinds, `Span` derivation, and a contiguous token buffer covering
+      every byte, with the lossless invariant audited on every lex
+- [x] Keywords classified during lexing from one shared table (`fn`, `let`,
+      `const`, `return`)
+- [x] Integer literals: decimal, `0x`, `0b`, `0o`; base prefix with no digits
+      flagged
+- [x] Floating literals: decimal and hex floats, `e`/`p` exponents only when
+      digits follow
+- [x] Character and string literals with escape scanning; `''`, unknown
+      escapes, and unterminated literals flagged
+- [x] Operators and punctuation with longest match
+- [x] Comments `//` and `/* */` (non-nesting), retained as trivia
+- [x] Trivia (whitespace, LF/CRLF/CR, comments) retained as ordinary tokens,
+      with a significant-token index for the parser
+- [x] Lexical errors reported as diagnostics with `file:line:col`, code, and
+      caret, one per problem, in a single pass
+- [x] Token dump for inspection (`mincc lex <files...>`)
+- [ ] Identifiers interned through `Interner` (`SymId`) — happens where symbols
+      are wanted, not in the token
+- [ ] Literal suffixes (`10u`, `1.0f`) and digit separators `[?]`
+- [ ] String prefixes (`L`, `u8`, `u`, `U`) and raw/multiline strings `[?]`
+- [x] A deterministic byte-soup property test asserting losslessness over
+      arbitrary input
+- [ ] Fuzz target wired to a fuzzing engine (libFuzzer/AFL) in CI
 
 ## 3. Parser — `src/parse` · AST — `src/ast`
 

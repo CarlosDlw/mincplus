@@ -8,15 +8,11 @@
 #include <string>
 
 #include "support/diag/diag_bag.h"
+#include "support/term/terminal.h"
 
 namespace minc::support {
 
 class SourceManager;
-
-enum class ColorMode : std::uint8_t {
-  Plain, // no escape sequences: safe for files, pipes, and tests
-  Ansi,  // ANSI SGR colors; the driver turns this on only for a capable tty
-};
 
 struct RenderOptions {
   ColorMode color = ColorMode::Plain;

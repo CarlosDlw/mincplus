@@ -17,7 +17,7 @@
 namespace minc::driver {
 
 // Subcommands the driver understands. Anything else is a usage error.
-enum class Command : std::uint8_t { Build, Run, Check };
+enum class Command : std::uint8_t { Build, Run, Check, Lex };
 
 // Name, argument shape, and one-line description of a subcommand. Kept in one
 // table so the parser, error messages, and help text cannot drift apart.
@@ -26,6 +26,10 @@ struct CommandInfo {
   std::string_view name;
   std::string_view args;
   std::string_view summary;
+  // Whether the command does anything yet. Help derives its "implemented" list
+  // from this instead of naming commands in prose, so a command cannot be
+  // advertised as working while the dispatch still refuses it.
+  bool implemented;
 };
 
 [[nodiscard]] std::span<const CommandInfo> allCommands();

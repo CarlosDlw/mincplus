@@ -1,0 +1,78 @@
+// Operators: arithmetic, bitwise, comparison, logical, the conditional
+// operator, and every assignment form.
+
+fn i32 arithmetic()
+{
+  let sum: i32 = 1 + 2;
+  let difference: i32 = 10 - 3;
+  let product: i32 = 4 * 5;
+  let quotient: i32 = 20 / 3;
+  let remainder: i32 = 20 % 3;
+  let precedence: i32 = 1 + 2 * 3 - 4 / 2 % 3;
+  let grouped: i32 = (1 + 2) * (3 - 4);
+
+  return sum + difference + product + quotient + remainder + precedence + grouped;
+}
+
+fn i32 bits()
+{
+  let shiftedLeft: i32 = 1 << 8;
+  let shiftedRight: i32 = 0x100 >> 4;
+  let anded: i32 = 0x0F & 0x3C;
+  let ored: i32 = 0x0F | 0x30;
+  let xored: i32 = 0x0F ^ 0x3C;
+  let inverted: i32 = ~anded;
+
+  return shiftedLeft + shiftedRight + anded + ored + xored + inverted;
+}
+
+fn bool comparisons()
+{
+  let less: bool = 1 < 2;
+  let lessOrEqual: bool = 2 <= 2;
+  let greater: bool = 3 > 2;
+  let greaterOrEqual: bool = 3 >= 3;
+  let equal: bool = 1 == 1;
+  let different: bool = 1 != 2;
+
+  let both: bool = less && greater;
+  let either: bool = less || different;
+  let negated: bool = !either;
+
+  let chosen: bool = less ? both : negated;
+  return chosen || lessOrEqual || greaterOrEqual || equal;
+}
+
+fn i32 assignments()
+{
+  let value: i32 = 1;
+  value = 2;
+  value += 3;
+  value -= 1;
+  value *= 4;
+  value /= 2;
+  value %= 5;
+  value &= 0x0F;
+  value |= 0x30;
+  value ^= 0x03;
+  value <<= 2;
+  value >>= 1;
+
+  let counter: i32 = 0;
+  counter++;
+  counter--;
+  ++counter;
+  --counter;
+
+  return value + counter;
+}
+
+fn i32 main()
+{
+  let arithmeticResult: i32 = arithmetic();
+  let bitsResult: i32 = bits();
+  let assignmentsResult: i32 = assignments();
+  let allComparisonsHold: bool = comparisons();
+
+  return allComparisonsHold ? arithmeticResult + bitsResult + assignmentsResult : 0;
+}

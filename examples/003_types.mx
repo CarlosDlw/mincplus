@@ -1,0 +1,66 @@
+// Type names. The primitive names carry their width, so a declaration does not
+// depend on a lookup table; the C spellings name the same types with widths
+// taken from the target ABI.
+
+fn i32 primitiveNames()
+{
+  let tinySigned: i8 = -8;
+  let smallSigned: i16 = -16;
+  let basicSigned: i32 = -32;
+  let bigSigned: i64 = -64;
+  let hugeSigned: i128 = -128;
+  let pointerSizedSigned: isize = -1;
+
+  let byte: u8 = 8;
+  let word: u16 = 16;
+  let doubleWord: u32 = 32;
+  let quadWord: u64 = 64;
+  let octWord: u128 = 128;
+  let pointerSized: usize = 1;
+
+  let singlePrecision: f32 = 0.0;
+  let doublePrecision: f64 = 0.0;
+  let extendedPrecision: f80 = 0.0;
+
+  let flag: bool = true;
+  let letter: char = 'x';
+  let text: str = "hello";
+
+  return basicSigned;
+}
+
+fn i32 cSpellings()
+{
+  let a: int = 0;
+  let b: uint = 0;
+  let c: short = 0;
+  let d: long = 0;
+  let e: unsigned = 0;
+  let f: signed = 0;
+  let g: float = 0.0;
+  let h: double = 0.0;
+
+  let i: short int = 1;
+  let j: long int = 2;
+  let k: long long int = 3;
+  let l: unsigned int = 4;
+  let m: unsigned long = 5;
+  let n: unsigned long long int = 6;
+  let o: signed char = -1;
+  let p: unsigned char = 255;
+
+  return a + b + c + d + e + f + i + j + k + l + m + n + o + p;
+}
+
+fn i32 main()
+{
+  // `const` has the same shape as `let`: an optional annotation, or inference.
+  const limit: i32 = 100;
+  const inferred = 42;
+  const greeting = "hello";
+
+  let mutable: i32 = 0;
+  mutable = mutable + limit;
+
+  return mutable + inferred + primitiveNames() + cSpellings();
+}

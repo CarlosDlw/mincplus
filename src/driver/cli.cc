@@ -7,10 +7,11 @@
 namespace minc::driver {
 namespace {
 
-constexpr std::array<CommandInfo, 3> kCommands{{
-    {Command::Build, "build", "<files...>", "Compile sources and link an executable"},
-    {Command::Run, "run", "<files...>", "Build and run the resulting program"},
-    {Command::Check, "check", "<files...>", "Parse and type-check only; no code is emitted"},
+constexpr std::array<CommandInfo, 4> kCommands{{
+    {Command::Build, "build", "<files...>", "Compile sources and link an executable", false},
+    {Command::Run, "run", "<files...>", "Build and run the resulting program", false},
+    {Command::Check, "check", "<files...>", "Parse and type-check only; no code is emitted", false},
+    {Command::Lex, "lex", "<files...>", "Print the token stream of each file", true},
 }};
 
 // A lone "-" and any argument not starting with '-' are positional. Doing this
@@ -34,6 +35,8 @@ const char* toString(Command command) {
     return "run";
   case Command::Check:
     return "check";
+  case Command::Lex:
+    return "lex";
   }
   return "unknown";
 }

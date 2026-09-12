@@ -24,6 +24,22 @@ constexpr const char* kExitStatusBlock = "Exit status:\n"
                                          "  1  compilation or runtime failure\n"
                                          "  2  invalid command line\n";
 
+// Comma-separated names of the commands matching `implemented`, taken from the
+// command table so this text can never advertise a command that does not work.
+[[nodiscard]] std::string commandList(bool implemented) {
+  std::string out;
+  for (const CommandInfo& info : allCommands()) {
+    if (info.implemented != implemented) {
+      continue;
+    }
+    if (!out.empty()) {
+      out += ", ";
+    }
+    out += info.name;
+  }
+  return out;
+}
+
 } // namespace
 
 std::string usageLine() {
@@ -65,8 +81,18 @@ std::string helpText() {
   out += '\n';
   out += kExitStatusBlock;
   out += '\n';
-  out += "The subcommands are scaffolded: only --help and --version have\n";
-  out += "behaviour in this build.\n";
+
+  const std::string implemented = commandList(true);
+  const std::string scaffolded = commandList(false);
+  out += "Implemented: ";
+  out += implemented.empty() ? std::string("(none)") : implemented;
+  out += "\nScaffolded:  ";
+  out += scaffolded.empty() ? std::string("(none)") : scaffolded;
+  out += '\n';
+  if (!scaffolded.empty()) {
+    out += "\nScaffolded commands are accepted so build scripts can be written\n";
+    out += "against them; they report that they are not implemented yet.\n";
+  }
   return out;
 }
 

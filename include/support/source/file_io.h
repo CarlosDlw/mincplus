@@ -15,4 +15,12 @@ namespace minc::support {
 // all reported instead of silently producing empty input.
 [[nodiscard]] Fallible<std::string> readFileBytes(const std::string& path);
 
+// Reads all of standard input as raw bytes, under the same size limit.
+//
+// On Windows the stream is switched to binary mode first: without that the CRT
+// rewrites CRLF to LF on the way in and the compiler would see a different
+// file than the one on disk, in exactly the case (piping a file) where nobody
+// would think to check.
+[[nodiscard]] Fallible<std::string> readStdinBytes();
+
 } // namespace minc::support

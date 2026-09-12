@@ -2,14 +2,23 @@
 // SPDX-License-Identifier: MIT
 #include "support/source/file_io.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <string>
 #include <string_view>
 #include <system_error>
 
 #include "support/limits.h"
+
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 namespace minc::support {
 namespace {
@@ -69,6 +78,35 @@ Fallible<std::string> readFileBytes(const std::string& path) {
     // size check and the read; surface it rather than returning partial input.
     if (in.gcount() != static_cast<std::streamsize>(length)) {
       return makeUnexpected<std::string>("cannot read '" + path + "': incomplete read");
+    }
+  }
+  return bytes;
+}
+
+Fallible<std::string> readStdinBytes() {
+#if defined(_WIN32)
+  // _O_BINARY disables the CRT's CRLF translation. Failing to set it is not
+  // worth an error: the read still works, it just sees translated bytes.
+  (void)_setmode(_fileno(stdin), _O_BINARY);
+#endif
+
+  constexpr std::size_t kChunkBytes = std::size_t{64} * 1024U;
+  std::string bytes;
+  std::array<char, kChunkBytes> buffer{};
+  while (true) {
+    const std::size_t count = std::fread(buffer.data(), 1, buffer.size(), stdin);
+    if (count > 0) {
+      if (count > kMaxSourceBytes - bytes.size()) {
+        return makeUnexpected<std::string>("standard input exceeds the limit of " +
+                                           std::string(kMaxSourceBytesText));
+      }
+      bytes.append(buffer.data(), count);
+    }
+    if (count < buffer.size()) {
+      if (std::ferror(stdin) != 0) {
+        return makeUnexpected<std::string>("cannot read standard input");
+      }
+      break; // short read means end of input
     }
   }
   return bytes;

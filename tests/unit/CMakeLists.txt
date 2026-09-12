@@ -38,6 +38,16 @@ if(NOT TARGET GTest::gtest_main)
     "GTest was not found. Install it or configure with -DMINC_FETCH_GTEST=ON.")
 endif()
 
+# The example regression test needs the source tree's `examples/` directory.
+# Generated rather than passed as a -D so a path with spaces or backslashes
+# survives every generator and toolchain.
+file(TO_CMAKE_PATH "${PROJECT_SOURCE_DIR}/examples" MINC_EXAMPLES_DIR)
+configure_file(
+  ${PROJECT_SOURCE_DIR}/cmake/examples_dir.h.in
+  ${PROJECT_BINARY_DIR}/generated/tests/examples_dir.h
+  @ONLY
+)
+
 minc_add_executable(minc_unit_tests
   SOURCES
     support/span/span_test.cc
@@ -49,9 +59,16 @@ minc_add_executable(minc_unit_tests
     support/intern/interner_test.cc
     support/session/session_test.cc
     support/utf8/utf8_test.cc
+    lex/lexer_test.cc
+    lex/token_stream_test.cc
+    lex/token_dump_test.cc
+    lex/lex_report_test.cc
+    lex/examples_test.cc
     driver/cli_test.cc
   DEPS
     minc_support
+    minc_lex
+    minc_lex_report
     minc_driver
     GTest::gtest_main
 )

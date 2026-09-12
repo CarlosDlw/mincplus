@@ -23,9 +23,31 @@ platform; the concrete guarantees are in
 
 ## Status
 
-Scaffold v0.1: the `src/support` foundation and the `mincc` driver shell. No
-lexer, parser, or backend yet, so `build`/`run`/`check` parse correctly but
-report that they are not implemented. `--help` and `--version` are functional.
+Scaffold v0.1: the `src/support` foundation, the lexer (`src/lex`), and the
+`mincc` driver. `mincc lex <files...>` works and prints the token stream;
+`build`, `run`, and `check` parse correctly but report that they are not
+implemented, and there is no parser, semantic analysis, or backend yet.
+`--help` and `--version` are functional.
+
+```console
+$ mincc lex examples/002_variables.mx
+== examples/002_variables.mx  (98 bytes, 46 tokens: 23 significant, 23 trivia)
+
+   pos  offset  len  kind            flags  spelling
+  ----  ------  ---  --------------  -----  ----------------------------------------
+   1:1       0   21  LineComment     -      // variables examples
+  1:22      21    1  Newline         -      \n
+   2:1      22    2  KwFn            -      fn
+   2:3      24    1  Whitespace      -       
+   2:4      25    3  Identifier      -      i32
+  ...
+   8:1      98    0  EndOfFile       -      
+```
+
+Every byte of the file appears in exactly one token, including whitespace and
+comments, and lexical errors are reported as `file:line:col: error[code]` with
+a caret, without stopping at the first one. The design behind that is in
+[`docs/architectures/lexer.md`](docs/architectures/lexer.md).
 
 ## Language features
 
@@ -48,9 +70,11 @@ and full C interoperability in both directions.
       `examples/001_main_func.mx`
 - [x] Block statements and `return`
 - [x] `//` line comments
-- [x] `let` bindings with a colon type annotation and inference
-      (`let x: i32 = 0;` / `let y = 10;`), as in `examples/002_variables.mx`
-- [ ] Whether `let` may be reassigned, or needs a companion (`mut` / `var`) `[?]`
+- [x] `let` bindings are **mutable**, with a colon type annotation or
+      inference (`let x: i32 = 0;` / `let y = 10;`), as in
+      `examples/002_variables.mx`
+- [x] `const` bindings are **immutable** and have the same shape as `let`:
+      `const x: i32 = 0;` or `const y = 10;` — no separate `mut`/`var`
 - [ ] C-style function and declaration syntax alongside `fn`
 - [ ] Doc comments attached to declarations
 - [ ] Attributes/annotations on declarations `[?]`
@@ -78,7 +102,8 @@ first-class types; the examples use the primitive names.
 - [ ] `enum` constants and tagged unions `[?]`
 - [ ] Function types and function pointers
 - [ ] Type aliases
-- [ ] `const` / immutability
+- [x] `const` bindings (see *Syntax and files*); immutability is a binding
+      property, not a type qualifier yet
 - [ ] Optional/nullable types and null safety `[?]`
 - [ ] Tuples `[?]`
 - [ ] Generics / parametric types `[?]`
@@ -294,12 +319,28 @@ hidden escape hatch.
   - `expected/` `Expected`/`Unexpected` and the `Fallible<T>` alias
   - `session/` central per-compilation state: sources, symbols, diagnostics,
     and the node arena, with per-file revisions for editor use
+  - `term/` `ColorMode` and tty detection; the only module containing
+    platform-specific code, so nothing else has to
+- `src/lex/` — the raw lexer: a pure `lexOne`, the lossless `TokenStream`, the
+  token dump, and the flag-to-diagnostic reporting split into a separate
+  library (`minc_lex_report`) so the lexer itself links no diagnostics.
 - `src/driver/` — `mincc` entry point: `cli` (parsing), `help_text` (help and
-  version output), `exit_code`. The version header is generated from
+  version output), `error_report` (the one error format), `lex_command` (the
+  `lex` subcommand), `exit_code`. The version header is generated from
   `cmake/version.h.in`; the source tree holds no second copy.
-- `src/lex|parse|ast|sema|ir|backend|cinterop/` — planned.
+- `src/lex/pp|parse|ast|sema|ir|backend|cinterop/` — planned.
 - `tests/unit/` — gtest suites, one per support module.
-- `examples/` — `.mx` samples (`001_main_func.mx` is the first e2e target).
+- `examples/` — `.mx` samples, and a regression suite: every file is lexed by
+  `tests/unit/lex/examples_test.cc`, so an example cannot drift into syntax the
+  lexer does not accept.
+  - `001_main_func.mx` — the smallest program: one function and a `return`
+  - `002_variables.mx` — `let` with an annotation and with inference
+  - `003_types.mx` — the primitive type names and the C-compatible spellings,
+    declared with `let` and `const`
+  - `004_operators.mx` — arithmetic, bitwise, comparison, logical, the
+    conditional operator, and every assignment form
+  - `005_literals.mx` — integers in four bases, decimal/hex floats, character
+    and string escapes, and both comment styles
 
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
@@ -361,4 +402,9 @@ These are contracts, not aspirations — the test suite enforces the first three
 - **Compilers.** GCC's `-Wshadow` is stricter than Clang's, so both are run
   before a change is considered done; MSVC uses `/W4 /permissive-`.
 - **Console.** CLI help is ASCII-only and diagnostic color is opt-in, so
-  redirected output and non-UTF-8 consoles behave the same everywhere.
+  redirected output and non-UTF-8 consoles behave the same everywhere. Color is
+  enabled only for a real terminal, honors `NO_COLOR` and `TERM=dumb`, and on
+  Windows turns on virtual-terminal processing first so an older console gets
+  plain text instead of escape soup.
+- **Standard input.** `mincc lex -` reads stdin in binary mode on Windows, so a
+  piped file is byte-identical to opening it.

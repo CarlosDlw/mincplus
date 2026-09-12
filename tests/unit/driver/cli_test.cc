@@ -139,5 +139,77 @@ TEST(HelpTextTest, VersionLineNamesProgramAndVersion) {
   EXPECT_NE(line.find(kVersion), std::string::npos);
 }
 
+TEST(CliTest, LexTakesFilesAsInputs) {
+  const CliOptions opts = parse({"lex", "a.mx", "b.mx"});
+  ASSERT_TRUE(opts.command.has_value());
+  EXPECT_EQ(*opts.command, Command::Lex);
+  ASSERT_EQ(opts.inputs.size(), 2u);
+  EXPECT_EQ(opts.inputs[0], "a.mx");
+  EXPECT_EQ(opts.inputs[1], "b.mx");
+  EXPECT_TRUE(opts.error.empty());
+}
+
+TEST(CliTest, LexAcceptsStandardInputAsADash) {
+  const CliOptions opts = parse({"lex", "-"});
+  ASSERT_TRUE(opts.command.has_value());
+  ASSERT_EQ(opts.inputs.size(), 1u);
+  EXPECT_EQ(opts.inputs[0], "-");
+}
+
+TEST(CliTest, LexTakesNoOptions) {
+  // A flag the driver does not know is a usage error, not silently ignored.
+  const CliOptions opts = parse({"lex", "--tokens-only"});
+  EXPECT_NE(opts.error.find("unrecognized option '--tokens-only'"), std::string::npos);
+}
+
+// Reads the comma-separated command names listed after `label`.
+std::vector<std::string> namesAfter(const std::string& help, const std::string& label) {
+  std::vector<std::string> names;
+  const std::size_t at = help.find(label);
+  if (at == std::string::npos) {
+    return names;
+  }
+  std::size_t i = at + label.size();
+  std::string current;
+  for (; i < help.size() && help[i] != '\n'; ++i) {
+    if (help[i] == ',') {
+      names.push_back(current);
+      current.clear();
+      if (i + 1 < help.size() && help[i + 1] == ' ') {
+        ++i; // skip the space after the comma
+      }
+      continue;
+    }
+    current.push_back(help[i]);
+  }
+  names.push_back(current);
+  return names;
+}
+
+// Help derives the two lists from the command table, so a command cannot be
+// advertised as working while the dispatch still refuses it.
+TEST(HelpTextTest, ImplementedAndScaffoldedListsAreExact) {
+  const std::string help = helpText();
+  std::vector<std::string> implemented;
+  std::vector<std::string> scaffolded;
+  for (const CommandInfo& info : allCommands()) {
+    (info.implemented ? implemented : scaffolded).emplace_back(info.name);
+  }
+
+  EXPECT_EQ(namesAfter(help, "Implemented: "), implemented);
+  EXPECT_EQ(namesAfter(help, "Scaffolded:  "), scaffolded);
+  EXPECT_NE(help.find("Implemented: lex"), std::string::npos);
+}
+
+TEST(CliTest, LexIsMarkedImplementedInTheTable) {
+  const std::optional<Command> command = commandFromName("lex");
+  ASSERT_TRUE(command.has_value());
+  for (const CommandInfo& info : allCommands()) {
+    if (info.command == *command) {
+      EXPECT_TRUE(info.implemented);
+    }
+  }
+}
+
 } // namespace
 } // namespace minc::driver

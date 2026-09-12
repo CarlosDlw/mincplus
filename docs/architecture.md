@@ -8,7 +8,16 @@ callers, and what it is allowed to depend on.
 
 ```
 mincc                      driver: argv -> exit code
-  └── minc_driver          cli / help_text / exit_code
+  └── minc_driver          cli / help_text / error_report / lex_command
+        ├── minc_support
+        ├── minc_lex
+        └── minc_lex_report
+
+minc_lex_report            token flags -> diagnostics
+  ├── minc_lex             raw lexer: tokens, lossless stream, dump
+  │     ├── minc_span
+  │     └── minc_term
+  └── minc_diag
 
 minc_support               INTERFACE alias over the support libraries
   ├── minc_source          trusted source text (the validation boundary)
@@ -18,10 +27,12 @@ minc_support               INTERFACE alias over the support libraries
   ├── minc_diag            diagnostic collection + rendering
   │     ├── minc_source
   │     ├── minc_span
+  │     ├── minc_term
   │     └── minc_utf8
   ├── minc_span            leaves: no support dependencies
   ├── minc_line
   ├── minc_utf8
+  ├── minc_term            the only platform-specific code (tty, ANSI/VT)
   ├── minc_mem             Arena
   ├── minc_intern          Interner
   ├── (expected)           header-only: Expected / Unexpected / Fallible
@@ -35,9 +46,16 @@ minc_support               INTERFACE alias over the support libraries
 Rules:
 
 - The dependency graph is acyclic and directed *upward* only. `span`, `line`,
-  `utf8`, `mem`, `intern`, and `expected` are leaves.
+  `utf8`, `term`, `mem`, `intern`, and `expected` are leaves.
 - `src/support/` is LLVM-free by contract. Only `src/backend/llvm` may include
   `llvm/*`.
+- `src/lex/` is the *raw* lexer and does not depend on diagnostics at all.
+  That is enforced by the build graph (`minc_lex` lists no diag target), not by
+  a comment, and it is why the lexer can be tested and fuzzed without a
+  `Session`.
+- `src/support/term` is the only module allowed to contain `#if defined(_WIN32)`
+  and `<windows.h>` / `<unistd.h>`. Everything else asks it a yes/no question
+  and stays platform-agnostic.
 - Targets are created with `minc_add_library` / `minc_add_executable`, which
   apply the include dirs, the C++ standard, and the shared warning set. A new
   module is a directory with a three-line `CMakeLists.txt`.
@@ -140,14 +158,69 @@ Rules:
   edit. Caches key on `(FileId, revision)` and a bumped revision invalidates
   derived data rather than repairing it.
 
+### `term`
+
+- Owns `ColorMode` (`Plain` / `Ansi`) and the two questions
+  `stdoutSupportsColor()` / `stderrSupportsColor()`. Everything that can be
+  colored takes a `ColorMode` instead of a `bool`, so "is it colored?" and
+  "which escape sequences?" stay one decision with one implementation.
+- Color is off when the stream is not a terminal (so pipes and logs stay
+  clean), when `NO_COLOR` is set to anything, when `TERM=dumb`, or when the
+  Windows console refuses virtual-terminal mode. On Windows the enabling call
+  is attempted once and a failure means plain text, never an error.
+
+### `lex` — the raw lexer
+
+Design record: [`docs/architectures/lexer.md`](architectures/lexer.md).
+
+- `lexOne(text, offset)` is a **pure total function**: no `Session`, no
+  `SourceManager`, no `Interner`, no `DiagBag`, no allocation. Given the same
+  bytes it returns the same token, which is what makes it fuzzable and what
+  lets the language server re-lex a suffix of a file.
+- It returns **one token per byte range** and never skips anything: whitespace,
+  newlines, and comments are tokens too. Trivia cannot be recovered later, and
+  a formatter, a highlighter, and doc-comment hover all need it. Consumers that
+  only want code filter on `Token::isTrivia()` or walk
+  `TokenStream::significantIndices()`.
+- A `Token` is 12 bytes and owns no text: the lexeme is
+  `text.substr(token.offset, token.length)`. Every offset arithmetic that could
+  overflow is done in `uint32` against a source already bounded by
+  `kMaxSourceBytes`.
+- Malformed input sets a **flag on the token** (`TokenFlag`) rather than
+  producing a diagnostic, so one pass reports every problem instead of stopping
+  at the first. `lex_report.h` is the only place that knows about spans and
+  severity.
+- **Resumable by construction, with no state parameter.** A lexer normally
+  needs state because it *skips* comments; here trivia is emitted, comments are
+  scanned through their terminator, and a string or char literal can never
+  cross a line, so every token boundary is also a valid restart point. Adding a
+  state parameter is a mechanical change if the rules ever loosen.
+- `TokenStream::lex` builds the buffer and **audits the lossless invariant**
+  while doing it: tokens tile `[0, size())`, offsets are contiguous, and the
+  last token is `EndOfFile` at `size()`. `lossless()` exposes the result so
+  tests and any future incremental splice assert it instead of trusting it.
+- `dumpTokens` is pure formatting for `mincc lex`. It computes its own columns
+  from the data and prints `line:col` by walking the stream, so the table is
+  aligned whatever the file holds; it writes nothing and colors nothing that is
+  not asked for.
+
 ### `driver`
 
 - `cli.h`: `parseArgs` is pure — it never prints, exits, or throws. The first
   positional argument names the subcommand, `--` ends option parsing, `-` is a
   file rather than an option, and one shared command table feeds the parser,
-  the error messages, and the help text so they cannot disagree.
+  the error messages, and the help text so they cannot disagree. Each row also
+  says whether the command is implemented, and the help derives its
+  "Implemented"/"Scaffolded" lists from that, so help can never advertise a
+  command the dispatch still refuses.
+- `error_report.h`: the one way a driver-level error is written. Every
+  subcommand uses it, so the prefix, the hint, and the exit code are identical
+  whichever command hit the problem.
 - `help_text.h`: ASCII-only output, built from that same table.
 - `exit_code.h`: the process contract — `0` success, `1` failure, `2` usage.
+- `lex_command.h`: the `lex` subcommand. Token dump on stdout, diagnostics on
+  stderr, and each stream picks its own `ColorMode`, so a redirected stdout
+  stays clean even when stderr is a capable terminal.
 - The version string comes from `cmake/version.h.in` via CMake; the source
   tree carries no second copy.
 
@@ -186,6 +259,12 @@ checks all three. The load-bearing decisions:
 - Line terminators (LF/CRLF/CR) are handled in `line`, not by callers.
 - Encoding is normalized once in `source`; nothing downstream re-checks it.
 - Paths go through `std::filesystem` as UTF-8; `/tmp` is never hard-coded.
+- Standard input is read in **binary** mode on Windows (`_setmode(_O_BINARY)`),
+  so piping a file through `mincc lex -` sees the same bytes as opening it.
+- ANSI color is enabled on Windows by turning on
+  `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, and only after `GetConsoleMode`
+  succeeds; a console that cannot do it gets plain text rather than escape
+  soup. `NO_COLOR` and `TERM=dumb` are honored everywhere.
 - MSVC gets `/utf-8` (sources contain UTF-8) and `/Zc:__cplusplus`; warnings are
   `/W4 /permissive-`.
 - `.gitattributes` normalizes the tree to LF so a Windows checkout cannot
@@ -209,10 +288,17 @@ backend -> C interop`, with the driver orchestrating the stages.
 
 - **preprocess** turns a `SourceFile` into a token stream with `#include`
   resolution; it owns file inclusion and macro expansion, and reports through
-  `DiagBag` with spans that survive expansion.
-- **lex** reads `SourceFile::text` (already trusted UTF-8), emits tokens
-  carrying `Span`, and reports through `DiagBag`. It should not re-validate
-  encoding or re-derive limits.
-- **parse** takes tokens plus an `Arena` for AST nodes.
-- **driver** will link `minc_support` when the first real command lands, pick
-  `ColorMode` from tty detection, and render `DiagBag` with `DiagRenderer`.
+  `DiagBag` with spans that survive expansion. It runs *before* the lexer and
+  therefore owns `#` and every directive; the lexer is what it feeds, and `#`
+  outside a directive is not part of the language.
+- **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
+  produces the token stream. It does not re-validate encoding, re-derive
+  limits, or resolve names — it answers "what is here", never "what does it
+  mean". Keyword classification is the one thing it does store, because the
+  preprocessor must not expand a keyword as a macro name.
+- **parse** takes the token stream plus an `Arena` for AST nodes. It filters
+  trivia itself (or walks `significantIndices()`); the lexer deliberately does
+  not pre-filter, because that decision is irreversible.
+- **driver** links `minc_support`, `minc_lex`, and `minc_lex_report`, picks
+  `ColorMode` per stream with `support/term`, and renders `DiagBag` with
+  `DiagRenderer`.

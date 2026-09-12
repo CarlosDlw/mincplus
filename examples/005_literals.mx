@@ -1,0 +1,69 @@
+// Literal forms and the two comment styles.
+//
+// Octal is spelled `0o`, and a leading zero without a prefix stays decimal:
+// `.mx` does not inherit C's implicit octal.
+
+fn i32 integers()
+{
+  // Decimal. A leading zero has no special meaning.
+  let decimal: i32 = 1234567;
+  let zero: i32 = 0;
+  let leadingZeroIsDecimal: i32 = 010;
+
+  // Hexadecimal, with either case for the digits.
+  let upperHex: i32 = 0xBEEF;
+  let lowerHex: i32 = 0xdead;
+
+  // Binary and octal, both with an explicit prefix.
+  let binary: i32 = 0b10101010;
+  let octal: i32 = 0o755;
+
+  return decimal + zero + leadingZeroIsDecimal + upperHex + lowerHex + binary + octal;
+}
+
+fn f64 floats()
+{
+  let fraction: f64 = 3.14159;
+  let half: f64 = 0.5;
+  let exponent: f64 = 1e9;
+  let signedExponent: f64 = 1e+10;
+  let negativeExponent: f64 = 2.5e-3;
+  let hexFloat: f64 = 0x1.8p3;
+
+  return fraction + half + exponent + signedExponent + negativeExponent + hexFloat;
+}
+
+fn str text()
+{
+  let newline: char = '\n';
+  let tab: char = '\t';
+  let carriageReturn: char = '\r';
+  let backslash: char = '\\';
+  let singleQuote: char = '\'';
+  let doubleQuote: char = '\"';
+  let hexEscape: char = '\x41';
+  let unicodeEscape: char = '\u00e9';
+
+  let empty: str = "";
+  let plain: str = "hello, world";
+  let escaped: str = "tab:\there, quote:\"here, backslash:\\here";
+  let utf8: str = "olá, mundo";
+
+  return utf8;
+}
+
+/* A block comment runs to its terminator and does not nest. It can hold
+   anything, including "double quotes", 'single quotes', and code that looks
+   like real code: let notCode: i32 = 0x1F; */
+fn i32 main()
+{
+  // A line comment runs to the end of the line.
+  let integerSum: i32 = integers();
+  let floatSum: f64 = floats();
+
+  // `text` exercises the character and string literals; nothing is added to
+  // them here.
+  text();
+
+  return integerSum + (floatSum > 0.0 ? 1 : 0);
+}
