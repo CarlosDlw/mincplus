@@ -34,9 +34,10 @@ type-checked, which is what section 4 is about.
       lexer design in [`architectures/lexer.md`](architectures/lexer.md), parser
       and syntax-tree design in [`architectures/parser.md`](architectures/parser.md),
       preprocessor design in
-      [`architectures/preprocessor.md`](architectures/preprocessor.md), and the
+      [`architectures/preprocessor.md`](architectures/preprocessor.md), the
       lowering/name-resolution design in
-      [`architectures/resolve.md`](architectures/resolve.md)
+      [`architectures/resolve.md`](architectures/resolve.md), and the
+      type-checking design in [`architectures/sema.md`](architectures/sema.md)
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
@@ -265,7 +266,38 @@ resolve) and lowers the AST to HIR before type checking; Roslyn runs
 ## 5. Semantic analysis — `src/sema`
 
 Consumes a **resolved** tree — every name already tied to a declaration — so
-nothing here searches a scope.
+nothing here searches a scope — and returns a **typed** AST: every expression
+carries a type, types are interned values, and C's conversions are implemented
+once. Design in [`architectures/sema.md`](architectures/sema.md): the type
+model, the deferred literal types, the conversion sites, the type-specifier
+grammar, the error codes (with the list of which stage owns which error), and
+the language decisions this stage had to make — `void`, conditions requiring
+`bool`, implicit narrowing at assignment, `str` not being arithmetic.
+
+- [x] Design record: [`architectures/sema.md`](architectures/sema.md)
+- [ ] The type model: an interned, hash-consed `TypeId` with structural
+      identity, so `i32`, `int` and `signed int` are one type; built-ins with
+      stable ids; `Error` as a real poison type so a failure never cascades
+- [ ] The typed AST as a parallel `TypeId` array beside the lowered tree, so
+      `src/ast` never depends on the type language and the tree stays a value
+- [ ] The type-specifier grammar over the `Type` identifier run, with the
+      **target ABI** supplying `long`/`long double` widths — never the host's
+      `#ifdef`s
+- [ ] Conversions: integer promotions and C17 6.3.1.8 usual arithmetic
+      conversions, assignment conversion with `-Wconversion` designed for, and
+      the rule that a condition must be `bool`
+- [ ] Deferred literal typing: context decides, `i32`/`f64` is the default, and
+      a literal that does not fit its type is an error rather than a silent
+      truncation
+- [ ] Lvalue/modifiable-lvalue rules, so assignment and `++`/`--` to a `const`
+      or to a non-lvalue are errors
+- [ ] Function checking: return type, `return;` vs `return expr;`,
+      `sema-missing-return`, and `main` being `fn i32 main()`
+- [ ] `sema-division-by-zero` for a constant operand, and the shared
+      constant-arithmetic core extracted to `support` so `#if` and sema cannot
+      disagree about integer arithmetic
+- [ ] `mincc check` (scaffolded today): the stage's command, with `--ast`
+      printing the typed tree and `--types` the type store
 
 - [ ] Type system: the decided primitive set (`i8`..`i128`, `u8`..`u128`,
       `f32`/`f64`/`f80`, `bool`, `char`, `str`) plus the C-compatible spellings

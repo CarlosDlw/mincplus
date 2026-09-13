@@ -615,7 +615,14 @@ warnings inside them are dropped at the report step while errors are not.
   Lowering, validation and resolution are stages of their own rather than
   bullets inside it, for the reason above; `resolve`'s source→definition map is
   also the layer an editor asks "where is this defined", so it is built here
-  rather than bolted on when the LSP arrives.
+  rather than bolted on when the LSP arrives. It returns the *typed* AST the IR
+  consumes — types interned, conversions implemented once, and a failed
+  expression typed as a poison rather than as a missing value, which is what
+  keeps one mistake from becoming twenty. Design record:
+  [`architectures/sema.md`](architectures/sema.md) — the type model, the
+  conversion rules, the node-by-node surface, which stage owns which error, and
+  the decisions the language had to make with it. `mincc check` is the command
+  that proves it.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

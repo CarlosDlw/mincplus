@@ -183,8 +183,9 @@ first-class types; the examples use the primitive names.
 - [x] `bool`
 - [x] `char` — a distinct 8-bit byte type represented as `u8`, always
       unsigned (see *C-compatible type names*)
-- [x] `str` — NUL-terminated, C-like
-- [ ] `void`
+- [x] `str` — NUL-terminated, C-like; a scalar type, not `char*` yet
+- [x] `void` — a return type and (later) `void*`; never a value type: no
+      object has it and no arithmetic is defined on it
 - [ ] Pointers — deliberately complete and C-level, see
       [Pointers and raw memory](#pointers-and-raw-memory)
 - [ ] Fixed-size arrays
@@ -255,6 +256,41 @@ definition; code that must compile unchanged for more than one target uses the
 fixed-width primitives (`i32`, `i64`, `isize`) instead. Note the contrast with
 `isize`/`usize`: they are pointer-sized too, but they are *named* for that
 intent, which is exactly what makes them portable where `long` is not.
+
+#### Conversions and literal typing
+
+The design record is
+[`architectures/sema.md`](docs/architectures/sema.md#conversions), and these are
+the language decisions it makes. They are *semantics*, so they are recorded
+here as well.
+
+- [x] A type is an **identity, not a spelling**: `i32`, `int` and `signed int`
+      are one type, so the C spellings are interchangeable rather than merely
+      accepted
+- [x] **Narrowing is implicit at assignment** (initializer, assignment,
+      argument, `return`), as in C — there are no casts yet, and a documented
+      example must compile. A `-Wconversion` lint is designed for, off by
+      default
+- [x] **Integer and float literals are context-typed**: `let x: u8 = 255;` is a
+      `u8` with no conversion, and `let x = 7;` / `let y = 1.5;` default to
+      `i32` / `f64`. A literal that does not fit the type its context gives it is
+      an **error**, not a silent truncation (unlike C)
+- [x] `char` literals are `char` and string literals are `str` — never `i32`
+      or a byte array
+- [x] Integer promotions follow C (smaller than `i32` widens to `i32`) and the
+      usual arithmetic conversions follow C17 6.3.1.8, with ranks by width
+- [x] **A condition must be `bool`** — an arithmetic value does not implicitly
+      convert (`x != 0` is the explicit form). C's "any scalar is a condition"
+      is rejected
+- [x] `bool` is **not arithmetic**: `!`, `&&`, `||`, `==`, `!=` are defined; a
+      promotion to `int` as in C is not
+- [x] `str` is **not arithmetic** and `==`/`!=` on it are **refused**, because
+      C's `s1 == s2` compares addresses — content comparison is a library call
+- [x] A `const` name is an lvalue but **not modifiable**; assigning to it or
+      applying `++`/`--` is an error
+- [x] A non-`void` function that can reach its end without returning a value is
+      an error, not C's undefined behavior with a warning
+- [x] `main`, when declared, must be `fn i32 main()`
 
 ### Pointers and raw memory
 
@@ -475,8 +511,14 @@ which is where the algorithm that depends on them lives.
   that go-to-definition is built on. `mincc resolve` is its view. Neither
   `src/ast` nor `src/resolve` is a bullet inside `src/sema`, and both keep the
   stage contract: errors are values with a code and a span, never text.
-- `src/sema/`, `src/ir/`, `src/backend/`, `src/cinterop/` — planned, in that
-  order and for the reasons in
+- `src/sema/` — **next**: the type checker. It consumes the resolved tree — so
+  nothing in it searches a scope — and produces the typed AST the IR needs:
+  every expression with a type, the type store interned, C's conversions
+  implemented once. Design record, including the decisions above and the list of
+  which stage owns which error:
+  [`docs/architectures/sema.md`](docs/architectures/sema.md).
+- `src/ir/`, `src/backend/`, `src/cinterop/` — planned, in that order and for the
+  reasons in
   [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline).
 - `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
@@ -524,12 +566,14 @@ which is where the algorithm that depends on them lives.
 
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
-[`docs/roadmap.md`](docs/roadmap.md); the lexer, parser, preprocessor and
-lowering/name-resolution designs -- with their research references -- are in
+[`docs/roadmap.md`](docs/roadmap.md); the lexer, parser, preprocessor,
+lowering/name-resolution and type-checking designs -- with their research
+references -- are in
 [`docs/architectures/lexer.md`](docs/architectures/lexer.md),
 [`docs/architectures/parser.md`](docs/architectures/parser.md),
-[`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md), and
-[`docs/architectures/resolve.md`](docs/architectures/resolve.md).
+[`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md),
+[`docs/architectures/resolve.md`](docs/architectures/resolve.md), and
+[`docs/architectures/sema.md`](docs/architectures/sema.md).
 
 ## Build
 
