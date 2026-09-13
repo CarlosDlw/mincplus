@@ -38,8 +38,9 @@ type-checked, which is what section 4 is about.
       preprocessor design in
       [`architectures/preprocessor.md`](architectures/preprocessor.md), the
       lowering/name-resolution design in
-      [`architectures/resolve.md`](architectures/resolve.md), and the
-      type-checking design in [`architectures/sema.md`](architectures/sema.md)
+      [`architectures/resolve.md`](architectures/resolve.md), the type-checking
+      design in [`architectures/sema.md`](architectures/sema.md), and the
+      memory model in [`architectures/memory.md`](architectures/memory.md)
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
@@ -346,7 +347,9 @@ which also records the reversal.
       `str`, `void`, `int`/`long`/`long long int`/… per target ABI, with `char`
       fixed unsigned rather than inheriting C's sign)
 - [ ] Pointer semantics: element-scaled arithmetic, casts, byte-aliasing rules,
-      and the provenance model the optimizer may rely on
+      and the provenance model the optimizer may rely on — **decided** in
+      [`architectures/memory.md`](architectures/memory.md), which lands with the
+      access record before the first `*` is lowered
 - [x] Control-flow typing: `if`/`while`/`for` conditions must be `bool`, and
       `break`/`continue` outside a loop are `sema-break-outside-loop` /
       `sema-continue-outside-loop`. `terminates()` handles the branch and loop

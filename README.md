@@ -366,6 +366,13 @@ allocators, buffers, device registers, and anything else that sits on top of
 the C ABI, so raw pointers are a first-class language feature and not a
 hidden escape hatch.
 
+The rules underneath it -- what an object is, what a pointer carries, what
+aliasing may be assumed, alignment, lifetime, and what counts as a violation
+rather than as undefined behavior -- are decided in
+[`docs/architectures/memory.md`](docs/architectures/memory.md), which is
+therefore the record that must be settled **before the first `*` is lowered**.
+Everything below is what lands on top of that model.
+
 **Pointer types**
 
 - [ ] Pointers to any object type, at any depth (`**T`, `***T`)
@@ -669,14 +676,15 @@ which is where the algorithm that depends on them lives.
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
 [`docs/roadmap.md`](docs/roadmap.md); the lexer, parser, preprocessor,
-lowering/name-resolution, type-checking and IR designs -- with their research
-references -- are in
+lowering/name-resolution, type-checking, IR and memory-model designs -- with
+their research references -- are in
 [`docs/architectures/lexer.md`](docs/architectures/lexer.md),
 [`docs/architectures/parser.md`](docs/architectures/parser.md),
 [`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md),
 [`docs/architectures/resolve.md`](docs/architectures/resolve.md),
-[`docs/architectures/sema.md`](docs/architectures/sema.md), and
-[`docs/architectures/ir.md`](docs/architectures/ir.md).
+[`docs/architectures/sema.md`](docs/architectures/sema.md),
+[`docs/architectures/ir.md`](docs/architectures/ir.md), and
+[`docs/architectures/memory.md`](docs/architectures/memory.md).
 
 ## Build
 
