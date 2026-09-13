@@ -25,6 +25,7 @@
 
 #include "pp/pp_error.h"
 #include "pp/pp_record.h"
+#include "pp/pp_report.h"
 #include "pp/preprocessor.h"
 #include "support/limits.h"
 #include "support/session/session.h"
@@ -37,6 +38,10 @@ struct PPOutcome {
   std::vector<std::string> locations; // "file:line:col" per emitted token
   std::vector<std::string> errors;    // stable codes, in order
   std::vector<std::string> warnings;
+  // The same warnings after the report's filters: a warning located in a system
+  // header is dropped there, so a test needs both lists to tell "we never warned"
+  // from "we warned and the header was not the user's to fix".
+  std::vector<std::string> reportedWarnings;
   std::vector<std::string> messages;
   std::vector<std::string> defines;
   std::vector<std::string> includes; // "+path" read, "-path" elided by the guard
@@ -63,24 +68,23 @@ struct PPOutcome {
     return out;
   }
   [[nodiscard]] bool hasError(std::string_view code) const {
-    for (const std::string& error : errors) {
-      if (error == code) {
-        return true;
-      }
-    }
-    return false;
+    return contains(errors, code);
   }
   [[nodiscard]] bool hasWarning(std::string_view code) const {
-    for (const std::string& warning : warnings) {
-      if (warning == code) {
-        return true;
-      }
-    }
-    return false;
+    return contains(warnings, code);
+  }
+  [[nodiscard]] bool hasReportedWarning(std::string_view code) const {
+    return contains(reportedWarnings, code);
   }
   [[nodiscard]] bool hasDefine(std::string_view name) const {
-    for (const std::string& define : defines) {
-      if (define == name) {
+    return contains(defines, name);
+  }
+
+private:
+  [[nodiscard]] static bool contains(const std::vector<std::string>& values,
+                                     std::string_view wanted) {
+    for (const std::string& value : values) {
+      if (value == wanted) {
         return true;
       }
     }
@@ -98,6 +102,12 @@ public:
   }
   PPFixture& includeDir(std::string dir) {
     includeDirs_.push_back(std::move(dir));
+    return *this;
+  }
+  // `-isystem`: searched after every `-I`, and the files found there are system
+  // headers, which is what the warning suppression is about.
+  PPFixture& systemDir(std::string dir) {
+    systemDirs_.push_back(std::move(dir));
     return *this;
   }
   PPFixture& define(std::string name, std::string body = {}) {
@@ -159,6 +169,7 @@ public:
     options.defines = defines_;
     options.undefines = undefines_;
     options.includes.quote = includeDirs_;
+    options.includes.system = systemDirs_;
     options.warnUndef = warnUndef_;
     options.warnUnknownPragma = warnUnknownPragma_;
     options.optimizeIncludes = optimizeIncludes_;
@@ -198,6 +209,17 @@ public:
       outcome.warnings.emplace_back(pp::toString(warning.code));
       outcome.messages.push_back(warning.message);
     }
+    // The report step, run for real: the suppression of system-header warnings
+    // lives there, so a test that only read `result.warnings` would assert the
+    // opposite of what the tool does.
+    {
+      support::DiagBag reported;
+      (void)pp::reportPPWarnings(result.warnings, preprocessor.expansions(), reported,
+                                 &session.symbols(), result.systemRegions);
+      for (const support::Diagnostic& diagnostic : reported.all()) {
+        outcome.reportedWarnings.emplace_back(diagnostic.code);
+      }
+    }
     for (const pp::MacroInfo* macro : preprocessor.macros().all()) {
       if (macro->builtin == pp::BuiltinKind::None) {
         outcome.defines.emplace_back(preprocessor.symbol(macro->name));
@@ -221,6 +243,7 @@ private:
   std::string name_;
   std::string source_;
   std::vector<std::string> includeDirs_;
+  std::vector<std::string> systemDirs_;
   std::vector<std::pair<std::string, std::string>> defines_;
   std::vector<std::string> undefines_;
   std::int64_t epoch_ = 0;

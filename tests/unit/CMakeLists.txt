@@ -71,6 +71,7 @@ minc_add_executable(minc_unit_tests
     pp/include_test.cc
     pp/builtins_test.cc
     pp/corpus_test.cc
+    pp/differential_test.cc
     parse/syntax_kind_test.cc
     parse/parser_test.cc
     parse/error_codes_test.cc

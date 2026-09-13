@@ -678,10 +678,14 @@ void Preprocessor::handleHasInclude(std::vector<PPToken>& out, std::size_t base,
   }
 
   // Asking the resolver is the only honest answer: it is the same search order
-  // and the same file identity the `#include` itself would use, so the two
-  // cannot disagree.
+  // the `#include` itself would use, so the two cannot disagree. It is `exists`
+  // and not `open`, so the question is asked of the filesystem and not answered
+  // by reading the file: a header that is present but whose bytes cannot be used
+  // (unreadable mode, past the size limit, not valid UTF-8) is still *included
+  // by the `#include` below*, and the error then names the real problem instead
+  // of the branch quietly taking the `#else`.
   const std::string fromDir = files_.empty() ? std::string() : files_.back().dir;
-  const bool exists = resolver_.open(name, angle, fromDir, /*includeNext=*/false).hasValue();
+  const bool exists = resolver_.exists(name, angle, fromDir, /*includeNext=*/false);
   out.push_back(makeScratchToken(lex::TokenKind::IntegerLiteral, exists ? "1" : "0",
                                  operatorToken.loc.spelling, PPTokenFlag::None));
 }

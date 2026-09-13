@@ -190,6 +190,13 @@ PPOutcome undefinedIdentifier() {
 PPOutcome includeNotFound() {
   return PPFixture().source("#include \"no/such.h\"\n").run();
 }
+PPOutcome includeUnreadable() {
+  const TempDir dir;
+  // A real file at a real path whose bytes cannot be used: the include is
+  // found, and what fails is the reading. Distinct from "not found" on purpose.
+  dir.write("bogus.h", std::string("\xFF\xFE", 2));
+  return PPFixture(dir.path() + "/main.mx").source("#include \"bogus.h\"\n").run();
+}
 PPOutcome includeSelfReference() {
   const TempDir dir;
   const std::string path = dir.write("self.h", "#include \"self.h\"\n");
@@ -258,6 +265,7 @@ constexpr CodeTrigger kTriggers[] = {
     {"pp-expression-syntax", "an incomplete expression", &expressionSyntax},
     {"pp-undefined-identifier", "-Wundef", &undefinedIdentifier},
     {"pp-include-not-found", "a missing header", &includeNotFound},
+    {"pp-include-unreadable", "a header whose bytes are not UTF-8", &includeUnreadable},
     {"pp-include-self-reference", "a self-including file", &includeSelfReference},
     {"pp-include-depth", "lowered include depth", &includeDepth},
     {"pp-include-budget", "lowered include count", &includeBudget},

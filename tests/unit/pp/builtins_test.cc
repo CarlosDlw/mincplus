@@ -87,6 +87,22 @@ TEST(BuiltinTest, HasIncludeAnswersAboutTheRealSearchList) {
   EXPECT_EQ(out.concat(), "yesok");
 }
 
+TEST(BuiltinTest, HasIncludeAnswersAboutExistenceNotReadability) {
+  // The header is there and the path is right; what cannot be used is its
+  // bytes. `__has_include` asks the filesystem question, because that is the
+  // question the guarded `#include` needs answered. An implementation that read
+  // the file to answer would take the `#else` branch and the real error -- the
+  // one the `#include` would have raised -- would never be seen.
+  const TempDir dir;
+  dir.write("bogus.h", std::string("\xFF\xFE", 2));
+  const PPOutcome out = PPFixture()
+                            .source("#if __has_include(<bogus.h>)\nyes\n#else\nno\n#endif\n")
+                            .includeDir(dir.path())
+                            .run();
+  EXPECT_TRUE(out.errors.empty());
+  EXPECT_EQ(out.concat(), "yes");
+}
+
 TEST(BuiltinTest, HasIncludeOutsideIfIsDiagnosed) {
   // It is an operator, not a macro with a value; pretending otherwise is how a
   // header ends up with a nonsense value baked into it.

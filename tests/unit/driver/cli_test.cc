@@ -64,6 +64,37 @@ TEST(CliTest, UnknownOptionIsAnError) {
   EXPECT_NE(opts.error.find("unrecognized option '--nope'"), std::string::npos);
 }
 
+// `-isystem` keeps its own list rather than joining `-I`: the two have different
+// search order and the files found in the second are system headers, so merging
+// them would lose the distinction the flag exists to make.
+TEST(CliTest, IsystemTakesItsValueJoinedOrSeparate) {
+  const CliOptions joined = parse({"pp", "-isystem/sys", "a.mx"});
+  ASSERT_TRUE(joined.error.empty());
+  ASSERT_EQ(joined.systemDirs.size(), 1u);
+  EXPECT_EQ(joined.systemDirs[0], "/sys");
+  EXPECT_TRUE(joined.includeDirs.empty());
+
+  const CliOptions separate = parse({"pp", "-isystem", "/sys", "a.mx"});
+  ASSERT_TRUE(separate.error.empty());
+  ASSERT_EQ(separate.systemDirs.size(), 1u);
+  EXPECT_EQ(separate.systemDirs[0], "/sys");
+}
+
+TEST(CliTest, IsystemWithoutAValueIsAnError) {
+  const CliOptions opts = parse({"pp", "-isystem"});
+  EXPECT_NE(opts.error.find("-isystem"), std::string::npos);
+}
+
+TEST(CliTest, IncludeAndSystemListsKeepTheirOwnOrder) {
+  const CliOptions opts = parse({"pp", "-I", "one", "-isystem", "two", "-I", "three", "a.mx"});
+  ASSERT_TRUE(opts.error.empty());
+  ASSERT_EQ(opts.includeDirs.size(), 2u);
+  EXPECT_EQ(opts.includeDirs[0], "one");
+  EXPECT_EQ(opts.includeDirs[1], "three");
+  ASSERT_EQ(opts.systemDirs.size(), 1u);
+  EXPECT_EQ(opts.systemDirs[0], "two");
+}
+
 TEST(CliTest, LoneDashIsAFileNotAnOption) {
   const CliOptions opts = parse({"build", "-"});
   ASSERT_TRUE(opts.command.has_value());

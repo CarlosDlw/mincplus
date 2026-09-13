@@ -1,0 +1,75 @@
+// Header-names: what `#include` and `__has_include` actually take as an operand.
+//
+// Like every file in `examples/pp`, this one is preprocessed with
+// `-I examples/pp/include`, and that one flag is the whole configuration of the
+// corpus.
+//
+// The operand of an include is a *header-name* (C 6.4.7), not a sequence of
+// tokens, and the difference is visible rather than pedantic:
+//
+//   * inside `<...>` and `"..."` the characters `//` and `/*` are ordinary
+//     characters, and there are no escape sequences. A path such as `a//b.h` or
+//     a Windows `c:\dir\x.h` is one name, not a comment and not an escape. So
+//     the operand is read from the source bytes from its opening delimiter,
+//     with the one scanner that knows the grammar -- which is why this file can
+//     be named in a comment without the preprocessor disagreeing with us;
+//   * `>` is legal inside `"..."` and `"` is legal inside `<...>`, so the two
+//     forms are not interchangeable and the delimiters decide the search order:
+//     `"..."` looks next to this file first, `<...>` only on the include path;
+//   * `__has_include` takes the same operand and asks the same resolver the
+//     `#include` itself would use, so the two can never disagree about whether a
+//     header exists. That is what makes the guarded include below correct in
+//     both directions: it compiles whether or not the header is there, and it
+//     never includes a header twice.
+//
+// The graph, as the preprocessor records it:
+//
+//   008_header_names.mx
+//     -> include/minc_pragma.h         (marked by `_Pragma("once")` below)
+//     -> include/minc_pragma.h         (already read: elided)
+//     -> include/minc_limits.h
+//
+// The second include being elided is the point: `minc_pragma.h` has no
+// `#ifndef` guard, so nothing but the operator can make it safe.
+
+#include "include/minc_pragma.h"
+
+// The same file again. It is elided, not merely harmless.
+#include "include/minc_pragma.h"
+
+// `__has_include` with an angle name, in the shape it is actually used in: guard
+// the include, so the file builds with or without the header.
+#if __has_include(<minc_limits.h>)
+#include <minc_limits.h>
+#define HAVE_LIMITS 1
+#else
+#define HAVE_LIMITS 0
+#endif
+
+// And the negative case, with a quoted name that is not there. The quoted form
+// searches this file's own directory before the include path, and neither has
+// it.
+#if __has_include("include/minc_nowhere.h")
+#define HAVE_OPTIONAL 1
+#else
+#define HAVE_OPTIONAL 0
+#endif
+
+fn i32 main()
+{
+  // `PRAGMA_ONCE_SEEN` is defined by the header above. It is only defined once
+  // even though the file was named twice, and the second naming cost one
+  // `#include` line rather than a re-read.
+  let seen: i32 = PRAGMA_ONCE_SEEN;
+
+  // Zero here: the header is not there, and `__has_include` said so before the
+  // `#include` was ever attempted.
+  let optional: i32 = HAVE_OPTIONAL;
+
+  // One here, and `MAX_ITEMS` came from the include that was guarded by the
+  // positive case.
+  let haveLimits: i32 = HAVE_LIMITS;
+  let items: i32 = MAX_ITEMS;
+
+  return seen + optional + haveLimits + items;
+}

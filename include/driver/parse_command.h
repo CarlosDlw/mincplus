@@ -33,6 +33,7 @@ struct ParseRequest {
   std::vector<std::pair<std::string, std::string>> defines;
   std::vector<std::string> undefines;
   std::vector<std::string> includeDirs;
+  std::vector<std::string> systemDirs; // `-isystem`: `-I`, but the files are system headers
   bool showTrivia = true;
   support::ColorMode dumpColor = support::ColorMode::Plain;       // tree -> `out`
   support::ColorMode diagnosticColor = support::ColorMode::Plain; // diagnostics -> `err`

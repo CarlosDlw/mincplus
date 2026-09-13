@@ -24,6 +24,7 @@ struct PpRequest {
   std::vector<std::pair<std::string, std::string>> defines; // `-D name[=body]`
   std::vector<std::string> undefines;                       // `-U name`
   std::vector<std::string> includeDirs;                     // `-I dir`
+  std::vector<std::string> systemDirs;                      // `-isystem dir`
   bool showDefines = false;
   bool showIncludes = false;
   bool showDeps = false;

@@ -498,18 +498,22 @@ left guessing which one to reach for:
 
 | Command | Stage | Sees |
 | --- | --- | --- |
-| `mincc lex` | lexer | one file, raw tokens, directives are `lex-invalid-character` |
+| `mincc lex` | lexer | one file, raw tokens — a directive's `#` is an ordinary `Hash` token, because `#` is a punctuator of the lexical grammar and only its *meaning* is positional |
 | `mincc pp` | lexer + preprocessor | the token stream of the translation unit — macros expanded, includes resolved |
 | `mincc parse` | the whole front end | the syntax tree over the preprocessed stream |
 
-`-D`/`-U`/`-I` belong to the *front end*, not to one command that prints it, so
-all three commands that preprocess accept them and one helper splits `-DNAME=V`
-so no two commands can disagree about what it means.
+`-D`/`-U`/`-I`/`-isystem` belong to the *front end*, not to one command that
+prints it, so all three commands that preprocess accept them and one helper
+splits `-DNAME=V` so no two commands can disagree about what it means.
+`-isystem` is not a synonym for `-I`: the files it finds are system headers, so
+warnings inside them are dropped at the report step while errors are not.
 
 - **preprocess** (`src/pp`) is a **client of the lexer**: it owns `#` and every
   directive, file inclusion, and macro expansion, and it emits the preprocessed
-  text and the token stream the parser consumes. `#` outside a directive is not
-  part of the language, which is why the lexer classifies it as no token at all.
+  text and the token stream the parser consumes. `#` outside a directive has no
+  meaning, but `#` itself is still a token the lexer produced — a stray one is
+  the preprocessor's error to report (`pp-stray-hash`), not a byte the lexer
+  refused to classify.
   Every token carries provenance that survives expansion (macro body, argument,
   or invocation site), so a diagnostic can name the macro, the invocation, and
   the include chain; it links no diagnostics and reports errors as values, like

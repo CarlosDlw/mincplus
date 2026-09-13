@@ -513,9 +513,17 @@ void Preprocessor::handleInclude(const std::vector<PPToken>& line, const SourceL
   }
 
   const std::string fromDir = files_.empty() ? std::string() : files_.back().dir;
-  support::Fallible<IncludeOpen> opened = resolver_.open(name, angle, fromDir, next);
+  support::Expected<IncludeOpen, IncludeFailure> opened =
+      resolver_.open(name, angle, fromDir, next);
   if (!opened) {
-    pushError(PPError{directive.span(), opened.error(), PPErrorCode::IncludeNotFound});
+    const IncludeFailure& failure = opened.error();
+    // "Not found" and "found but not readable" are different fixes, so they get
+    // different codes: the first sends the user to the search list, the second
+    // to the file itself.
+    const PPErrorCode code = failure.kind == IncludeFailureKind::Unreadable
+                                 ? PPErrorCode::IncludeUnreadable
+                                 : PPErrorCode::IncludeNotFound;
+    pushError(PPError{directive.span(), failure.message, code});
     return;
   }
 
@@ -729,6 +737,24 @@ void Preprocessor::handlePragma(const std::vector<PPToken>& line, const SourceLo
       resolver_.markOnce(files_.back().identity);
     }
     return;
+  }
+  // `#pragma GCC system_header`: from here on this file is a system header, so
+  // warnings in it are suppressed. It exists precisely because a header can be
+  // *found* through `-I` and still be one nobody should be asked to fix -- a
+  // vendored library, a generated header -- and it is cheap to honor: the region
+  // starts at the pragma, so the part of the file above it is still the user's.
+  if (name != nullptr && name->is(lex::TokenKind::Identifier) && spelling(*name) == "GCC") {
+    std::size_t rest = index + 1;
+    const PPToken* subject = nextSignificant(line, rest);
+    if (subject != nullptr && subject->is(lex::TokenKind::Identifier) &&
+        spelling(*subject) == "system_header") {
+      if (!files_.empty()) {
+        markSystemHeader(directive.file, directive.offset);
+      }
+      return;
+    }
+    // A `#pragma GCC ...` this compiler does not know is still an *unknown
+    // pragma* rather than a silently ignored one: the check falls through.
   }
   // Every other pragma is preserved in the record and not interpreted: a pragma
   // is each target's business, and a compiler that pretends otherwise grows

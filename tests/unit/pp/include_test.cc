@@ -291,5 +291,101 @@ TEST(IncludeTest, AnUnterminatedAngleNameIsStillDiagnosed) {
   EXPECT_TRUE(out.hasError("pp-invalid-directive"));
 }
 
+// --- not found, and found-but-unreadable -------------------------------------
+//
+// The two answer different questions -- "is the path on the search list?" and
+// "can the bytes there be used?" -- and a user fixes them in different places,
+// so they are two codes. The second test's file is a real path to a regular
+// file, which is exactly the case the first code would describe wrongly.
+
+TEST(IncludeTest, AHeaderThatExistsButCannotBeReadIsItsOwnError) {
+  TempDir dir;
+  // A path that resolves and a file that cannot be used: the bytes are not
+  // UTF-8, so the source manager refuses them. Nothing about the *path* is
+  // wrong, and the diagnostic must not say that it is.
+  dir.write("bogus.h", std::string("\xFF\xFE", 2));
+  const PPOutcome out = PPFixture().source("#include <bogus.h>\n").includeDir(dir.path()).run();
+  EXPECT_TRUE(out.hasError("pp-include-unreadable"));
+  EXPECT_FALSE(out.hasError("pp-include-not-found"));
+}
+
+TEST(IncludeTest, AHeaderThatIsNotThereIsStillNotFound) {
+  const PPOutcome out = PPFixture().source("#include <absent.h>\n").run();
+  EXPECT_TRUE(out.hasError("pp-include-not-found"));
+  EXPECT_FALSE(out.hasError("pp-include-unreadable"));
+}
+
+// --- system headers ---------------------------------------------------------
+//
+// `-isystem` is not "another `-I`": it is `-I` plus "and do not blame me for
+// what is in there". The difference is only visible on a diagnostic, so that is
+// what these assert -- and they assert both halves, because a filter that
+// swallowed errors too would look identical on the warning test alone.
+
+TEST(IncludeTest, AWarningInASystemHeaderIsSuppressed) {
+  TempDir dir;
+  dir.write("w.h", "#warning vendored\nx\n");
+
+  const PPOutcome plain = PPFixture().source("#include <w.h>\n").includeDir(dir.path()).run();
+  EXPECT_TRUE(plain.hasWarning("pp-warning-directive"));
+  EXPECT_TRUE(plain.hasReportedWarning("pp-warning-directive"));
+
+  const PPOutcome system = PPFixture().source("#include <w.h>\n").systemDir(dir.path()).run();
+  // Collected, then dropped at the report step: both facts, because they are
+  // what tells a `systemDir` that stopped working from one that never applied.
+  EXPECT_TRUE(system.hasWarning("pp-warning-directive"));
+  EXPECT_FALSE(system.hasReportedWarning("pp-warning-directive"));
+}
+
+TEST(IncludeTest, AnErrorInASystemHeaderIsNotSuppressed) {
+  TempDir dir;
+  dir.write("bad.h", "#error broken header\n");
+  const PPOutcome out = PPFixture().source("#include <bad.h>\n").systemDir(dir.path()).run();
+  EXPECT_TRUE(out.hasError("pp-error-directive"));
+}
+
+TEST(IncludeTest, TheSystemListIsSearchedAfterEveryIncludeDirectory) {
+  TempDir dir;
+  const std::string quoted = dir.mkdir("quoted");
+  const std::string system = dir.mkdir("system");
+  dir.write("quoted/same.h", "from_quote\n");
+  dir.write("system/same.h", "from_system\n");
+  // Same name in both lists: `-I` wins, and the file that is found is therefore
+  // *not* a system header, so a warning in it still shows.
+  const PPOutcome out =
+      PPFixture().source("#include <same.h>\n").includeDir(quoted).systemDir(system).run();
+  EXPECT_TRUE(out.errors.empty());
+  EXPECT_EQ(out.concat(), "from_quote");
+}
+
+TEST(IncludeTest, PragmaSystemHeaderMarksTheRestOfTheFile) {
+  TempDir dir;
+  // Through `-I`, so nothing but the pragma can mark it.
+  dir.write("g.h", "#pragma GCC system_header\n#warning inside\nx\n");
+  const PPOutcome out = PPFixture().source("#include <g.h>\n").includeDir(dir.path()).run();
+  EXPECT_TRUE(out.hasWarning("pp-warning-directive"));
+  EXPECT_FALSE(out.hasReportedWarning("pp-warning-directive"));
+}
+
+TEST(IncludeTest, PragmaSystemHeaderOnlyCoversWhatFollowsIt) {
+  TempDir dir;
+  // The warning is written *above* the pragma, so the region the pragma opens
+  // does not contain it: "from here on" is not "this whole file".
+  dir.write("g.h", "#warning above\n#pragma GCC system_header\n#warning below\nx\n");
+  const PPOutcome out = PPFixture().source("#include <g.h>\n").includeDir(dir.path()).run();
+  EXPECT_TRUE(out.hasReportedWarning("pp-warning-directive"));
+  EXPECT_EQ(out.reportedWarnings.size(), 1u);
+}
+
+TEST(IncludeTest, AnUnknownGccPragmaIsStillUnknown) {
+  // `#pragma GCC ...` is matched only for the one spelling that has a meaning
+  // here; the rest must not become a silent no-op.
+  TempDir dir;
+  dir.write("g.h", "#pragma GCC nonsense\nx\n");
+  const PPOutcome out =
+      PPFixture().source("#include <g.h>\n").includeDir(dir.path()).warnUnknownPragma().run();
+  EXPECT_TRUE(out.hasReportedWarning("pp-unknown-pragma"));
+}
+
 } // namespace
 } // namespace minc::test

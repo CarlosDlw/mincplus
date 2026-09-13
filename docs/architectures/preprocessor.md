@@ -493,7 +493,24 @@ environment is not reproducible):
 
 Each entry carries a `system` flag: diagnostics inside a system header are
 suppressed unless enabled, which is market-standard behavior and the reason the
-distinction exists.
+distinction exists. `-isystem` is therefore not a second `-I`: it is `-I` plus
+"and do not blame me for what is in there". `#pragma GCC system_header` marks the
+rest of a file the same way, from the pragma to the end of that file and no
+earlier, so a warning written above it is still the reader's to fix. Errors are
+never suppressed -- only warnings.
+
+**Existence is not readability, and `__has_include` asks the first.** The
+operator is answered by the resolver's `exists`, which walks the same search
+order the `#include` would and stops there: it does not read, lex or remember
+anything. Answering it by opening the file looks equivalent and is not. A header
+that is present but whose bytes cannot be used -- unreadable mode, past the
+source-size limit, not valid UTF-8 -- would answer *no*, the guarded `#include`
+would be skipped, and the real problem would never be reported: a silent wrong
+answer, which is the kind worth the most care. It would also charge the bytes it
+read to an inclusion that may never happen. So a failed `#include` distinguishes
+its two causes too: `pp-include-not-found` means the search list resolved
+nothing, and `pp-include-unreadable` means it resolved a file that could not be
+read. They send the reader to different places, so they are different codes.
 
 **File identity.** `#pragma once` and the multiple-include optimization need to
 know "have I already read *this* file", and a path string is not an identity:
@@ -761,7 +778,7 @@ stage-level view of one file.
 | Claim | Checked by |
 | --- | --- |
 | Macro replacement matches the standard | a corpus per rule: rescanning, blue paint, the `foo(foo) (2)` case, `#`/`##` operand rules, placemarkers, empty arguments, `__VA_OPT__`, `defined`, nested conditionals |
-| ...and matches the market | **not yet run**: a differential test against the system preprocessor (`clang -E` for the C-like cases, `gcc -E` for the GNU ones) over a macro-only corpus. The individual rules are pinned by hand instead; this is the harness that would catch the ones nobody thought to write down |
+| ...and matches the market | **run**: `tests/unit/pp/differential_test.cc` preprocesses a curated standard-C macro corpus through this preprocessor and through the system one (`cc`/`gcc`/`clang`, overridable with `MINC_REFERENCE_CC`) and requires the two token sequences to be equal. Spacing and line markers are not compared -- the two legitimately disagree about those -- and a machine with no reference compiler skips the check rather than failing it. The one input the two do *not* agree on is recorded as its own test: line splicing, which [`lexer.md` decision 4](lexer.md) keeps out of the lexical grammar |
 | Expansion terminates | a bomb corpus (`A → B B`, nested `##`, self-referential guards) where every case must diagnose within a budgeted time |
 | The bounds are bounds | one case per limit that must produce its diagnostic, and a test that the budget is checked *before* the allocation (a hostile input cannot make the process allocate past it) |
 | No recursion without a guard | deeply nested `#if`, deep `#include` chains, deep macro recursion, run under the sanitizer preset |
@@ -771,12 +788,12 @@ stage-level view of one file.
 | The guard optimization is safe | a guarded header included twice produces the same output as with the optimization disabled (the test runs both and diffs) |
 | The record is complete | every directive in the corpus appears in the record with its span and kind; every expansion site's recorded range maps back to the frame it came from |
 
-The differential test is the strongest of these and the one most worth the
-effort: it is what catches "we implemented what we thought the standard said"
-in the corners that no one reads, and it is cheap because `cc -E` and
-`clang -E` are already on the machine in CI. It is the one row in that table
-without a check behind it, and the honest reading of this document is that the
-rules it *does* claim are verified individually rather than in bulk.
+The differential test is the strongest of these and was worth the effort: it is
+what catches "we implemented what we thought the standard said" in the corners
+that no one reads, and it is cheap because `cc -E` and `clang -E` are already on
+the machine in CI. Writing it paid for itself on the first run by finding the one
+divergence above -- a missing *lexical* rule that every hand-written
+preprocessing test was, by construction, unable to see.
 
 ## What the implementation corrected
 

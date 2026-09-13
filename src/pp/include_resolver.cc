@@ -79,47 +79,62 @@ IncludeResolver::cached(const support::FileIdentity& identity) const {
   return it == files_.end() ? std::nullopt : std::optional<support::FileId>(it->second);
 }
 
-support::Fallible<IncludeOpen> IncludeResolver::open(const std::string& name, bool angle,
-                                                     const std::string& fromDir, bool includeNext) {
-  const std::vector<std::string> order = searchOrder(fromDir, angle, includeNext);
-
-  std::string chosen;
-  bool choseSystem = false;
+std::optional<IncludeResolver::Resolved> IncludeResolver::resolvePath(const std::string& name,
+                                                                      bool angle,
+                                                                      const std::string& fromDir,
+                                                                      bool includeNext) const {
   // An absolute path in the directive names one file and no search happens; the
   // protection for `#include "/etc/passwd"` is that it is resolved, recorded and
   // bounded, not that it is forbidden.
-  if (support::isAbsolutePath(name) && support::isRegularFile(name)) {
-    chosen = name;
-  } else {
-    std::size_t quoteCount = lists_.quote.size();
-    for (std::size_t i = 0; i < order.size() && chosen.empty(); ++i) {
-      const std::string candidate = support::joinPath(order[i], name);
-      if (!support::isRegularFile(candidate)) {
-        continue;
-      }
-      chosen = candidate;
-      // Entries past the quote+current-directory prefix are system entries.
-      const std::size_t quotePrefix = (angle ? 0U : 1U) + quoteCount;
-      choseSystem = i >= quotePrefix;
+  if (support::isAbsolutePath(name)) {
+    if (support::isRegularFile(name)) {
+      return Resolved{name, /*isSystem=*/false};
     }
+    return std::nullopt;
   }
 
-  if (chosen.empty()) {
+  const std::vector<std::string> order = searchOrder(fromDir, angle, includeNext);
+  // Entries past the quote list (and the including file's own directory, which
+  // the `""` form puts in front of it) are system entries.
+  const std::size_t quotePrefix = (angle ? 0U : 1U) + lists_.quote.size();
+  for (std::size_t i = 0; i < order.size(); ++i) {
+    const std::string candidate = support::joinPath(order[i], name);
+    if (support::isRegularFile(candidate)) {
+      return Resolved{candidate, /*isSystem=*/i >= quotePrefix};
+    }
+  }
+  return std::nullopt;
+}
+
+bool IncludeResolver::exists(const std::string& name, bool angle, const std::string& fromDir,
+                             bool includeNext) const {
+  return resolvePath(name, angle, fromDir, includeNext).has_value();
+}
+
+support::Expected<IncludeOpen, IncludeFailure> IncludeResolver::open(const std::string& name,
+                                                                     bool angle,
+                                                                     const std::string& fromDir,
+                                                                     bool includeNext) {
+  const std::optional<Resolved> found = resolvePath(name, angle, fromDir, includeNext);
+  if (!found.has_value()) {
     std::string message = "include file '" + name + "' not found";
+    const std::vector<std::string> order = searchOrder(fromDir, angle, includeNext);
     if (!order.empty()) {
       message += "; searched:";
       for (const std::string& dir : order) {
         message += " " + dir;
       }
     }
-    return support::makeUnexpected<std::string>(std::move(message));
+    return support::makeUnexpected(
+        IncludeFailure{IncludeFailureKind::NotFound, std::move(message)});
   }
 
+  const std::string& chosen = found->path;
   const support::FileIdentity identity = support::identifyFile(chosen);
   IncludeOpen result;
   result.path = chosen;
   result.dir = support::directoryOf(chosen);
-  result.isSystem = choseSystem;
+  result.isSystem = found->isSystem;
   result.identity = identity;
 
   if (const std::optional<support::FileId> known = cached(identity)) {
@@ -131,7 +146,10 @@ support::Fallible<IncludeOpen> IncludeResolver::open(const std::string& name, bo
 
   support::Fallible<support::FileId> id = session_->loadFromDisk(chosen);
   if (!id) {
-    return support::makeUnexpected<std::string>(id.error());
+    // The file is there and the search list did its job; what failed is reading
+    // it. Saying "not found" here would send the user to fix their include path.
+    return support::makeUnexpected(
+        IncludeFailure{IncludeFailureKind::Unreadable, std::move(id.error())});
   }
   result.file = id.value();
   result.read = true;

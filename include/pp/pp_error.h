@@ -63,6 +63,7 @@ enum class PPErrorCode : std::uint8_t {
 
   // Includes.
   IncludeNotFound,       // nothing on the search list resolved the path
+  IncludeUnreadable,     // the path resolved, but the file's bytes cannot be loaded
   IncludeSelfReference,  // the include chain names this file again
   IncludeDepthExceeded,  // past `support::kMaxIncludeDepth`
   IncludeBudgetExceeded, // past `support::kMaxIncludesPerUnit`

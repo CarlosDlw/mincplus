@@ -32,6 +32,7 @@
 
 #include "lex/token_stream.h"
 #include "pp/pp_token.h"
+#include "support/expected/expected.h"
 #include "support/expected/fallible.h"
 #include "support/fs/fs.h"
 #include "support/intern/sym_id.h"
@@ -45,6 +46,22 @@ namespace minc::pp {
 struct IncludeSearchLists {
   std::vector<std::string> quote;  // `-I`
   std::vector<std::string> system; // `-isystem`, and the target's built-in list
+};
+
+// Why an include did not produce a file.
+//
+// The two cases answer different questions -- "is the path on the search list?"
+// and "can the bytes that are there be used?" -- and collapsing them would tell
+// a user their path is wrong when it is not, which is the expensive kind of
+// wrong. The code is carried alongside the message so a tool can key on it.
+enum class IncludeFailureKind : std::uint8_t {
+  NotFound,   // nothing on the search list resolved the path
+  Unreadable, // the path resolved, but the file's bytes cannot be loaded
+};
+
+struct IncludeFailure {
+  IncludeFailureKind kind = IncludeFailureKind::NotFound;
+  std::string message;
 };
 
 struct IncludeOpen {
@@ -70,8 +87,23 @@ public:
   // file, used for the `""` form; `includeNext` starts the search *after* the
   // directory `fromDir` was found in. The error is a human-readable message
   // naming the file and the directories that were searched.
-  [[nodiscard]] support::Fallible<IncludeOpen> open(const std::string& name, bool angle,
-                                                    const std::string& fromDir, bool includeNext);
+  [[nodiscard]] support::Expected<IncludeOpen, IncludeFailure>
+  open(const std::string& name, bool angle, const std::string& fromDir, bool includeNext);
+
+  // Whether `name` resolves on the search list `open` would use, **without
+  // reading, lexing, or remembering anything**.
+  //
+  // `__has_include` asks a yes/no question, and answering it by opening the file
+  // is wrong in two ways. A header that exists but cannot be read -- unreadable
+  // mode, past the source-size limit, not valid UTF-8 -- would answer "no", and
+  // the guarded `#include` would then be skipped, so nobody ever sees the real
+  // problem: a silent wrong answer, which is the kind worth the most care. And
+  // the bytes it read would be charged to an inclusion that may never happen.
+  //
+  // Both this and `open` go through one `resolvePath`, so "the same search order"
+  // is a property of the code rather than a promise in a comment.
+  [[nodiscard]] bool exists(const std::string& name, bool angle, const std::string& fromDir,
+                            bool includeNext) const;
 
   // `#pragma once`.
   void markOnce(const support::FileIdentity& identity) {
@@ -108,8 +140,19 @@ public:
   void clear();
 
 private:
+  // A file the search list points at, before anything has been done with it.
+  struct Resolved {
+    std::string path;
+    bool isSystem = false;
+  };
+
   [[nodiscard]] std::vector<std::string> searchOrder(const std::string& fromDir, bool angle,
                                                      bool includeNext) const;
+  // The one place that decides which file a directive names. `open` reads what
+  // this returns; `exists` only looks at whether it returned.
+  [[nodiscard]] std::optional<Resolved> resolvePath(const std::string& name, bool angle,
+                                                    const std::string& fromDir,
+                                                    bool includeNext) const;
   [[nodiscard]] std::optional<support::FileId> cached(const support::FileIdentity& identity) const;
 
   support::Session* session_;

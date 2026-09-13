@@ -135,6 +135,7 @@ void Preprocessor::reset() {
   outputOrigin_.clear();
   lexed_.clear();
   headerNames_.clear();
+  systemRegions_.clear();
   lastOrigin_ = support::Span{};
   wroteSeparator_ = false;
   scratch_.clear();
@@ -295,6 +296,21 @@ PPToken Preprocessor::take() {
   }
 }
 
+void Preprocessor::markSystemHeader(support::FileId file, std::uint32_t fromOffset) {
+  for (support::Span& region : systemRegions_) {
+    if (region.file == file) {
+      // Already a system header, and from further up: from the start of the file
+      // the pragma has nothing to add, and from below it the earlier start is
+      // the one that is true.
+      region.begin = std::min(region.begin, fromOffset);
+      return;
+    }
+  }
+  const support::SourceFile* source = session_->sources().find(file);
+  systemRegions_.push_back(
+      support::Span{file, fromOffset, source == nullptr ? fromOffset : source->size()});
+}
+
 void Preprocessor::settle() {
   // A live expansion is not a file boundary: whatever it has left to produce
   // comes first, and the file it came from must stay on the stack until it is
@@ -356,6 +372,10 @@ void Preprocessor::pushFile(support::FileId file, std::string path, std::string 
   // them about nothing.
   frame.identity = identity;
   frame.isSystem = isSystem;
+  if (isSystem) {
+    // The whole file: `-isystem` says so before a byte is read.
+    markSystemHeader(file, 0);
+  }
   frame.stream =
       std::make_shared<const lex::TokenStream>(lex::TokenStream::lex(file, source->text));
   lexed_.push_back(frame.stream);
@@ -907,6 +927,7 @@ PPResult Preprocessor::run(support::FileId mainFile) {
   result.origins = std::move(outputOrigin_);
   result.lexed = std::move(lexed_);
   result.headerNames = std::move(headerNames_);
+  result.systemRegions = std::move(systemRegions_);
   // The lexer view of the same output. Flags are dropped: they describe the
   // bytes as they were lexed, and these tokens were not lexed here.
   result.stream.reserve(result.tokens.size() + 1U);

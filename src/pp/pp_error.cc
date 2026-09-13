@@ -15,7 +15,7 @@ namespace {
 // The count is explicit so a code added to the enum without a row -- or a row
 // added twice -- is a compile error here rather than a hole the tests have to
 // find.
-constexpr std::array<PPErrorCodeInfo, 32> kPPErrorCodeInfos{{
+constexpr std::array<PPErrorCodeInfo, 33> kPPErrorCodeInfos{{
     // NOLINT(readability-identifier-naming)
     {PPErrorCode::InvalidDirective, "pp-invalid-directive"},
     {PPErrorCode::UnknownPragma, "pp-unknown-pragma"},
@@ -42,6 +42,7 @@ constexpr std::array<PPErrorCodeInfo, 32> kPPErrorCodeInfos{{
     {PPErrorCode::StrayHashOperator, "pp-stray-hash"},
     {PPErrorCode::InvalidPragmaOperand, "pp-invalid-pragma-operand"},
     {PPErrorCode::IncludeNotFound, "pp-include-not-found"},
+    {PPErrorCode::IncludeUnreadable, "pp-include-unreadable"},
     {PPErrorCode::IncludeSelfReference, "pp-include-self-reference"},
     {PPErrorCode::IncludeDepthExceeded, "pp-include-depth"},
     {PPErrorCode::IncludeBudgetExceeded, "pp-include-budget"},

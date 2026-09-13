@@ -51,6 +51,10 @@ struct CliOptions {
   std::vector<std::string> defines;
   std::vector<std::string> undefines;
   std::vector<std::string> includeDirs;
+  // `-isystem dir`: searched after every `-I`, and the files found there are
+  // *system headers*, which means warnings in them are suppressed. The order of
+  // the two lists is meaning, so they are kept apart rather than concatenated.
+  std::vector<std::string> systemDirs;
   // `--defines`, `--includes`, `--deps`: what `pp` should print. Not a single
   // enum, because asking for two of them at once is meaningful.
   bool showDefines = false;

@@ -104,6 +104,23 @@ CliOptions parseArgs(int argc, const char* const* argv) {
         opts.hideTrivia = true;
         continue;
       }
+      // `-isystem dir` (or `-isystemdir`, which GCC also accepts). It has to be
+      // matched before the single-letter options below: `-i` is not one of them,
+      // so without this it would be an unrecognized option.
+      if (arg == "-isystem" || arg.rfind("-isystem", 0) == 0) {
+        std::string value(arg.substr(8));
+        if (value.empty()) {
+          if (i + 1 < argc) {
+            value = argv[i + 1] != nullptr ? argv[++i] : "";
+          }
+        }
+        if (value.empty()) {
+          opts.error = "option '-isystem' needs a value";
+          return opts;
+        }
+        opts.systemDirs.push_back(std::move(value));
+        continue;
+      }
       // `-D`/`-U`/`-I` take a value, joined or separate. Both spellings are
       // accepted because half the world writes `-DFOO=1` and the other half
       // `-D FOO=1`, and a compiler that accepts only one is a paper cut.

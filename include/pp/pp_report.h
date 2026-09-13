@@ -48,12 +48,18 @@ namespace minc::pp {
                                          const ExpansionTable& expansions, support::DiagBag& diags,
                                          const support::Interner* symbols = nullptr);
 
-// The same, at warning severity. Kept separate rather than a severity argument
-// because the preprocessor's two output vectors already carry the distinction,
-// and a call site that has to choose invites a wrong choice.
+// The same, at warning severity, except that a warning located in a system
+// header is dropped rather than reported: `systemRegions` is
+// `PPResult::systemRegions`, and the files listed there are the ones the user
+// did not write and cannot fix. Errors are never filtered this way.
+//
+// Kept separate from `reportPPErrors` rather than a severity argument because
+// the preprocessor's two output vectors already carry the distinction, and a
+// call site that has to choose invites a wrong choice.
 [[nodiscard]] std::size_t reportPPWarnings(std::span<const PPError> warnings,
                                            const ExpansionTable& expansions,
                                            support::DiagBag& diags,
-                                           const support::Interner* symbols = nullptr);
+                                           const support::Interner* symbols = nullptr,
+                                           std::span<const support::Span> systemRegions = {});
 
 } // namespace minc::pp

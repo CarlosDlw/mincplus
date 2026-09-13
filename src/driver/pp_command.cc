@@ -249,6 +249,7 @@ int ppInputs(const PpRequest& request, std::ostream& out, std::ostream& err) {
     options.defines = request.defines;
     options.undefines = request.undefines;
     options.includes.quote = request.includeDirs;
+    options.includes.system = request.systemDirs;
     options.sourceDateEpoch = sourceDateEpoch();
 
     pp::Preprocessor preprocessor(session, std::move(options));
@@ -262,10 +263,14 @@ int ppInputs(const PpRequest& request, std::ostream& out, std::ostream& err) {
     // errors and counted as such: a bad byte is a failure whether it was in this
     // file or in a file this one pulled in.
     const std::size_t lexical = pp::reportLexedFileErrors(result, session.diags());
-    (void)pp::reportPPErrors(result.errors, preprocessor.expansions(), session.diags(),
-                             &session.symbols());
-    (void)pp::reportPPWarnings(result.warnings, preprocessor.expansions(), session.diags(),
-                               &session.symbols());
+    const std::size_t errors = pp::reportPPErrors(result.errors, preprocessor.expansions(),
+                                                  session.diags(), &session.symbols());
+    // Counted from what was *reported*, not from what was collected: a warning
+    // inside a system header is dropped, and a summary that still counted it
+    // would tell the reader to look for a diagnostic that is not there.
+    const std::size_t warnings =
+        pp::reportPPWarnings(result.warnings, preprocessor.expansions(), session.diags(),
+                             &session.symbols(), result.systemRegions);
 
     if (request.showDefines) {
       printDefines(preprocessor, session, out);
@@ -283,7 +288,7 @@ int ppInputs(const PpRequest& request, std::ostream& out, std::ostream& err) {
       // The count matches what is printed below: trivia is in the stream, not in
       // the count, so the header cannot promise a number the table does not show.
       out << "# " << file->path << ": " << significantCount(result) << " tokens, "
-          << result.errors.size() << " error(s), " << result.warnings.size() << " warning(s)\n";
+          << (lexical + errors) << " error(s), " << warnings << " warning(s)\n";
       printTokens(preprocessor, result, session, out);
     }
     out.flush();
@@ -292,7 +297,7 @@ int ppInputs(const PpRequest& request, std::ostream& out, std::ostream& err) {
       err << renderer.renderAll(session.diags());
       err.flush();
     }
-    if (lexical != 0 || !result.errors.empty()) {
+    if (lexical != 0 || errors != 0) {
       failed = true;
     }
   }
@@ -310,6 +315,7 @@ int runPp(const CliOptions& options) {
   request.defines = splitDefines(options.defines);
   request.undefines = options.undefines;
   request.includeDirs = options.includeDirs;
+  request.systemDirs = options.systemDirs;
   request.showDefines = options.showDefines;
   request.showIncludes = options.showIncludes;
   request.showDeps = options.showDeps;

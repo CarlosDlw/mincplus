@@ -140,6 +140,12 @@ struct PPResult {
   // used -- `#include "c:\dir\x.h"` would draw an invalid-escape error on valid
   // code. `reportLexedFileErrors` consults this instead.
   std::vector<support::Span> headerNames;
+  // Where the run was inside a *system header*: a file found through
+  // `-isystem`, or a file that said `#pragma GCC system_header`. Each region is
+  // "from this offset to the end of that file", so a pragma part-way down a file
+  // says exactly what it means. Warnings located in one of these are dropped;
+  // errors are not.
+  std::vector<support::Span> systemRegions;
   std::vector<PPError> errors;
   std::vector<PPError> warnings;
   support::FileId mainFile = support::kInvalidFile;
@@ -417,6 +423,14 @@ private:
   std::vector<std::shared_ptr<const lex::TokenStream>> lexed_;
   // Spans read as header-names; becomes `PPResult::headerNames`.
   std::vector<support::Span> headerNames_;
+  // System-header regions; becomes `PPResult::systemRegions`. Kept earliest-first
+  // per file, because "the whole file" and "from this line on" are the same
+  // region once the earlier start wins.
+  std::vector<support::Span> systemRegions_;
+  // Marks `file` as a system header from `fromOffset` on. Idempotent and taking
+  // the earliest start, so a file included twice through a system directory and
+  // then marked again by the pragma is one region.
+  void markSystemHeader(support::FileId file, std::uint32_t fromOffset);
   // Spellings of synthesized tokens, indexed by `PPToken::scratch`. A deque so
   // the views handed out by `spelling` stay valid as more are added.
   std::deque<std::string> scratch_;

@@ -17,6 +17,11 @@ constexpr const char* kOptionsBlock =
     "Options:\n"
     "  -h, --help       Print this help and exit\n"
     "  -V, --version    Print version information and exit\n"
+    "  -D name[=body]   Define a macro before the file is read\n"
+    "  -U name          Undefine a macro; applied after every -D\n"
+    "  -I dir           Add a directory to the include search list\n"
+    "  -isystem dir     Like -I, after every -I, but a file found there is\n"
+    "                   a system header: warnings in it are suppressed\n"
     "  --no-trivia      Omit whitespace and comments from dump output\n"
     "  --               Treat every following argument as a file, not an option\n";
 

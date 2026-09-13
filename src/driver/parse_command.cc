@@ -75,6 +75,7 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
     ppOptions.defines = request.defines;
     ppOptions.undefines = request.undefines;
     ppOptions.includes.quote = request.includeDirs;
+    ppOptions.includes.system = request.systemDirs;
     pp::Preprocessor preprocessor(session, std::move(ppOptions));
 
     // Cleared per file so the counts below belong to this input alone and the
@@ -86,7 +87,7 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
     (void)pp::reportPPErrors(result.errors, preprocessor.expansions(), session.diags(),
                              &session.symbols());
     (void)pp::reportPPWarnings(result.warnings, preprocessor.expansions(), session.diags(),
-                               &session.symbols());
+                               &session.symbols(), result.systemRegions);
 
     const lex::TokenStream stream = pp::preprocessedStream(result);
     const syntax::SyntaxTree* tree = store.parse(stream, file->revision);
@@ -124,6 +125,7 @@ int runParse(const CliOptions& options) {
   request.defines = splitDefines(options.defines);
   request.undefines = options.undefines;
   request.includeDirs = options.includeDirs;
+  request.systemDirs = options.systemDirs;
   request.showTrivia = !options.hideTrivia;
   // Color is decided per stream: a redirected stdout must stay clean even when
   // the terminal the user is watching can render colors on stderr.

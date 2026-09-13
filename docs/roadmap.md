@@ -76,11 +76,27 @@ always-on budget, and provenance survives expansion.
 - [x] `_Pragma("...")`, the operator form of `#pragma`: it produces no token
       and is routed through the same handler as the directive, so
       `_Pragma("once")` elides a second include exactly as `#pragma once` does
-- [ ] `-isystem`, and the `#pragma GCC system_header` semantics that go with it
+- [x] `-isystem`, and the `#pragma GCC system_header` semantics that go with it:
+      a search list of its own, and warnings -- never errors -- inside a system
+      region dropped at the report step
+- [x] `__has_include` answers about the search list without reading the file, so
+      a header that exists but cannot be read is reported by the `#include`
+      itself instead of silently taking the `#else` branch
+- [x] `pp-include-unreadable`: a path that resolved to a file whose bytes cannot
+      be used is not the same error as a path nothing resolved
 - [ ] Target/ABI predefined macros (`__LP64__`, type widths) — they need the
       type table, so they land with sema
-- [ ] Differential test against `cc -E` / `clang -E` over a curated macro corpus.
-      The strongest single check in the design and the one still missing
+- [x] Differential test against `cc -E` / `clang -E` over a curated macro corpus
+      (`tests/unit/pp/differential_test.cc`): 16 standard-C inputs compared token
+      for token against the reference, skipped -- not failed -- where no
+      reference compiler exists
+- [ ] Line splicing (C's phase 2): a `\` at end of line is currently an
+      `Invalid` token, so a macro definition cannot continue onto the next line.
+      The differential test is what made the cost of [`lexer.md` decision
+      4](architectures/lexer.md) visible -- `#define X a \` + newline is how
+      macros are ordinarily written, and every C-family preprocessor accepts it.
+      Carrying it into the lexer costs a spelling that is no longer a contiguous
+      slice of the source, which is why it is its own task rather than a fix
 - [ ] Reserved with the decision recorded, not accepted yet: `#embed`
 - [ ] `startup/deprecated/overloadable`-style vendor pragmas are parsed and
       preserved, never interpreted
