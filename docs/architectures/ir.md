@@ -14,19 +14,37 @@ operation, `rustc`'s split between a backend-agnostic codegen layer and
 `rustc_codegen_llvm` (and the reason `Layout`/`FnAbi` exist as a *shared* source
 of ABI truth), Clang's `CodeGenModule`/`CodeGenFunction` and the `LValue`/`RValue`
 distinction it is built on, Swift's `IRGen`, Zig's LLVM backend, and the LLVM
-`HowToUseLLJIT` example that the `run` command is modelled on. The version
-installed and probed here is **22.1.8**, and the facts below that depend on the
-build configuration were read out of this machine's `LLVMConfig.cmake`, not
-assumed.
+`HowToUseLLJIT` example that the `run` command is modelled on. Every claim below
+about what LLVM *does* is quoted from this machine's `LangRef`: the declaration
+syntax of `load`/`store`/`alloca` and the fact that the alignment is **explicit
+in in-memory IR** ("Overestimating the alignment results in undefined
+behavior"), that `icmp` on pointers "compares the address bits ... as if they were
+integers", what `inbounds` requires of a `getelementptr`, and that
+`llvm.lifetime.start`/`end` take only the pointer. The version installed and
+probed here is **22.1.8**, as are the facts that depend on the build
+configuration (`LLVMConfig.cmake`, not assumed). The provenance side of the
+same `LangRef` — allocated objects, object lifetime, `noalias`, `captures`,
+and `ptrtoint` versus `ptrtoaddr` — is read in [`memory.md`](memory.md) and is
+deliberately not repeated here; that document owns the rules, this one owns what
+they are emitted *as*.
 
-**Status: planned; the front-end half has landed.** Nothing in `src/ir` exists
-yet. The one change this document asked of an earlier stage — § *The fourth fact
-nobody recorded*, plus the coercion record and the deferred-literal sweep it
-depends on — is **implemented and published by `sema`** (`sema.md`,
-*What the artifact publishes*): `TypedFile::coercions()`, `ExprInfo::opType`, and
-the guarantee that no node in the artifact carries a deferred literal type.
-What remains is the lowering itself, and it can be built against that contract
-rather than waiting for it.
+**Status: planned; the whole front end has landed.** Nothing in `src/ir` exists
+yet, and everything this document asked of an earlier stage is now
+**implemented and published by `sema`** (`sema.md`, *What the artifact
+publishes*): the coercion record and `ExprInfo::opType` (§ *The fourth fact
+nobody recorded*, § *The coercion record*), the guarantee that no node in the
+artifact carries a deferred literal type, the target as a canonical **triple**,
+and — stage one of [`memory.md`](memory.md), which is settled — the **access
+record**, one `AccessObligation` per dereference (§ *The access record*).
+
+That last one changes a line of this document rather than adding to it:
+`TypeKind::Pointer` is no longer a kind this stage refuses *by name*. It has a
+surface (`*T`, `&x`, `*p`, `p[i]`) and it maps to LLVM's `ptr`. What remains is
+the lowering itself, plus the parts of the memory model whose syntax does not
+exist yet (the checked layer, `expose`/`with_exposed_provenance`, `unaligned`
+and `volatile` accesses) — and the one thing this document owes that document:
+the **assumption list**, which is § *The assumption list* below and is enforced
+by a scan rather than by a sentence.
 
 ## Why LLVM, and what that decides
 
@@ -230,6 +248,87 @@ function and calls it at every seam. The test that keeps it honest is in §
 *Tests*: the record must cover every `(from, to)` pair `convertible` permits, and
 it is checked by enumeration, not by sampling.
 
+### The access record
+
+[`memory.md`](memory.md) makes the same argument for memory that
+§ *The fourth fact* makes for arithmetic, and it makes it from the other side:
+every access carries an obligation (inside a live object, at the type's
+alignment, over bytes that were written) and the compiler is allowed exactly the
+assumptions the program *stated*. The consequence for this stage is a second list
+of facts it must **read** rather than recompute — the memory half of the one
+above, and four items long:
+
+1. **the alignment of an access** — from the accessed type and the target's data
+   layout. Re-deriving it means a second copy of `sema`'s layout table, and LLVM
+   makes the stakes explicit: an overestimated `align` is *undefined behavior*,
+   not slow code.
+2. **whether the access is ordinary, unaligned or volatile** — three different
+   emitted shapes (`load`/`unaligned`, `load volatile`) that the tree's type does
+   not distinguish;
+3. **the type being accessed**, which is where the size comes from — the pointer
+   does not carry it, because LLVM's pointers are opaque;
+4. **the pointer's provenance**, which is not a fact about the address at all.
+
+`sema` publishes them, per access node, and the shipped shape is:
+
+```
+struct AccessObligation {
+  ast::AstId place;          // the `*p` or the `p[i]` the lowering is standing on
+  TypeId type;               // what is accessed: its size and its alignment
+  AccessKind kind;           // ordinary | unaligned | volatile
+  ProvenanceKind provenance; // object | foreign
+};
+```
+
+`TypedFile::accesses()` is the list and `accessAt(place)` is the question, and it
+is a **scan of a list that has one entry per dereference in the unit**, which the
+lowering asks once per dereference it lowers. That is the same shape as the
+coercion index and for the same reason: the record is written where the
+information exists and read where it is needed, and neither side holds a rule.
+
+What a record looks like on a real program, from `mincc check --ast` on
+`examples/009_pointers.mx`, is worth reading because of what is **not** in it:
+
+```
+# accesses 7
+  21  ordinary  foreign  i32
+  27  ordinary  foreign  i32
+  ...
+```
+
+Two fields are deliberately narrower than the model allows, because a stage can
+only publish what the grammar lets it see, and a value no input can produce is a
+value no test can pin:
+
+- **`kind` is `ordinary` alone.** `unaligned` and `volatile` arrive with the
+  syntax that asks for them; the enumeration grows with the keyword, and so do
+  the two consumers (the `align 1` access shape and the `volatile` access shape).
+- **`provenance` is `object | foreign`**, which is the *proof* a syntactic rule
+  can carry: `object` for the address of an object this unit named and moved only
+  by arithmetic since, `foreign` for everything the compiler cannot name — a
+  parameter, a value read from memory, a call's result. The rule is
+  **incomplete on purpose and errs in the only safe direction**, which is why
+  every `i32` through a parameter above is `foreign` even though the program
+  plainly means the caller's object: the compiler cannot see the caller, so it
+  assumes nothing. The `derived | exposed | with_exposed` split belongs to the
+  operations that join a pointer and an integer (stage three); when they land,
+  `foreign` refines into `exposed` and `with_exposed` and nothing else in the
+  record moves.
+
+The converse rule is the project's oldest one, and here it has a name: **an
+access node with no recorded obligation is a refusal, not a guess.** It is
+`ir-missing-obligation`, and it is an **ICE** — a bug in this compiler, not a
+statement about the user's program, because a program that type-checked cannot be
+missing one. A lowering that emitted an access with a guessed alignment or a
+guessed provenance would be exactly the second implementation of `sema`'s rules
+that this document exists to prevent.
+
+`ProvenanceKind` earns its place a second time in § *The checked build's guards*,
+where it decides *which half* of the checked build can answer at all — the module
+can check a `null`, an alignment and an `object`-provenance extent, and only a
+shadow memory can check the rest. That is a load-bearing decision hiding in a
+two-value enum, so it is stated here as well as there.
+
 ## The shape of the module
 
 `src/ir` is not one file. The split follows the pipeline's own seams and is the
@@ -239,13 +338,13 @@ same rule the rest of the compiler follows:
 | --- | --- |
 | `lower.h` / `lower.cc` | the entry point, the precondition check, the per-unit state (`IRUnit`), and the walk over the file's items |
 | `types.cc` | the single `TypeId → llvm::Type*` mapper, and the function-type mapper |
-| `values.h` | `Value` and `Place` — the two things an expression can evaluate to |
+| `values.h` | `Value` and `Place` — the two things an expression can evaluate to — and the exhaustive table over node kinds that produces each |
 | `declarations.cc` | globals, function declarations, linkage, names |
 | `function.cc` | one function: parameters, the entry block, the return, the `main` special case |
 | `stmt.cc` | statements: blocks, `if`/`else`, loops, jumps, returns |
-| `expr.cc` | expressions: the arithmetic, the coercions, the calls |
-| `runtime.cc` | the four checked operations (`/`, `%`, shift counts, `INT_MIN / -1`) |
-| `invariants.cc` | the post-lowering scan that proves the runtime contract holds |
+| `expr.cc` | expressions: the arithmetic, the coercions, the calls, and every access, read out of `TypedFile::accessAt` rather than decided |
+| `runtime.cc` | the four semantic guards (`/`, `%`, shift counts, `INT_MIN / -1`) and the checked build's module-statable access guards (null, alignment, an `object`-provenance extent) |
+| `invariants.cc` | the post-lowering scans: the runtime contract, the assumption list, and that every emitted alignment equals the record's |
 | `diag.h` | `IRDiagnostic` — this stage's errors as values, like every other stage |
 
 **One `IRUnit` owns everything LLVM for one translation unit: the
@@ -285,11 +384,12 @@ a compile error here rather than a silent gap.
 | `Float` | `float` / `double` / `x86_fp80` | see below |
 | `Str` | `ptr` | one private global per literal, NUL-terminated |
 | `Function` | `FunctionType` | parameter list from the store's parameter array |
+| `Pointer` | `ptr` | opaque: LLVM 22 has **one** pointer type, so the pointee is not in it (below) |
 | `IntLiteral`, `FloatLiteral` | **refused** | a decided type by the time `sema` is done; reaching here is an invariant break, not a case |
 | `Error` | **refused** | the precondition in § *What the stage receives* |
-| `Pointer`, `Array` | **refused by name** | reserved kinds, and the refusal is `ir-unsupported-type`, not a crash |
+| `Array` | **refused by name** | its syntax does not exist yet, and the refusal is `ir-unsupported-type`, not a crash |
 
-Three of those rows deserve more than a table cell.
+Four of those rows deserve more than a table cell.
 
 **`f80` is not a portable type.** It maps to `x86_fp80`, and on a target whose
 ABI has no 80-bit float that is either an unsupported type or a target-specific
@@ -297,6 +397,29 @@ substitution — LLVM will not paper over it. The mapping is therefore
 *triple-aware*, and the honest answer for now is that `f80` is supported where
 the triple says it is and refused where it says it is not. The lowering asks the
 target (the data layout, which arrived with the triple), not the host.
+
+**A pointer is `ptr`, and the pointee is not in the type at all.** LLVM 22's
+pointers are opaque: `*i32`, `*f64` and `*void` are the *same* `llvm::Type`. That
+is not a loss of information, it is a relocation of it, and where it goes is the
+record again. The pointee survives in exactly three places, every one of them
+read from the tree or from `AccessObligation` and none of them read out of the
+LLVM type:
+
+- the **element type of a `getelementptr`**, which is an explicit operand
+  (`getelementptr i32, ptr %p, i64 1`) precisely because the pointer does not
+  carry it — so `p + 1` and `p[1]` are the same instruction with the same element
+  type, and the stride is `sema`'s `sizeOf` of it;
+- the **index type**, which LLVM wants in the pointer index width — the same
+  width `sema` recorded as the conversion target of an index, so the lowering
+  reads `coercionAt(indexExpr, 1)` and `toInt64`/`toInt32` is not a decision it
+  makes;
+- the **access's size and alignment**, which come from `AccessObligation::type`
+  and from nowhere else (§ *The access record*).
+
+So `types.cc` is deliberately *not* where pointer semantics live. It is total on
+`TypeKind` and says only "a pointer is a pointer"; every question that needs the
+pointee is answered by the node the lowering is standing on, which is also what
+keeps `*void` from being a special case anywhere below this paragraph.
 
 **`i128` and `-Wconversion`.** The project builds with `-Wconversion` and
 `-Wsign-conversion` on, and LLVM's integer APIs are unsigned-heavy: widths,
@@ -307,11 +430,19 @@ or the gate fails. That is a feature: the narrowing is *stated* once per call
 site instead of being implicit.
 
 **Alignment and `bool` in memory.** `bool` is `i1` in a register, and `i1` is not
-a byte. Nothing in the current language takes the address of a `bool`, so the
-question does not arise yet — but it will the day `*` lands, and the answer is
-that a `bool` *object* is `i8` with a normalising store (`store i8 (zext i1)`)
-and a truncating load. Recorded here so the first pointer does not have to
-invent it.
+a byte. `*bool` is now expressible (`let p: *bool = &flag;`), so the question is
+live rather than hypothetical, and the answer is that a `bool` *object* is `i8`
+with a normalising store (`store i8 (zext i1)`) and a truncating load.
+
+The reason is `memory.md`'s access rule rather than taste. `store i1` and
+`load i1` are both legal, and `load i1` reads "at most one byte" — but what the
+*other seven* bits of that byte hold after a `store i1` is something the LangRef
+does not state, while the model does: every byte the access covers has been
+**written** (access rule 4), and a later `u8` load through a `*u8` is punning the
+model defines and must therefore see a defined byte. Storing the zext'd byte puts
+that in the instruction instead of relying on a padding rule the IR leaves open.
+So `i1` never appears in memory, only in a register; the instruction pair is
+`i8`, and `AccessObligation::type` for `*bool` is `bool` — size 1, align 1.
 
 ## Values and places
 
@@ -325,15 +456,32 @@ struct Place { llvm::Value* addr; TypeId type; }; // an address, and what lives 
 
 Everything that consumes an expression wants one or the other, and the two are
 never interchangeable: a `Value` has no address, and a `Place` has no value until
-it is loaded. Making the distinction explicit now, with only locals and
-parameters in the language, is what keeps assignment, `&`, `*`, arrays and
-`struct` from being a rewrite later: they are new producers of `Place`, not a
-new concept.
+it is loaded. Making the distinction explicit from the first day — when locals
+and parameters were the only places the language had — is what kept `&`, `*` and
+`p[i]` from being a rewrite, and it is what will keep arrays and `struct` from
+being one: they are new producers of `Place`, not a new concept.
 
-Today the rule is short — a `PathExpr` that denotes a binding is a `Place`
-(its `alloca`), everything else is a `Value` — and it is stated as a table over
-node kinds so that adding a producer is a one-line change with a compile error
-if it is forgotten.
+Today the table over node kinds has seven rows, and adding the next producer
+(`p.f`, when aggregates land) is a row with a compile error if it is forgotten:
+
+| Node | Evaluates to | How it is produced |
+| --- | --- | --- |
+| `PathExpr` naming a binding or a parameter | `Place` | its `alloca`; a parameter has one for the reason in § *Storage* |
+| `PathExpr` naming anything else (`true`, `false`, `null`, a function) | `Value` | a constant, or the function itself — **not** a place, which is why `&null` never reaches this table with an address |
+| `PrefixExpr` with `*` | `Place` | the operand *is* the address: `*p` produces `p`, and what lives there comes from the record |
+| `IndexExpr` `p[i]` | `Place` | a `getelementptr` in the pointee's element type, **without `inbounds`** unless the tree recorded a proof |
+| `PrefixExpr` with `&` | `Value` | a `Place` read as an address, and **no load**: `&x` is the `alloca` itself, which is why `&x` on a binding no path assigned is legal (`memory.md`, *Access*) |
+| `ParenExpr` | either | whatever its operand is, which is why `(*p) = 1` and `&(x)` need no rule of their own |
+| everything else | `Value` | computed, and never loadable |
+
+Two rows are the whole reason the distinction was worth paying for on day one,
+and both are decided by the record rather than by this table: **`*p` and `p[i]`
+are the only nodes that perform a memory access**, so they are the only two that
+ask `TypedFile::accessAt(node)` — and every other `Place` is reached without
+asking, because the language already proved it is there. A `Place` is never
+loaded implicitly: a consumer that wants a value asks for the load, and the load
+takes its **alignment from the obligation**, not from the pointer's type nor from
+LLVM's ABI default (§ *The assumption list*).
 
 ## Storage: `alloca` plus `mem2reg`
 
@@ -352,11 +500,57 @@ which is also what every C compiler emits and what a debugger expects. The
 `alloca`s go in the **entry block** and not where the declaration is, because a
 conditional `alloca` grows the frame on every execution.
 
+Three properties of the stack layout come from `memory.md` and not from LLVM's
+conventions, and each is stated because getting it wrong is invisible until an
+optimisation runs:
+
+- **One `alloca` per binding, each its own object**, and the alignment is
+  **stated explicitly**. LLVM's `alloca` takes an optional `align` and says that
+  without one "the target can choose to align the allocation on any convenient
+  boundary compatible with the type" — i.e. not necessarily the number `sema`'s
+  `alignOf` promised. The `alloca`'s alignment is the type's, from the store.
+- **A binding whose address is taken gets a `llvm.lifetime.start`/`end` pair**,
+  so LLVM can color disjoint storage together (`memory.md`, *Lifetime*). In LLVM
+  22 the intrinsics take only the pointer — `declare void @llvm.lifetime.start(ptr)`,
+  with no size operand — and an `alloca` whose pointer is passed to
+  `lifetime.start` is **initially dead** until that call executes, so the marker
+  goes immediately after the `alloca` in the entry block and its `end` where the
+  binding's scope ends.
+- **The checked build does not emit the `end`.** The marker is what creates
+  LLVM's dead-stack-object rule, and `memory.md` refuses that rule in both
+  directions: once the object is dead a load may fold to poison, which would
+  delete the load *and* the guard whose whole job is to report it. The checked
+  build keeps the object live so the check stays observable; the release build
+  takes the marker pair and the coloring.
+
+**LLVM may still merge two bindings' storage**, and `memory.md` says that is safe
+*because provenance is per allocation* — a pointer into the first binding keeps
+its provenance after the second is placed there, so a later access is a violation
+rather than an aliasing surprise. That is also the precise reason no `inbounds`
+may be emitted from arithmetic that is only *probably* in range (§ *The
+assumption list*): the pointer is dead-but-defined, and a promise it does not
+hold turns it into poison instead.
+
 ## The runtime contract, as code
 
 `sema.md`'s integer table is not advice; it is a specification of instructions
-the lowering must not emit. Three of its rows are LLVM behaviours that must be
-*taken away* rather than inherited:
+the lowering must not emit. `memory.md` adds a second specification of the same
+shape, and the two are **not the same class of thing**, so this document keeps
+them apart:
+
+| Class | What it is | When it is emitted |
+| --- | --- | --- |
+| **Semantic guard** | the language *defines* the result — a trap — so a program without it would not mean what the language says | **every build**, at every optimisation level |
+| **Checked-build guard** | the language calls the situation a *violation*; the guard is a diagnostic, not a definition | `-O0` and `-fcheck` only; the release build emits nothing |
+
+Conflating the two is the expensive mistake in both directions: a division guard
+left out of an `-O3` build changes the meaning of a correct program, and an
+access guard kept in the release build makes every pointer operation pay for a
+diagnostic nobody asked for. Class one is below, class two is
+§ *The checked build's guards*, and that is the one allowed to disappear.
+
+Three of `sema.md`'s rows are LLVM behaviours that must be *taken away* rather
+than inherited:
 
 | Language rule | What LLVM gives | What the lowering emits |
 | --- | --- | --- |
@@ -398,6 +592,85 @@ turned down when it chose a language with no undefined behaviour. The runtime
 *message* for a trap is a `runtime` module's business (`roadmap.md` § 11), not
 the lowering's: the lowering emits the trap, and a future `-fsanitize`-style or
 panic-handler mode replaces the callee behind it.
+
+### The checked build's guards
+
+`memory.md` states one obligation per access and then says, honestly, that
+violating it puts the *access* outside the model rather than making the program
+arbitrary. Those two facts decide this: a guard is not a semantics, it is the
+compiler reporting a violation at its site, and it lives behind a flag.
+
+Where each guard can come from is not a matter of taste — it is decided by the
+**provenance the record holds**, which is the second job that enum does:
+
+| Violation | Who can answer | What the check is |
+| --- | --- | --- |
+| `memory-null` | the module | the address against zero, for any non-zero access — the instruction already holds it |
+| `memory-misaligned` | the module | the address against `alignOf(access.type)`; both numbers are in the instruction |
+| `memory-out-of-object`, provenance `object` | the module | the base and the extent are the *tree's* (`&x`, `sizeOf`), and so is the reached offset |
+| `memory-out-of-object`, provenance `foreign` | the shadow memory | the module has no base to compare against |
+| `memory-uninitialized` | the shadow memory | a write map keyed by allocation |
+| `memory-dangling` | the shadow memory | the same map, plus the `lifetime` interaction in § *Storage* |
+| `memory-restrict-overlap` | the shadow memory | the annotation's meaning, checked at the call |
+
+The first three are `runtime.cc`'s, emitted **from the obligation** — which is
+the only way `expr.cc` may emit an access at all, so there is no path by which an
+access reaches the module unguarded. The rest need state a module cannot carry,
+which is why `memory.md` assigns them to the runtime; this stage's whole
+contribution is to *not delete* the shadow calls and to keep the object live.
+
+One asymmetry is deliberate: **the guard is emitted from the record, not proved
+away by this stage.** An access whose provenance is `object` and whose index is a
+constant in range is one the compiler *could* prove safe; the checked build
+guards it anyway, and the release build drops every guard at once. A checker that
+deletes the checks it can prove is a checker that stops reporting the day the
+proof has a bug — and `sema` has already shown the alternative works, since its
+static half (`check_flow.cc`) is a proof and this is not.
+
+## The assumption list, and the scan that reads it
+
+`memory.md` § *Not undefined* says the compiler "never hands the optimizer an
+assumption it did not state," and that the list of assumptions it *is* allowed is
+closed, lives in one file, and is read by a scan. This is that file and that
+list, and it is short on purpose — every row is something this stage may
+**never** emit, with the one exception named:
+
+| Assumption | Status | Why not |
+| --- | --- | --- |
+| `!tbaa`, `!alias.scope`, `!noalias`, `!invariant.group`, `!nontemporal` | **never** | memory has no effective type; aliasing is untyped, and each of these is an inferred promise (`memory.md`, decisions 3 and 9) |
+| `noalias` (the parameter attribute), `captures(...)` | **only from source** | a written `restrict` is the sole producer; today the syntax does not exist, so the module contains none. Never inferred. `captures(...)` waits for a proof scan over the body |
+| `inbounds` (and the `nusw` it implies) | **only with a recorded proof** | today: never. See below — this is the row with a mechanism to design |
+| `nsw`, `nuw` | **never** | the language defines wrap; class one of § *The runtime contract* |
+| `dereferenceable`, `dereferenceable_or_null`, `!nonnull`, `!noundef`, `range`, `nnan`, `ninf` | **never** | each is a promise that something is well-formed; the language's rules are what make it so, and a promise on top of a proof is a promise that outlives the proof |
+| `fast`, `reassoc`, `nnan`, `ninf`, `nsz`, `arcp`, `contract` on float ops | **never** | the language defines its float results; a fast-math flag licenses reassociation of a value the language named |
+| `undef` and `poison` as values | **never** | `memory.md`, decision 13 — "uninitialized" is a violation, not a licence |
+| `align N` on `load`/`store`/`alloca` | **always present, and scanned for equality** | not an assumption but a *claim*, and an overestimated one is UB (LLVM's own words); the scan compares every one against the record |
+
+**The `inbounds` row is the one that needs a mechanism rather than a ban.**
+`memory.md`, decision 10 says "no `inbounds` unless proved", and its § *How the
+claims above are checked* says "no `inbounds` without a **recorded proof**". The
+proof's home is therefore the typed tree, not this stage — the tree knows the
+object (`&x`), its extent (`sizeOf`) and a constant index (`hasIntValue`), and
+that is exactly the shape of a per-expression fact, like `opType`. Until that
+fact is published, the scan's rule is literally **"no `inbounds` in the module"**,
+which is today's honest state: with no aggregates and no arrays, the only
+provable `getelementptr` would be a zero offset, and LLVM already says a
+`getelementptr` with all-zero indices is inbounds by definition — so the promise
+would buy nothing and is not worth a second implementation of the analysis.
+
+Two mechanisms, and they fail differently:
+
+- **the table above is the enumeration.** `invariants.cc` exposes
+  `allModuleAssumptions()` in the shape of `sema`'s `allAccessKinds()`, and a
+  test asserts the scan visits every row — so *adding* an assumption is a
+  two-file change with a test, which is exactly the friction it should have;
+- **the scan runs on every module**, in debug and CI always and as `--verify-ir`
+  in release, because a rule about the shape of the emitted code that is not
+  checked is a comment.
+
+And the rule underneath both: **this list is the only place a new assumption may
+be written down.** A future feature that wants one adds a row, an argument for
+why the language states it, and the scan; it does not add an attribute.
 
 ## Signedness comes from the type
 
@@ -455,13 +728,26 @@ loop and asserts both agree about which loop a `break` belongs to.
 A `str` literal becomes **one private global per distinct spelling**, of type
 `[N x i8]`, NUL-terminated, with the value being a `ptr` to it. Two identical
 literals share a global; that is a module-level cache keyed by the interned
-symbol, not a per-title decision.
+symbol, not a per-literal decision.
 
-`str` is where the language meets the ABI without having a pointer type, and
-that is fine: LLVM's pointers are opaque, so `ptr` is a complete answer and no
-pointer *type* has to enter `.mx` for the IR to have one. The day `*` lands,
-`str` becomes `ptr` to `i8` in the language's own vocabulary too, and nothing in
-the lowering changes.
+That sharing is now a **contract rather than an optimisation**, and the change is
+worth naming: while `str` was the only indirect value and there was no `&`, two
+identical literals being one object or two was *unobservable*. With `&x` in the
+language the addresses are visible, so the deduplication is a promise the
+lowering has to keep, and a test asserts the module holds one global for two
+identical literals (`memory.md`, *Objects*).
+
+The global is an object like any other, so it is one of the three things that
+produce an object, it is `align 1` (its element type's alignment), and a global
+with no initializer is zero — the `.bss` rule of `memory.md`, decision 12, which
+today only the `str` globals exercise.
+
+`str` is where the language met the ABI before it had a pointer type, and the day
+`*` landed changed nothing here: LLVM's pointers are opaque, so `ptr` was already
+a complete answer and no pointer *type* had to enter `.mx` for the IR to have one.
+A `str` is a `ptr` to a private `[N x i8]`, `*u8` is the same `ptr` (`types.cc`
+says so), and the difference between them is entirely in which access rules the
+tree states about them.
 
 **What is deliberately not designed here: aggregates and the C ABI.** Passing a
 `struct` by value, returning one, variadics and `va_list` all need a calling
@@ -670,18 +956,18 @@ a consequence of this one.
 
 This is the section the rest of the document exists to support. The question is
 not "does the first version work" — it is "when methods on types, builtins,
-pointers, arrays, structs and `switch` arrive one at a time over the next year,
-what stops the IR from being quietly wrong". Five answers, and every one of them
-is *mechanical* rather than a matter of care:
+arrays, structs and `switch` arrive one at a time over the next year, what stops
+the IR from being quietly wrong". Six answers, and every one of them is
+*mechanical* rather than a matter of care:
 
 1. **A new node kind cannot be ignored.** The lowering switches over node kinds
    with no `default:`, and `-Wswitch` under `-Werror` turns a missing case into a
    build failure. Adding `SwitchStmt` to the grammar breaks `stmt.cc` on the
    next build, with a line number, before anyone can forget it.
-2. **A new type kind cannot be ignored.** The same for `TypeKind` in `types.cc`,
-   including the two kinds already reserved (`Pointer`, `Array`) — whose cases
-   exist today and produce `ir-unsupported-type`, so the day their syntax lands
-   the change is a *body*, not a `case`.
+2. **A new type kind cannot be ignored.** The same for `TypeKind` in `types.cc`.
+   `Pointer` has landed and is a body (`ptr`); `Array` is still a reserved kind
+   whose case exists today and produces `ir-unsupported-type`, so the day its
+   syntax lands the change is a *body*, not a `case`.
 3. **Coverage tests over the enumerations.** `parse::allNodeKinds()` exists for
    exactly this purpose (a kind added to the enum without a table row is caught
    by a test), and the same shape applies here: a test that walks every node kind
@@ -697,6 +983,13 @@ is *mechanical* rather than a matter of care:
    a `str` library call all arrive. They add an entry to one table; they do not
    reach into expression lowering, and an entry that is missing is a refusal by
    name rather than a wrong call.
+6. **A new memory rule cannot be informal.** An access's alignment, kind and
+   provenance come from one record with one reader (§ *The access record*), and
+   the assumptions this stage may hand the optimiser are a closed, enumerated,
+   scanned list (§ *The assumption list*). A memory rule that is not in one of
+   those two places is a rule this compiler does not implement — which is the
+   only state in which a rule can be *added* safely, because adding it is then a
+   row plus a test rather than an attribute nobody audits.
 
 And the one rule underneath all five, which is the project's oldest invariant
 applied to a new stage:
@@ -720,9 +1013,11 @@ The ladder, in the order it should be built:
    bug report.
 2. **Structural assertions on the IR text** where the property *is* textual: the
    module contains no `nsw`/`nuw` anywhere; every division is preceded by its
-   guard; two identical `str` literals compile to one global. These are the
-   sentences of § *The runtime contract* turned into string checks over
-   `Module::print`. They are brittle about *shape* and that is acceptable,
+   guard; no `inbounds`, no `!tbaa`, no `noalias` and no `undef`/`poison`
+   anywhere; every `load`/`store`/`alloca` carries an explicit `align`; two
+   identical `str` literals compile to one global. These are the sentences of
+   § *The runtime contract* and § *The assumption list* turned into string checks
+   over `Module::print`. They are brittle about *shape* and that is acceptable,
    because what they assert is a shape.
 3. **The coverage tests** of § *How this stays correct*: every node kind, every
    type kind, every operator tag, every conversion pair the language permits.
@@ -734,18 +1029,36 @@ The ladder, in the order it should be built:
    subset both languages mean the same way, which is most of the arithmetic, all
    of the control flow and every edge case in `sema.md`'s integer table. Without
    it, every rule in this compiler is only self-consistent.
-5. **The refusal tests.** A `Pointer` type, a reserved node kind, a poisoned
-   tree: each produces its named diagnostic and **no module**. "No module" is
-   part of the assertion, not an implementation detail — it is the property that
-   stops a half-built module from reaching a linker.
+5. **The refusal tests.** An `Array` type, a reserved node kind, a poisoned
+   tree, an access node with **no recorded obligation**: each produces its named
+   diagnostic and **no module**. "No module" is part of the assertion, not an
+   implementation detail — it is the property that stops a half-built module
+   from reaching a linker.
 6. **The target table against LLVM's own.** `sema`'s ABI table is stated by rule
    from the triple's components and cannot link LLVM to check itself; this stage
    can. One test walks every stated triple, builds an `llvm::Triple` and a
    `DataLayout` from it, and asserts the pointer size agrees with
-   `TargetInfo::pointerBits`, that `long double`'s width agrees with the data
+   `TargetInfo::pointerBits`,   that `long double`'s width agrees with the data
    layout's float layout, and that the component names this stage parsed are the
    ones LLVM parses. It is the one place the front end's target model can be
-   wrong without any test here noticing, so it is worth the dependency.
+   wrong without any test here noticing, so it is worth the dependency. It is
+   extended to `sizeof`/`alignof` for every type in the store, because the
+   pointer width is what `isize`, `usize` and every pointer access depend on.
+7. **The access record's enumeration test**, in the shape of `coerce_test.cc`:
+   one program per access kind and per provenance kind, an assertion that the
+   emitted shape is the recorded one, that `accessAt` answers `nullptr` for a
+   node that denotes no access, and that a `Place` denoting a binding is reached
+   without a record at all. Plus the property tests `memory.md` names: `p + n -
+   n == p` inside an object, `p[i] == *(p + i)` for every type in the store, and
+   `p1 - p2` consistency.
+8. **The scan's own tests**: a hand-built module that contains one banned
+   assumption, or a `load` whose `align` disagrees with the record, makes the
+   scan fail — and the enumeration test makes it fail if a *row* is added without
+   a check. A scan nothing can trip is a scan that stopped running.
+9. **The checked build's traps**, one per row of § *The checked build's guards*,
+   at `-O0` **and** with `-fcheck` at `-O2` — because a check the optimiser can
+   delete is not a check — plus the converse assertion that the release build's
+   module contains none of them.
 
 What is deliberately *not* a test: **golden IR files**. IR here is an internal
 format whose text changes when LLVM changes, a target changes or a comment
@@ -780,6 +1093,17 @@ other stages' artifacts are.
 | 19 | No deferred literal type survives `sema`; a sweep decides whatever a seam did not | A deferred type has no width, so it has no LLVM type at all. A sweep rather than a per-seam promise, so a path nobody has written yet cannot break the property |
 | 20 | A constant is materialised at its type's width, and the language defines that width's arithmetic to wrap | Truncating a folded constant to its type is the defined semantics, not a lossy shortcut; it is what makes `ConstantInt::get` safe to call with the operand's stored value |
 | 21 | The target's identity is the **canonical LLVM triple**, stated by `sema` | It is the string a `TargetMachine` is built from, so a private name for it would be a second spelling to translate and a place for the two to disagree; and the ABI facts derive from its components **by rule**, with a triple the table does not state refused rather than defaulted |
+| 22 | **The access record is the fourth fact the lowering may not re-derive** — alignment, kind, accessed type, provenance — read from `TypedFile::accessAt(node)` | The memory half of decision 3. An alignment re-derived here is a second copy of `sema`'s layout table, and an overestimated `align` is not slow code, it is UB (LLVM's own wording) |
+| 23 | **A pointer is `ptr`; the pointee is not in the LLVM type** — it survives only as the element type of a `getelementptr`, the index type, and the record's accessed type | LLVM 22's pointers are opaque, so the pointee has to live *somewhere*; putting it in the record is what keeps `types.cc` from becoming a second type system |
+| 24 | **`*p` and `p[i]` are the only nodes that consult the record**, and the `Place` producer table is exhaustive with no `default:` | They are the only two nodes that perform an access; a `Place` from a binding needs no permission because the language already proved it, and a new producer is a build error rather than a silent gap |
+| 25 | **Every `load`/`store`/`alloca` states its alignment explicitly**, from the record, and the overloads that omit it are banned | In-memory IR always carries one; omitted means "the ABI alignment for the target", and overestimated means UB. "Underestimating may produce less efficient code" is the safe direction, and it must be a decision |
+| 26 | **Two classes of guard: semantic and checked-build** | A guard the language *defines* (a trap) belongs in every build; a guard that *reports a violation* belongs to `-fcheck` (`-O0`). Conflating them either changes the meaning of an `-O3` program or taxes every release pointer operation |
+| 27 | **`ProvenanceKind` decides which half of the checked build can answer** | The module can check a null, an alignment and an `object`-provenance extent; the rest need a shadow memory. That is why `foreign` is not merely "the conservative answer" — it is the answer that moves the check into the runtime |
+| 28 | **No `inbounds` without a recorded proof**; today the scan's rule is "no `inbounds` at all" | The analogue of no-`nsw`. With no aggregates the only provable offset is zero, and LLVM already treats an all-zero-index `getelementptr` as inbounds — so the promise buys nothing and is not worth a second copy of the analysis |
+| 29 | **The assumption list is closed, enumerated in one file, and scanned**, and adding a row is a two-file change with a test | "No undefined behavior" is a slogan; a closed scanned list is a guarantee that fails in CI, and the friction is the point |
+| 30 | **`llvm.lifetime.start`/`end` for address-taken bindings; the checked build omits the `end`** | The markers let LLVM color disjoint storage; the marker is also what creates LLVM's dead-stack-load rule, which `memory.md` refuses, so the build whose job is to *report* the violation must keep the object live |
+| 31 | **`str` literal deduplication is a contract, not an optimisation** | `&x` makes two literals' addresses observable, so "one object or two" stopped being invisible. Stated now, because the day it matters is the day it is already wrong |
+| 32 | **A missing obligation is an ICE** (`ir-missing-obligation`), not a statement about the program | A program that type-checked cannot be missing one, so the only reading is "this compiler is wrong" — the same posture as a verifier failure and `sema`'s poison |
 
 ## Non-goals
 
@@ -794,6 +1118,11 @@ other stages' artifacts are.
 - **Aggregates, variadics and the C calling convention**, which belong to
   `src/cinterop` with their own record (§ *`str`, globals, and the ABI
   question*).
+- **The shadow-memory half of the checked build.** This stage emits the guards a
+  *module* can state (null, alignment, an `object`-provenance extent) and keeps
+  the object live so the rest stays observable; the write map, the liveness map
+  and the `restrict` overlap check are the runtime's, and `roadmap.md` § 11 owns
+  them.
 - **Unwinding, destructors and `goto`.** Each needs a block structure this
   structured lowering does not have, and each arrives with its own design.
 - **A JIT for cross targets**, and a REPL, which is a `driver` question that

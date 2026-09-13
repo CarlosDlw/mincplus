@@ -661,6 +661,15 @@ warnings inside them are dropped at the report step while errors are not.
   — no node of the artifact carries a deferred literal type, because such a type
   has no width and therefore no LLVM type at all.
 
+  The same rule now covers memory. `sema` publishes one **`AccessObligation` per
+  dereference** — the accessed type (and so the access's size and alignment, which
+  the lowerer may not re-derive: an overestimated LLVM `align` is undefined
+  behaviour, not slow code), the access kind, and a provenance it can *prove*,
+  `object` or `foreign`. That record is what `memory.md` requires before the first
+  `*` is lowered, and it is shipped with the pointer surface
+  (`*T`, `&x`, `*p`, `p[i]`, stepping, comparison, `null`, `*void`) that produces
+  it.
+
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which
   error, and the decisions the language had to make with it. `mincc check` is
@@ -670,15 +679,18 @@ warnings inside them are dropped at the report step while errors are not.
   is the pipeline's own: everything up to and including `sema` stays LLVM-free,
   and a test greps the tree so the rule fails in CI rather than in review. The
   stage *decides nothing*: it materialises what `sema` recorded, and a decision
-  it cannot read is a failure rather than a guess. The change the design record
-  asked of `sema` — the coercion record and the operation type of a compound
-  assignment, without which `u16 <<= 9` lowers to an out-of-range shift — is
-  **shipped**, so the lowering starts from a contract instead of waiting for one.
-  Design record:
+  it cannot read is a failure rather than a guess. Everything the design record
+  asked of `sema` — the coercion record, the operation type of a compound
+  assignment (without which `u16 <<= 9` lowers to an out-of-range shift), and the
+  access record — is **shipped**, so the lowering starts from a contract instead
+  of waiting for one. Design record:
   [`architectures/ir.md`](architectures/ir.md) — the LLVM decision, the coercion
-  record, the runtime contract `sema`'s integer table imposes and the scan that
-  enforces it, and the five mechanical rules that make a future node kind, type
-  kind, operator or callee a compile error instead of a silent gap.
+  and access records, the runtime contract `sema`'s integer table imposes, the
+  **assumption list** the closed set of guarantees the optimiser may be given and
+  the scan that reads it, and the six mechanical rules that make a future node
+  kind, type kind, operator or callee a compile error instead of a silent gap.
+  [`memory.md`](architectures/memory.md) sits under that stage: the object and
+  provenance model whose rules the assumption list is the emitted half of.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

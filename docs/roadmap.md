@@ -408,20 +408,45 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
       of the artifact carries a deferred literal type** (decided at the seam,
       then swept down the tree), and with the enumeration test over every pair
       `convertible` permits
+- [x] **`sema`: publish the access record** — one `AccessObligation` per
+      dereference (`TypedFile::accesses()`, `accessAt(node)`, `src/sema/access.cc`)
+      carrying the accessed type (its size *and* its alignment), the access kind
+      and the provenance the stage can prove (`object`/`foreign`). This is the
+      memory half of the item above and the same rule: an alignment re-derived in
+      the lowering is a second copy of the layout table, and an overestimated
+      LLVM `align` is undefined behaviour rather than slow code
 - [ ] Lowering of the typed tree: functions, parameters, calls, `if`/`else`,
       `while`, `for`, `break`/`continue`, and the operators `sema` typed
 - [ ] The runtime contract `sema`'s integer table imposes, honoured rather than
       inherited: **no `nsw`/`nuw`** on arithmetic the language defines to wrap,
       and an explicit test plus trap for `/0`, `%0`, `INT_MIN / -1` and an
       out-of-range shift count, where LLVM gives poison instead
+- [ ] The **access record** materialised: `*p` and `p[i]` lowering through
+      `TypedFile::accessAt`, the access's alignment read from the obligation and
+      stated explicitly on every `load`/`store`, `getelementptr` **without
+      `inbounds`**, and a node with no recorded obligation refused as
+      `ir-missing-obligation` — an ICE, since a program that type-checked cannot
+      be missing one
+- [ ] The **assumption list**, closed and scanned: no `!tbaa`/`!alias.scope`/
+      `!noalias` metadata, no `noalias` but from a written `restrict`, no
+      `inbounds` without a recorded proof (today: none at all), no `nsw`/`nuw`,
+      no `dereferenceable`/`nonnull`/`noundef`/`range`, no fast-math flags, no
+      `undef`/`poison` — enumerated in `invariants.cc` in the shape of
+      `sema`'s `allAccessKinds()`, with a test that visits every row
+- [ ] The checked build's **module-statable guards** (null dereference,
+      misalignment, an `object`-provenance extent) behind `-fcheck`, which `-O0`
+      defaults to — explicitly *not* the semantic guards, which belong in every
+      build. The shadow-memory half is § 11's runtime
 - [ ] Signedness from the *type* and not the opcode: `i32` and `u32` are one LLVM
       type, so `/`, `%`, `>>` and the comparisons pick `sdiv`/`udiv`,
       `ashr`/`lshr` and `sgt`/`ugt` from what `sema` recorded -- the difference
       between a correct lowering and a silent miscompile
 - [ ] Strict left-to-right evaluation of operands and argument lists, which the
       language specifies and the lowering therefore has to produce
-- [ ] `str` as opaque `ptr`, one private global per literal: the language needs
-      no pointer *type* for the IR to have one
+- [ ] `str` as opaque `ptr`, one private global per **distinct spelling**: the
+      language needed no pointer *type* for the IR to have one, and now that `&x`
+      makes addresses observable the deduplication is a contract rather than an
+      optimisation
 - [ ] A verifier pass after lowering, so a mistake in this stage is a diagnostic
       here and not a miscompile two stages down
 - [ ] Debug-info hooks so source locations survive into the backend

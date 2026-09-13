@@ -12,9 +12,12 @@ not a diagnostic; it is a program that runs differently at `-O2` than at `-O0`.
 This is the seventh design record, and it sits *under* the two next to it.
 [`sema.md`](sema.md) decides what arithmetic means, this decides what **memory**
 means, and [`ir.md`](ir.md) decides how both are emitted. Where they meet, this
-document wins, because the other two were written expecting it — `ir.md` already
-specifies the refusal of `TypeKind::Pointer` *by name*, and already promises a
-"scan that enforces the closed list of assumptions". This file is that list.
+document wins, because the other two were written expecting it: `ir.md` asked for
+the record the lowering may not re-derive, and for a "scan that enforces the
+closed list of assumptions". This file is that list, and that scan is now the
+section `ir.md` calls *The assumption list* — which is also where
+`TypeKind::Pointer` stopped being a kind the lowering refuses by name and became
+one it maps.
 
 ## The model in one page
 
@@ -623,17 +626,17 @@ pointer are marked.
 
 | Where | What it gains | Why here |
 | --- | --- | --- |
-| `include/sema/type.h` | `TypeKind::Pointer` gets a body: pointee `TypeId`, qualifiers (`const`, `volatile`) | The kind is already reserved, and `ir.md`'s mapper already specifies `Pointer`/`Array` as cases that refuse **by name**, so landing the syntax is a *body*, not a `case` |
-| `include/sema/type_store.h` | `internPointer`, plus `sizeOf`/`alignOf` for pointer and array; the struct/array layout table | One place owns sizes and alignments; the pointer width already exists (it is what `str` uses) |
-| `src/sema/check_expr.cc` | `&`, `*`, `[]`, and the lvalue/modifiable-lvalue rules they extend | The lvalue machinery is already there (`const` assignment, `++`/`--`, parens) |
-| `src/sema/check_flow.cc` | the initialization half of the access rule, for objects whose address is taken | It is already the pass that owns "is this byte written" |
-| **`src/sema/access.cc`** (the record) | **`TypedFile::accesses()` — an `AccessObligation` per dereference, with `accessAt(node)`** | **Blocking.** The lowering may not re-derive an alignment or a provenance fact, exactly as it may not re-derive a conversion |
+| `include/sema/type.h` | **shipped:** `TypeKind::Pointer` has its body — a `pointee` `TypeId`. Qualifiers (`const`, `volatile`) still arrive with the syntax that spells them | The kind was reserved from the start, so landing the surface was a *body* and not a `case` — and `ir.md`'s mapper now maps `Pointer` to `ptr` instead of refusing it by name |
+| `include/sema/type_store.h` | **shipped:** `pointerTo` interning, plus `sizeOf`/`alignOf` for a pointer | One place owns sizes and alignments; the pointer width already existed (it is what `str` used). Array layout arrives with arrays |
+| `src/sema/check_expr.cc` | **shipped:** `&`, `*`, `[]`, and the lvalue/modifiable-lvalue rules they extend | The lvalue machinery was already there (`const` assignment, `++`/`--`, parens) |
+| `src/sema/check_flow.cc` | **shipped:** the initialization half of the access rule, for objects whose address is taken | It was already the pass that owns "is this byte written" |
+| **`src/sema/access.cc`** (the record) | **shipped:** `TypedFile::accesses()` — an `AccessObligation` per dereference, with `accessAt(node)` | **The lowering may not re-derive an alignment or a provenance fact**, exactly as it may not re-derive a conversion. The shape, and the two fields deliberately narrower than this model, are in the section below |
 | `src/ir/values.h` | `Place` gains producers: `&`, `*`, indexing, field projection | `ir.md` already specifies the table over producers as the mechanism, so a new producer is a line |
 | `src/ir/expr.cc` | the accesses themselves, from the record | It materialises decisions, it does not make them |
 | `src/ir/runtime.cc` | the checked-build access guards (null, alignment, bounds, liveness) and `expose`/`with_exposed_provenance` | `ir.md` already designates it as the home of the operations the hardware does not define |
 | `src/ir/invariants.cc` | the assumption scan: no TBAA metadata, no unproved `inbounds`, no `nsw`/`nuw`, alignments as recorded, no `dereferenceable`/`nonnull` the language did not state | It is the file `ir.md` already designates for exactly this; the list is § *Not undefined* turned into code |
 | `src/driver` | `-Wprovenance` and the checked-build switch (`-fcheck`), which is what `-O0` defaults to | Driver decisions, and the flags have to exist before the checks are useful |
-| `docs/architectures/ir.md` | the assumption list it already promised | It links here rather than restating |
+| `docs/architectures/ir.md` | the assumption list it already promised — now the enumerated table the scan reads, with `inbounds` marked as the one row whose proof still has no home | The list is a property of what gets *emitted*, which is that stage's business; the rules it encodes stay here, and it links back for them |
 
 ### The record the lowering is not allowed to re-derive
 
@@ -741,7 +744,7 @@ The design's cost is a deliberate trade, and it is stated so it can be audited:
 
 Same standard as `ir.md`'s five rules: mechanical, not "be careful".
 
-1. **`TypeKind::Pointer` and `TypeKind::Array` are already specified as refusing `case`s** in `ir.md`'s type mapper (`ir-unsupported-type`), so the day the syntax lands the change is a *body* — and because the mapper is exhaustive with no `default:`, forgetting it is a build error rather than a silent gap.
+1. **`TypeKind::Array` is still a refusing `case`** in `ir.md`'s type mapper (`ir-unsupported-type`), and `Pointer`, which used to be, is now a body — which is the mechanism working: the change was one `case`, the mapper is exhaustive with no `default:`, and a kind nobody handled is a build error rather than a silent gap.
 2. **A new producer of `Place` is a compile error** while the table in
    `values.h` is exhaustive with no `default:`.
 3. **A new access kind is a compile error** in `AccessKind`'s switch, and a
@@ -825,10 +828,9 @@ The ladder, in build order:
    `coerce_test.cc`: for every access kind and every provenance kind, a program
    that produces it, and an assertion that the lowering's emitted shape is the
    recorded one.
-3. **The refusal tests.** An access with no recorded obligation, a `Pointer` type
-   reaching `ir` before stage 1, a `restrict` violation in the checked build:
-   each is a named diagnostic and **no module**. "No module" is part of the
-   assertion.
+3. **The refusal tests.** An access with no recorded obligation, an `Array` type
+   reaching `ir`, a `restrict` violation in the checked build: each is a named
+   diagnostic and **no module**. "No module" is part of the assertion.
 4. **The checked build's own tests**, one per row of the violation table: an
    out-of-object access, a misaligned access, a null dereference, a read of
    unwritten bytes, a use after the end of a lifetime, a `restrict` overlap. Each
