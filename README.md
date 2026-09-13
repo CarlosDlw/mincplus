@@ -14,11 +14,13 @@ C interoperability is a *separate axis* from host support:
 | --- | --- |
 | Hosts (where `mincc` runs) | Linux, macOS, Windows |
 | Toolchains | Clang, GCC, MSVC (C++20) |
-| Interop target (emitted code) | System V AMD64 ABI, `.o`/`.a` linked via `cc`/`ld` |
+| Interop target (emitted code) | named by **LLVM triple**; System V AMD64 and Windows x64 first, `.o`/`.a` linked via `cc`/`ld` (or `link.exe`) |
 
-Other interop targets are planned, not supported yet. Because the same sources
-build everywhere, the support layer is written to behave identically on every
-platform; the concrete guarantees are in
+Those are the targets the backend is exercised against, not a closed set: the IR
+is LLVM's, so a target is a triple and a data layout rather than a code path
+written by hand, and the front end does not change when one is added. Because
+the same sources build everywhere, the support layer is written to behave
+identically on every platform; the concrete guarantees are in
 [Cross-platform notes](#cross-platform-notes).
 
 ## Status
@@ -487,7 +489,9 @@ which is where the algorithm that depends on them lives.
 
 ### C interoperability (language surface)
 
-- [x] C calling convention and ABI (System V AMD64)
+- [x] C calling convention and ABI — taken from the target's **triple** and
+      provided by the LLVM backend rather than written here, so adding a target
+      does not add an ABI implementation
 - [ ] Calling C functions from `.mx`
 - [ ] Exporting `.mx` symbols that C can call
 - [ ] Struct layout compatibility, passing and returning aggregates by value

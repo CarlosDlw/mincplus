@@ -7,7 +7,9 @@ Legend: `[x]` done · `[ ]` planned · `[?]` open decision that changes scope.
 
 Design targets: a compiler that runs on Linux, macOS, and Windows (Clang, GCC,
 MSVC); an LLVM-based backend kept isolated so the front end never depends on
-it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
+it; and targets named by **LLVM triple**, so *what* the compiler emits for is a
+property of the triple rather than a table of two names kept by hand. Objects
+link with `cc`/`ld`, or `link.exe` on Windows.
 
 The stage order is not re-decided here: it is stated once, in
 [`architecture.md#the-pipeline`](architecture.md#the-pipeline), as
@@ -360,27 +362,63 @@ which also records the reversal.
 
 ## 6. IR — `src/ir`
 
-- [ ] IR design and textual form `[?]` typed SSA vs. simple three-address
-- [ ] Module/type/function/block/value model with an arena-backed builder
-- [ ] AST → IR lowering (including `switch`, short-circuit, aggregate copies)
-- [ ] IR verifier (types, terminator presence, dominance)
-- [ ] Pass manager plus core passes: DCE, mem2reg, constant propagation,
-      CFG simplification
+**The IR is LLVM's.** This is a decision and not a deferral, and it replaces the
+"typed SSA vs. simple three-address" question this section used to open with:
+the front end hands over a typed tree, `ir` lowers it to LLVM IR, and that is
+where the CFG comes from, where the optimizers are, and where the cross-platform
+claim stops being a promise. The alternative was an IR of our own plus a hand
+written backend, which is two large pieces to get right before a program can run
+at all, and neither of them is something this project would do better than LLVM.
+The design record is [`architectures/ir.md`](architectures/ir.md).
+
+- [ ] Design record: `docs/architectures/ir.md`, written before the code
+- [ ] Lowering of the typed tree: functions, parameters, calls, `if`/`else`,
+      `while`, `for`, `break`/`continue`, and the operators `sema` typed
+- [ ] The runtime contract `sema`'s integer table imposes, honoured rather than
+      inherited: **no `nsw`/`nuw`** on arithmetic the language defines to wrap,
+      and an explicit test plus trap for `/0`, `%0`, `INT_MIN / -1` and an
+      out-of-range shift count, where LLVM gives poison instead
+- [ ] Signedness from the *type* and not the opcode: `i32` and `u32` are one LLVM
+      type, so `/`, `%`, `>>` and the comparisons pick `sdiv`/`udiv`,
+      `ashr`/`lshr` and `sgt`/`ugt` from what `sema` recorded -- the difference
+      between a correct lowering and a silent miscompile
+- [ ] Strict left-to-right evaluation of operands and argument lists, which the
+      language specifies and the lowering therefore has to produce
+- [ ] `str` as opaque `ptr`, one private global per literal: the language needs
+      no pointer *type* for the IR to have one
+- [ ] A verifier pass after lowering, so a mistake in this stage is a diagnostic
+      here and not a miscompile two stages down
 - [ ] Debug-info hooks so source locations survive into the backend
+- [ ] `include/sema/target.h`'s two-name enum becomes a **triple**, carrying the
+      ABI facts the front end actually needs (`long`'s width, and later `char`'s
+      signedness) rather than being the source of truth about targets
 
-## 7. Backend — `src/backend/llvm` (isolated)
+## 7. Codegen — `src/backend/llvm` (isolated)
 
-- [ ] LLVM target initialization for AMD64; target machine and data layout
-- [ ] IR → LLVM IR translation
+- [ ] LLVM initialization and target selection from the triple: target machine
+      and data layout
 - [ ] Object emission (`.o`) and assembly output (`--emit=asm`)
 - [ ] Optimization pipelines for `-O0`..`-O3` and size
-- [ ] Symbol visibility, sections, and relocations matching the ABI
-- [ ] `[?]` Whether a hand-written AMD64 codegen is in scope at all
-- [ ] `[?]` Whether non-AMD64 targets are ever planned
+- [ ] Symbol visibility, sections and relocations taken from the triple and not
+      from `#ifdef`s on the host
+- [ ] `[?]` Which LLVM: the distribution's shared library, or a pinned version
+      built once. Both work; the choice is about what a contributor needs
+      installed, not about the IR
+- [ ] A triple matrix that is exercised and not assumed: cross-compiling from
+      any host in the design targets to the others. A probe already proved the
+      shape of it -- one module emitted as x86-64, aarch64, windows-x64 (COFF)
+      and riscv64 by changing the triple and nothing else
+- [x] ~~`[?]` Whether a hand-written AMD64 codegen is in scope at all~~ — **no**,
+      and the question is closed: the IR is LLVM's, so a hand-written backend
+      would be a second implementation of what LLVM is better at
+- [x] ~~`[?]` Whether non-AMD64 targets are ever planned~~ — **yes**, and it is
+      the point: one triple is all the lowering needs to know
 
 ## 8. C interoperability — `src/cinterop`
 
-- [ ] System V AMD64 argument classification (INTEGER/SSE/MEMORY) and returns
+- [ ] Argument classification and returns per the target's ABI (System V AMD64
+      and Windows x64 first): INTEGER/SSE/MEMORY, aggregates by value, and the
+      alignments that follow from the triple
 - [ ] Aggregates by value: struct passing/returning, unions, alignments
 - [ ] Variadic calls (`va_list` conventions); bitfields `[?]`
 - [ ] Calling into C: `extern` declarations resolved against real libc

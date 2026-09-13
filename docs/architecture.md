@@ -539,8 +539,8 @@ source (.mx)
   [x]             validate   the AST           -> the AST, structurally legal
   [x]             resolve    the AST           -> scopes + a symbol per name
   [x]             sema       the resolved AST  -> typed AST
-  [ ]             ir         the typed AST     -> CFG (init / borrow / optimize)
-  [ ]             codegen    the IR            -> object file / assembly
+  [ ]             ir         the typed AST     -> LLVM module (CFG included)
+  [ ]             codegen    the LLVM module   -> object file / assembly
   [ ]             link       objects           -> executable
 ```
 
