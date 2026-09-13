@@ -88,8 +88,11 @@ Rules:
 
 - The dependency graph is acyclic and directed *upward* only. `span`, `line`,
   `utf8`, `term`, `mem`, `intern`, and `expected` are leaves.
-- `src/support/` is LLVM-free by contract. Only `src/backend/llvm` may include
-  `llvm/*`.
+- `src/support/` is LLVM-free by contract. The LLVM boundary is the pipeline's
+  order and not one directory: nothing up to and including `sema` may include
+  `llvm/*`, and `src/ir`, `src/backend/llvm` and the tests may. A unit test
+  greps the tree for the inclusion, so the rule fails in CI rather than in
+  review.
 - `src/lex/` is the *raw* lexer and does not depend on diagnostics at all.
   That is enforced by the build graph (`minc_lex` lists no diag target), not by
   a comment, and it is why the lexer can be tested and fuzzed without a
@@ -652,6 +655,19 @@ warnings inside them are dropped at the report step while errors are not.
   model, the conversion rules, the node-by-node surface, which stage owns which
   error, and the decisions the language had to make with it. `mincc check` is
   the command that proves it.
+- **ir** (`src/ir`, planned) lowers the typed tree into an `llvm::Module`. It is
+  the first stage that may include `llvm/*`, and the boundary that moves with it
+  is the pipeline's own: everything up to and including `sema` stays LLVM-free,
+  and a test greps the tree so the rule fails in CI rather than in review. The
+  stage *decides nothing*: it materialises what `sema` recorded, and a decision
+  it cannot read is a failure rather than a guess — which is why the design
+  record asks for one change to `sema`'s output before the first line of it is
+  written (the operation type of a compound assignment, without which `u16 <<= 9`
+  lowers to an out-of-range shift). Design record:
+  [`architectures/ir.md`](architectures/ir.md) — the LLVM decision, the coercion
+  record, the runtime contract `sema`'s integer table imposes and the scan that
+  enforces it, and the five mechanical rules that make a future node kind, type
+  kind, operator or callee a compile error instead of a silent gap.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

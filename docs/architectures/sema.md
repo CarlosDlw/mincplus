@@ -316,6 +316,16 @@ Three conversion sites, and each names its rule once:
    implicit conversion this language rejects; the escape is explicit and one
    keystroke longer: `x != 0`.
 
+4. **A compound assignment computes at the common type** of its target and its
+   operand and stores the result converted back to the target's type (C
+   6.5.16.2). So `x <<= n` shifts at `promote(x)`, not at `x`'s own type — which
+   is why `let x: u16 = 1; x <<= 9;` is legal: the shift happens at `i32` and the
+   result narrows on the store. **The operation type is part of the answer this
+   stage publishes**, and not left for a later stage to recompute
+   (`ir.md`, *The fourth fact nobody recorded*): a lowering that read the
+   target's type instead would emit an out-of-range shift, and in LLVM that is
+   not a diagnostic — it is a poison value the optimiser is licensed to replace.
+
 `str` is scalar but not arithmetic: it may be assigned, returned, passed, and
 compared with `==`/`!=` **only against `str`**, and it may not be added,
 incremented, or ordered. Ordering and content comparison are library calls, not
@@ -649,6 +659,7 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 | 18 | Division by zero, `INT_MIN / -1`, and an out-of-range shift count? | **Error when constant; trap at runtime**, `INT_MIN % -1` is 0 | The alternative is inheriting LLVM's poison, where `x / 0` is not a crash but a licence for the optimizer to delete the branch that guarded it |
 | 19 | Is the evaluation order of operands and arguments specified? | **Yes — strict left to right**, with `&&`/`\|\|`/`?:` evaluating only the side they take | Leaving it unspecified (C) makes the same source mean two programs, which is incompatible with the "same input, same output" the stage contract is built on |
 | 20 | How does `str` become an LLVM value, with no pointer type in the language? | **Opaque `ptr`** — every supported LLVM uses opaque pointers, so a literal is a private global and no pointer syntax has to be invented | A typed pointer would force a pointer *type* into the surface before the language has decided its pointer syntax |
+| 21 | At which type does a compound assignment compute? | **The common type of the target and the operand** (`promote` then `usualArithmetic`), with the result converted back to the target's type, and that operation type is **published** as part of the typed AST | C 6.5.16.2. Without it `u16 <<= 9` has no width anybody stated, so the lowering's only options are to re-derive the rule or to guess — and a guess here is an out-of-range shift |
 
 ## Non-goals
 

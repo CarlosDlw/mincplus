@@ -646,13 +646,14 @@ which is where the algorithm that depends on them lives.
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
 [`docs/roadmap.md`](docs/roadmap.md); the lexer, parser, preprocessor,
-lowering/name-resolution and type-checking designs -- with their research
+lowering/name-resolution, type-checking and IR designs -- with their research
 references -- are in
 [`docs/architectures/lexer.md`](docs/architectures/lexer.md),
 [`docs/architectures/parser.md`](docs/architectures/parser.md),
 [`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md),
-[`docs/architectures/resolve.md`](docs/architectures/resolve.md), and
-[`docs/architectures/sema.md`](docs/architectures/sema.md).
+[`docs/architectures/resolve.md`](docs/architectures/resolve.md),
+[`docs/architectures/sema.md`](docs/architectures/sema.md), and
+[`docs/architectures/ir.md`](docs/architectures/ir.md).
 
 ## Build
 

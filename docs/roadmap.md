@@ -371,7 +371,13 @@ written backend, which is two large pieces to get right before a program can run
 at all, and neither of them is something this project would do better than LLVM.
 The design record is [`architectures/ir.md`](architectures/ir.md).
 
-- [ ] Design record: `docs/architectures/ir.md`, written before the code
+- [x] Design record: [`docs/architectures/ir.md`](architectures/ir.md)
+- [ ] **`sema`: publish what the lowering is not allowed to re-derive** — every
+      implicit conversion as an explicit record (the operand, the pair, the
+      consuming node) and the *operation type* of a compound assignment. The
+      second is the blocker: `u16 <<= 9` is defined at `i32`, the tree names only
+      `u16`, and a lowering that reads the tree's type emits an out-of-range
+      shift — a poison value, not a crash. This lands before any IR code
 - [ ] Lowering of the typed tree: functions, parameters, calls, `if`/`else`,
       `while`, `for`, `break`/`continue`, and the operators `sema` typed
 - [ ] The runtime contract `sema`'s integer table imposes, honoured rather than
