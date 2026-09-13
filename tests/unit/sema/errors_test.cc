@@ -1,0 +1,379 @@
+// Copyright (c) 2026 minc+ contributors.
+// SPDX-License-Identifier: MIT
+// Every code the checker can produce, from an input the grammar accepts, plus
+// the two properties the diagnostics are built on: no cascading, and a bound
+// that is a diagnostic rather than a hang.
+#include <gtest/gtest.h>
+
+#include <cstddef>
+#include <set>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "sema/sema_error.h"
+#include "sema/sema_fixture.h"
+
+namespace minc::test {
+namespace {
+
+TEST(ErrorsTest, UnknownTypeSuggestsAndKeepsOneDiagnostic) {
+  SemaFixture f;
+  f.source("fn i32 main() { let x: i33 = 1; return x; }\n");
+  ASSERT_TRUE(f.build());
+
+  EXPECT_TRUE(f.hasError("sema-unknown-type"));
+  EXPECT_EQ(f.errorCount(), 1u);
+  const sema::SemaError& error = f.firstError();
+  EXPECT_NE(error.message.find("`i33` is not a type"), std::string::npos);
+  // The suggestion is a *note* pointing at the word, not a second error for the
+  // same mistake.
+  EXPECT_NE(error.note.find("did you mean"), std::string::npos);
+  EXPECT_TRUE(error.noteSpan.valid());
+}
+
+TEST(ErrorsTest, AMalformedTypeNamesTheCombination) {
+  SemaFixture f;
+  f.source("fn i32 main() { let x: unsigned float = 1; return 0; }\n");
+  ASSERT_TRUE(f.build());
+
+  EXPECT_TRUE(f.hasError("sema-malformed-type"));
+  EXPECT_EQ(f.errorCount(), 1u);
+  // Both words are understood; inventing a suggestion here would answer a
+  // question nobody asked.
+  EXPECT_TRUE(f.firstError().note.empty());
+}
+
+TEST(ErrorsTest, VoidIsNotAnObjectType) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let x: void = 1; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-type-not-value"));
+    EXPECT_EQ(f.errorCount(), 1u); // and not also "cannot be assigned to `void`"
+  }
+  {
+    SemaFixture f;
+    f.source("fn void nothing() { return; }\nfn i32 main() { let x = nothing(); return 0; }\n");
+    ASSERT_TRUE(f.build());
+    // Inferred from a void call: the same mistake, caught one step later.
+    EXPECT_TRUE(f.hasError("sema-type-not-value"));
+    EXPECT_EQ(f.errorCount(), 1u);
+  }
+}
+
+TEST(ErrorsTest, ALiteralTooLargeForItsType) {
+  SemaFixture f;
+  f.source("fn i32 main() { let x: u8 = 256; return 0; }\n");
+  ASSERT_TRUE(f.build());
+
+  EXPECT_TRUE(f.hasError("sema-literal-out-of-range"));
+  EXPECT_NE(f.firstError().message.find("does not fit in `u8`"), std::string::npos);
+
+  SemaFixture ok;
+  ok.source("fn i32 main() { let x: u8 = 255; return 0; }\n");
+  ASSERT_TRUE(ok.build());
+  EXPECT_EQ(ok.errorCount(), 0u);
+}
+
+TEST(ErrorsTest, ALiteralTooLargeForTheCoreNeedsAWiderContext) {
+  SemaFixture wide;
+  wide.source(
+      "fn i32 main() { let x: u128 = 340282366920938463463374607431768211455; return 0; }\n");
+  ASSERT_TRUE(wide.build());
+  EXPECT_EQ(wide.errorCount(), 0u);
+
+  SemaFixture narrow;
+  narrow.source(
+      "fn i32 main() { let x: i32 = 340282366920938463463374607431768211455; return 0; }\n");
+  ASSERT_TRUE(narrow.build());
+  EXPECT_TRUE(narrow.hasError("sema-literal-out-of-range"));
+}
+
+TEST(ErrorsTest, ConditionsMustBeBool) {
+  SemaFixture f;
+  f.source("fn i32 main() { let x: i32 = 1 ? 2 : 3; return x; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-condition-not-bool"));
+
+  SemaFixture logic;
+  logic.source("fn i32 main() { let b: bool = 1 && true; return 0; }\n");
+  ASSERT_TRUE(logic.build());
+  EXPECT_TRUE(logic.hasError("sema-condition-not-bool"));
+}
+
+TEST(ErrorsTest, BoolAndStrAreNotArithmetic) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let b: bool = true; let x: i32 = b + 1; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+  }
+  {
+    // `%`, `&`, `|`, `^` are integer-only, and a float operand is refused with a
+    // sentence that names the operator and both types.
+    SemaFixture f;
+    f.source("fn i32 main() { let x: f64 = 1.0 % 2.0; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+    EXPECT_NE(f.firstError().message.find("integer operands"), std::string::npos);
+  }
+}
+
+TEST(ErrorsTest, EqualityIsDefinedForArithmeticBoolAndStr) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a: str = \"x\"; let b: bool = a == a; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_FALSE(f.hasError("sema-invalid-operands"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a: str = \"x\"; let b: bool = a < a; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    // Ordering a `str` is refused: `a < b` on strings would compare addresses,
+    // and that is the operator this language does not have.
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+  }
+}
+
+TEST(ErrorsTest, TheLeftSideOfAnAssignmentMustBeAPlace) {
+  SemaFixture f;
+  f.source("fn i32 main() { let x = 1; x + 1 = 2; return x; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-invalid-assignment"));
+}
+
+TEST(ErrorsTest, AConstCannotBeWritten) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { const c = 1; c = 2; return c; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-assign-to-const"));
+    EXPECT_EQ(f.errorCount(), 1u); // the specific reason, not "not an lvalue"
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { const c = 1; c += 1; return c; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-assign-to-const"));
+  }
+  {
+    SemaFixture f;
+    // Parentheses do not launder a `const`.
+    f.source("fn i32 main() { const c = 1; (c) = 2; return c; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-assign-to-const"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { const c = 1; ++c; return c; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-assign-to-const"));
+  }
+}
+
+TEST(ErrorsTest, IncrementingIsForPlacesAndForNumbers) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let x = 1; (x + 1)++; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-incdec-not-lvalue"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let s: str = \"x\"; s++; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+  }
+}
+
+TEST(ErrorsTest, Calls) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let x = 1; return x(2); }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-not-a-function"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 zero() { return 0; }\nfn i32 main() { return zero(1, 2); }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-argument-count"));
+    EXPECT_EQ(f.errorCount(), 1u);
+    EXPECT_NE(f.firstError().message.find("takes no arguments"), std::string::npos);
+  }
+}
+
+TEST(ErrorsTest, ReturnStatements) {
+  {
+    SemaFixture f;
+    f.source("fn i32 f() { return \"x\"; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-return-mismatch"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 f() { return; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-return-missing-value"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn void f() { return 1; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-return-void-value"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 f() { let x = 1; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-missing-return"));
+  }
+}
+
+TEST(ErrorsTest, MainMustHaveTheReservedShape) {
+  SemaFixture f;
+  f.source("fn f64 main() { return 0.0; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-main-signature"));
+  EXPECT_NE(f.firstError().message.find("`main` must be declared"), std::string::npos);
+}
+
+TEST(ErrorsTest, ConstantDivisionByZeroIsDiagnosedHere) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let x = 1 / 0; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-division-by-zero"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let x = 1 % 0; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_NE(f.firstError().message.find("remainder by zero"), std::string::npos);
+  }
+  {
+    // Through a `const`, which is why the collected value exists.
+    SemaFixture f;
+    f.source("fn i32 main() { const z = 0; let x = 1 / z; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-division-by-zero"));
+  }
+}
+
+TEST(ErrorsTest, NoCascadeAroundAFailedExpression) {
+  SemaFixture f;
+  f.source("fn i32 main() { return unknown + unknown2 + 1; }\n");
+  ASSERT_TRUE(f.build());
+  // The names are resolution's finding; the checker must not add a second
+  // sentence per enclosing operator.
+  EXPECT_EQ(f.errorCount(), 0u);
+}
+
+TEST(ErrorsTest, NoCascadeAroundAFailedType) {
+  SemaFixture f;
+  f.source("fn i33 f() { return 0; }\nfn i32 main() { return f() + f(); }\n");
+  ASSERT_TRUE(f.build());
+  // One unknown type is one diagnostic, however many expressions are built on
+  // the poison it produced: the poison spreads silently.
+  EXPECT_EQ(f.errorCount(), 1u);
+  EXPECT_TRUE(f.hasError("sema-unknown-type"));
+}
+
+TEST(ErrorsTest, NoCascadeAroundAParseError) {
+  SemaFixture f;
+  f.source("fn i32 main() { let x = ; return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_TRUE(f.hasParseError());
+  // The region the parser reported is not re-reported, and nothing downstream
+  // of it invents a second problem.
+  EXPECT_EQ(f.errorCount(), 0u);
+}
+
+TEST(ErrorsTest, TheTypeBudgetIsDiagnosedAndNotAHang) {
+  SemaFixture f;
+  f.source("fn i32 main() { let x: i32 = 1; return x; }\n");
+  sema::SemaOptions options;
+  options.maxTypes = 0; // lowered, never disabled
+  f.semaOptions(options);
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-limit-types"));
+}
+
+TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
+  std::set<std::string> reached;
+  const auto collect = [&reached](const SemaFixture& f) {
+    for (const std::string& code : f.errorCodes()) {
+      reached.insert(code);
+    }
+    for (const std::string& code : f.warningCodes()) {
+      reached.insert(code);
+    }
+  };
+  struct Case {
+    std::string source;
+    bool warnConversion = false;
+  };
+  const std::vector<Case> cases = {
+      {"fn i33 f() { return 0; }\n", false},
+      {"fn i32 main() { let x: unsigned float = 1; return 0; }\n", false},
+      {"fn i32 main() { let x: void = 1; return 0; }\n", false},
+      {"fn i32 main() { let x: u8 = 256; return 0; }\n", false},
+      {"fn i32 main() { let x: i32 = 1 ? 2 : 3; return x; }\n", false},
+      {"fn i32 main() { let x: str = \"a\" < \"b\"; return 0; }\n", false},
+      {"fn i32 main() { let x = 1; x + 1 = 2; return x; }\n", false},
+      {"fn i32 main() { const c = 1; c = 2; return c; }\n", false},
+      {"fn i32 main() { let x = 1; (x + 1)++; return x; }\n", false},
+      {"fn i32 main() { let x = 1; return x(2); }\n", false},
+      {"fn i32 z() { return 0; }\nfn i32 main() { return z(1); }\n", false},
+      {"fn i32 f() { return \"x\"; }\n", false},
+      {"fn i32 f() { return; }\n", false},
+      {"fn void f() { return 1; }\n", false},
+      {"fn i32 f() { let x = 1; }\n", false},
+      {"fn f64 main() { return 0.0; }\n", false},
+      {"fn i32 main() { return 1 / 0; }\n", false},
+      {"fn i32 main() { return 0; }\n", false},                               // maxTypes = 0
+      {"fn i32 f() { return 1; let x = 2; return x; }\n", false},             // unreachable
+      {"fn i32 main() { let a: i32 = 1; let b: i8 = a; return 0; }\n", true}, // -Wconversion
+  };
+
+  for (const Case& one : cases) {
+    SemaFixture f;
+    f.source(one.source);
+    if (one.warnConversion) {
+      f.warnConversion();
+    }
+    // The budget case is the one that needs a lowered limit.
+    if (one.source == "fn i32 main() { return 0; }\n") {
+      sema::SemaOptions options;
+      options.maxTypes = 0;
+      f.semaOptions(options);
+    }
+    ASSERT_TRUE(f.build()) << one.source;
+    collect(f);
+  }
+
+  for (const sema::SemaErrorCode code : sema::allSemaErrorCodes()) {
+    EXPECT_TRUE(reached.count(std::string(sema::toString(code))) != 0)
+        << "no input produces " << sema::toString(code);
+  }
+  EXPECT_EQ(reached.size(), sema::allSemaErrorCodes().size());
+}
+
+TEST(ErrorsTest, TheCodeTableHasOneRowPerCode) {
+  // The table is the contract: a code added to the enum without a row would be a
+  // name nobody can grep for and a severity nobody decided.
+  EXPECT_EQ(sema::semaErrorCodeInfos().size(), sema::allSemaErrorCodes().size());
+  std::set<std::string> names;
+  for (const sema::SemaErrorCodeInfo& info : sema::semaErrorCodeInfos()) {
+    EXPECT_EQ(std::string(sema::toString(info.code)), std::string(info.name));
+    EXPECT_TRUE(names.insert(info.name).second) << info.name << " appears twice";
+    EXPECT_TRUE(std::string_view(info.name).rfind("sema-", 0) == 0) << info.name;
+  }
+  EXPECT_EQ(sema::isWarning(sema::SemaErrorCode::UnreachableCode), true);
+  EXPECT_EQ(sema::isWarning(sema::SemaErrorCode::InvalidOperands), false);
+}
+
+} // namespace
+} // namespace minc::test

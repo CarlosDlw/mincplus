@@ -1,0 +1,237 @@
+// Copyright (c) 2026 minc+ contributors.
+// SPDX-License-Identifier: MIT
+#include "sema/convert.h"
+
+#include <cstdint>
+
+namespace minc::sema {
+namespace {
+
+// Rank for the usual arithmetic conversions. C ranks by kind; this language has
+// no `size_t`-shaped surprises, so ranking by width is the same order and one
+// fewer thing to keep in step. A deferred literal never reaches here (it is
+// handled before the concrete case), but it is answered rather than asserted.
+[[nodiscard]] std::uint16_t rank(const TypeStore& types, TypeId type) {
+  const Type& info = types.get(type);
+  if (info.kind == TypeKind::IntLiteral) {
+    return 32;
+  }
+  if (info.kind == TypeKind::FloatLiteral) {
+    return 64;
+  }
+  return info.bits;
+}
+
+[[nodiscard]] bool isSigned(const TypeStore& types, TypeId type) {
+  const Type& info = types.get(type);
+  if (info.kind == TypeKind::Char) {
+    // `char` is an integer type and is unsigned, which is the README's decision;
+    // it still promotes to `i32`, where the signedness stops mattering.
+    return false;
+  }
+  return info.isSigned;
+}
+
+[[nodiscard]] TypeId asFloat(TypeStore& types, std::uint16_t bits) {
+  return types.floatOf(bits);
+}
+
+} // namespace
+
+TypeId promote(TypeStore& types, TypeId type) {
+  const Type& info = types.get(type);
+  switch (info.kind) {
+  case TypeKind::Bool:
+  case TypeKind::Char:
+    // `bool` promotes to `int` in C. Here it is not arithmetic at all, so it
+    // never reaches this function from an operator -- but a `bool` used where a
+    // value's width matters is still an `int`-sized object, and returning `i32`
+    // keeps that true instead of introducing a second rule.
+    return types.signedInt(32);
+  case TypeKind::Int:
+    return info.bits < 32 ? types.signedInt(32) : type;
+  default:
+    return type;
+  }
+}
+
+TypeId usualArithmetic(TypeStore& types, TypeId left, TypeId right) {
+  if (types.isError(left) || types.isError(right)) {
+    return kTypeError;
+  }
+  const bool leftDeferred = types.isDeferred(left);
+  const bool rightDeferred = types.isDeferred(right);
+
+  // Both undecided: the result stays undecided, and only the *class* matters --
+  // `1 + 2` is an integer literal, `1 + 2.0` is a float literal, and whatever
+  // context follows decides the width once.
+  if (leftDeferred && rightDeferred) {
+    return (types.get(left).kind == TypeKind::FloatLiteral ||
+            types.get(right).kind == TypeKind::FloatLiteral)
+               ? kTypeFloatLiteral
+               : kTypeIntLiteral;
+  }
+  // One undecided: it adopts the other side. A float on either side wins, so
+  // `1 + 2.0f` is `f32` and not `f64`; an integer side is taken *promoted*, so
+  // `1 + u8` is `i32` and not `u8`.
+  if (leftDeferred) {
+    const TypeId concrete = promote(types, right);
+    if (types.isFloat(concrete)) {
+      return usualArithmetic(types, types.defaultOf(left), concrete);
+    }
+    return concrete;
+  }
+  if (rightDeferred) {
+    const TypeId concrete = promote(types, left);
+    if (types.isFloat(concrete)) {
+      return usualArithmetic(types, concrete, types.defaultOf(right));
+    }
+    return concrete;
+  }
+
+  if (!types.isArithmetic(left) || !types.isArithmetic(right)) {
+    return kTypeError;
+  }
+  if (types.isFloat(left) || types.isFloat(right)) {
+    const std::uint16_t leftBits = types.isFloat(left) ? types.get(left).bits : 0;
+    const std::uint16_t rightBits = types.isFloat(right) ? types.get(right).bits : 0;
+    // A float and an integer: the integer converts to the float. Two floats: the
+    // wider one.
+    return asFloat(types, leftBits > rightBits ? leftBits : rightBits);
+  }
+
+  const TypeId leftPromoted = promote(types, left);
+  const TypeId rightPromoted = promote(types, right);
+  if (leftPromoted == rightPromoted) {
+    return leftPromoted;
+  }
+  const bool leftSigned = isSigned(types, leftPromoted);
+  const bool rightSigned = isSigned(types, rightPromoted);
+  const std::uint16_t leftBits = rank(types, leftPromoted);
+  const std::uint16_t rightBits = rank(types, rightPromoted);
+  if (leftSigned == rightSigned) {
+    return leftBits >= rightBits ? leftPromoted : rightPromoted;
+  }
+  // Different signedness. The unsigned side wins at equal or greater rank; a
+  // wider signed type wins only if it can represent every value of the unsigned
+  // one -- and since the widths here are powers of two, "wider" is exactly that.
+  const TypeId unsignedSide = leftSigned ? rightPromoted : leftPromoted;
+  const TypeId signedSide = leftSigned ? leftPromoted : rightPromoted;
+  const std::uint16_t unsignedBits = leftSigned ? rightBits : leftBits;
+  const std::uint16_t signedBits = leftSigned ? leftBits : rightBits;
+  if (unsignedBits >= signedBits) {
+    return unsignedSide;
+  }
+  return signedSide;
+}
+
+bool convertible(const TypeStore& types, TypeId from, TypeId to) {
+  if (types.isError(from) || types.isError(to)) {
+    return true; // the poison converts to and from everything, silently
+  }
+  if (from == to) {
+    return true;
+  }
+  const TypeKind fromKind = types.get(from).kind;
+  const TypeKind toKind = types.get(to).kind;
+  if (fromKind == TypeKind::Void || toKind == TypeKind::Void) {
+    return false;
+  }
+  // `bool` and `str` are not arithmetic, so they convert only to themselves.
+  // C would promote a `bool` to `int` here; that promotion is what makes
+  // `flag + 1` compile, and it is the footgun this language does not keep.
+  if (fromKind == TypeKind::Bool || toKind == TypeKind::Bool || fromKind == TypeKind::Str ||
+      toKind == TypeKind::Str) {
+    return false;
+  }
+  // Everything else that reaches here is arithmetic (or a function type, which
+  // has no conversion at all).
+  return types.isArithmetic(from) && types.isArithmetic(to);
+}
+
+bool narrows(const TypeStore& types, TypeId from, TypeId to) {
+  if (types.isError(from) || types.isError(to) || from == to) {
+    return false;
+  }
+  const Type& fromInfo = types.get(from);
+  const Type& toInfo = types.get(to);
+  if (!types.isArithmetic(from) || !types.isArithmetic(to)) {
+    return false;
+  }
+  // A float to an integer truncates; a float to a narrower float rounds.
+  if (fromInfo.kind == TypeKind::Float || fromInfo.kind == TypeKind::FloatLiteral) {
+    if (toInfo.kind == TypeKind::Int || toInfo.kind == TypeKind::Char) {
+      return true;
+    }
+    return fromInfo.bits > toInfo.bits;
+  }
+  if (toInfo.kind == TypeKind::Float || toInfo.kind == TypeKind::FloatLiteral) {
+    return false;
+  }
+  // Integer to integer.
+  std::uint16_t fromBits = fromInfo.bits;
+  std::uint16_t toBits = toInfo.bits;
+  if (fromInfo.kind == TypeKind::IntLiteral || toInfo.kind == TypeKind::IntLiteral) {
+    // An undecided literal fits whatever it is asked to; the range check is
+    // `fitsIn`'s job and it produces an error, not a warning.
+    return false;
+  }
+  if (fromInfo.kind == TypeKind::Char) {
+    fromBits = 8;
+  }
+  if (toInfo.kind == TypeKind::Char) {
+    toBits = 8;
+  }
+  if (fromBits > toBits) {
+    return true;
+  }
+  if (fromBits < toBits) {
+    return false;
+  }
+  return isSigned(types, from) && !isSigned(types, to);
+}
+
+bool fitsIn(const TypeStore& types, TypeId type, support::ConstInt value) {
+  const Type& info = types.get(type);
+  switch (info.kind) {
+  case TypeKind::Char:
+    return !value.negative() && value.bits <= 0xFFU;
+  case TypeKind::Bool:
+    return !value.negative() && value.bits <= 1U;
+  case TypeKind::Int:
+    break;
+  default:
+    // A float, a deferred literal, the poison: there is no integer range to
+    // check against, and refusing would be inventing a rule.
+    return true;
+  }
+  const std::uint16_t bits = info.bits == 0 ? 32 : info.bits;
+  if (bits >= 64) {
+    // The 64-bit core cannot say anything about a wider range, and every value
+    // it can hold fits.
+    return true;
+  }
+  const std::uint64_t magnitude = std::uint64_t{1} << (bits - 1);
+  if (info.isSigned) {
+    const std::int64_t min = -static_cast<std::int64_t>(magnitude);
+    const std::int64_t max = static_cast<std::int64_t>(magnitude - 1);
+    if (!value.isUnsigned) {
+      const std::int64_t signedValue = value.signedValue();
+      return signedValue >= min && signedValue <= max;
+    }
+    if (value.negative()) {
+      // An unsigned bit pattern whose high bit is set is read as unsigned, so a
+      // negative reading is impossible; treat it as out of range for a signed
+      // target of the same width only when it exceeds the maximum.
+      return false;
+    }
+    return value.bits <= static_cast<std::uint64_t>(max);
+  }
+  if (value.negative()) {
+    return false;
+  }
+  const std::uint64_t max = (std::uint64_t{1} << bits) - 1U;
+  return value.bits <= max;
+}
+
+} // namespace minc::sema

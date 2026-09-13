@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: MIT
 // `#if` arithmetic, over preprocessing integers.
 //
-// The values are `intmax_t`/`uintmax_t` (64 bits) chosen by the standard's
-// rules, so there is no `int`/`long` question here and no operation is
-// undefined: shifts out of range and division by zero are *errors with
-// locations*, not UB, because a directive that cannot be evaluated is a thing
-// the user has to fix.
+// The values are the shared `support::ConstInt` (`intmax_t`/`uintmax_t`, 64
+// bits) chosen by the standard's rules, so there is no `int`/`long` question
+// here and no operation is undefined: shifts out of range and division by zero
+// are *errors with locations*, not UB, because a directive that cannot be
+// evaluated is a thing the user has to fix.
+//
+// The value and its operations live in `support/consteval` and not here, so
+// that `#if` and the type checker's constant folding cannot disagree about what
+// `1 / 0` does or about what `0755` means. This file is the *grammar* over
+// tokens; the arithmetic is shared.
 //
 // The evaluator is given tokens that have already been macro-expanded, with
 // `defined X` and `__has_include(...)` already replaced by integer literals.
@@ -17,41 +22,20 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <span>
 #include <vector>
 
 #include "pp/pp_error.h"
 #include "pp/pp_token.h"
 #include "pp/token_text.h"
+#include "support/consteval/const_int.h"
 #include "support/limits.h"
 
 namespace minc::pp {
 
-struct ConstInt {
-  // Two's complement bits; `isUnsigned` says how they are to be read. Keeping
-  // the bits and the signedness apart is what makes wrap-around well defined
-  // (the standard's unsigned arithmetic) instead of implementation-defined.
-  std::uint64_t bits = 0;
-  bool isUnsigned = false;
-
-  [[nodiscard]] constexpr std::int64_t signedValue() const {
-    return static_cast<std::int64_t>(bits);
-  }
-  [[nodiscard]] constexpr bool truthy() const {
-    return bits != 0;
-  }
-  [[nodiscard]] static constexpr ConstInt fromSigned(std::int64_t value) {
-    return ConstInt{static_cast<std::uint64_t>(value), false};
-  }
-  [[nodiscard]] static constexpr ConstInt fromUnsigned(std::uint64_t value) {
-    return ConstInt{value, true};
-  }
-};
-
 struct ConstExprResult {
   bool ok = false;
-  ConstInt value;
+  support::ConstInt value;
   // The first hard error. Evaluation does not recover: a broken `#if` has one
   // thing to fix, and continuing would bury it under consequences.
   PPError error;

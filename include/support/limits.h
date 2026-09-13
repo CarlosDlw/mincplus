@@ -146,6 +146,13 @@ inline constexpr std::size_t kMaxSuggestionCandidates = 64;
 // suggesting names the reader did not mean.
 inline constexpr std::uint32_t kMaxSuggestionDistance = 2;
 
+// --- type checking ----------------------------------------------------------
+//
+// Types one unit may intern. A hazard bound, like every other one here: a file
+// made entirely of distinct function types still only has so many nodes to build
+// them from, and the store is the last structure that grows with the input.
+inline constexpr std::size_t kMaxTypesPerUnit = std::size_t{1} << 20;
+
 // Largest single block the Arena will ask the allocator for. A runaway size --
 // a SIZE_MAX from bad arithmetic, a corrupted length field -- must never reach
 // operator new: what it does with an absurd request is implementation-defined

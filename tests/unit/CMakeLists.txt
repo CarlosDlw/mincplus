@@ -83,11 +83,18 @@ minc_add_executable(minc_unit_tests
     resolve/scope_test.cc
     resolve/errors_test.cc
     resolve/store_test.cc
+    sema/type_test.cc
+    sema/convert_test.cc
+    sema/check_test.cc
+    sema/errors_test.cc
+    sema/store_test.cc
+    sema/examples_test.cc
     driver/cli_test.cc
     driver/error_report_test.cc
     driver/lex_command_test.cc
     driver/parse_command_test.cc
     driver/resolve_command_test.cc
+    driver/check_command_test.cc
   DEPS
     minc_support
     minc_lex
@@ -101,6 +108,8 @@ minc_add_executable(minc_unit_tests
     minc_ast
     minc_resolve
     minc_resolve_report
+    minc_sema
+    minc_sema_report
     minc_driver
     GTest::gtest_main
 )

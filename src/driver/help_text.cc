@@ -25,10 +25,16 @@ constexpr const char* kOptionsBlock =
     "  --no-trivia      Omit whitespace and comments from dump output\n"
     "  --refs           resolve: print every name use and its target\n"
     "  --unresolved     resolve: print only the uses with no target, with reasons\n"
-    "  --ast            resolve: print the lowered AST and the item tree\n"
+    "  --ast            resolve: the lowered AST and the item tree\n"
+    "                   check: the typed tree, with a type on every node\n"
+    "  --types          check: print only the table of types\n"
+    "  --target NAME    check: ABI the C type spellings mean against\n"
+    "                   (systemv-amd64, windows-x64; default systemv-amd64)\n"
     "  --at POS         pp: [file:]line; resolve: [file:]line:col\n"
     "  -Wunused         warn about declarations nothing refers to\n"
     "  -Wshadow         warn about a declaration that hides another one\n"
+    "  -Wconversion     warn about an implicit conversion that may lose\n"
+    "                   information\n"
     "  --               Treat every following argument as a file, not an option\n";
 
 constexpr const char* kExitStatusBlock = "Exit status:\n"

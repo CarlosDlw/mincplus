@@ -6,6 +6,7 @@
 // do not exit, and the exit code is chosen here and nowhere else.
 #include <iostream>
 
+#include "driver/check_command.h"
 #include "driver/cli.h"
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
@@ -41,9 +42,10 @@ int main(int argc, char** argv) {
     return minc::driver::runPp(opts);
   case minc::driver::Command::Resolve:
     return minc::driver::runResolve(opts);
+  case minc::driver::Command::Check:
+    return minc::driver::runCheck(opts);
   case minc::driver::Command::Build:
   case minc::driver::Command::Run:
-  case minc::driver::Command::Check:
     break;
   }
 

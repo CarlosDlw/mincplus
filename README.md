@@ -23,27 +23,30 @@ platform; the concrete guarantees are in
 
 ## Status
 
-Scaffold v0.1: the `src/support` foundation, the lexer (`src/lex`), the
+Scaffold v0.2: the `src/support` foundation, the lexer (`src/lex`), the
 preprocessor (`src/pp`), the parser and syntax tree (`src/parse`, `src/syntax`),
-and the `mincc` driver. The front end is wired end to end: `mincc parse` runs
-`source -> lex -> preprocess -> parse`, so a file that starts with `#define` has
-a syntax tree of its translation unit. `build`, `run`, and `check` parse
-correctly but report that they are not implemented. `--help` and `--version`
-are functional.
+the lowered AST and the type checker (`src/ast`, `src/resolve`, `src/sema`), and
+the `mincc` driver. The front end is wired end to end: `mincc check` runs
+`source -> lex -> preprocess -> parse -> lower -> validate -> resolve -> check`,
+so a file that starts with `#define` is type-checked as a translation unit.
+`build` and `run` parse correctly but report that they are not implemented;
+the backend is what they are waiting for. `--help` and `--version` are
+functional.
 
 The stage order is fixed and written down once, in
 [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline):
 `lex` and `preprocess` (phases 3 and 4 of translation), then
 `parse -> lower -> validate -> resolve -> sema -> ir -> codegen -> link`.
-The whole front end is shipped — through **lower**, **validate** and **resolve**,
-which are stages of their own rather than part of `sema`: a C-like grammar lets
-a call name a function defined further down, so name resolution has to finish
-before any body can be type-checked. **`sema` is next.** Each stage takes one
+The whole front end is shipped — through **lower**, **validate**, **resolve**
+and **sema**, which are stages of their own rather than one pass: a C-like
+grammar lets a call name a function defined further down, so name resolution has
+to finish before any body can be type-checked, and the green tree is built for
+fidelity rather than for analysis. **`ir` is next.** Each stage takes one
 artifact and returns one, reports nothing, and leaves every error as a value
 with a code and a span; only the `*_report` libraries and the driver turn those
 into text and an exit code.
 
-Four commands, four views, one pipeline — each names the stage it shows:
+Five commands, five views, one pipeline — each names the stage it shows:
 
 | Command | Shows |
 | --- | --- |
@@ -51,10 +54,15 @@ Four commands, four views, one pipeline — each names the stage it shows:
 | `mincc pp <files...>` | the token stream of the translation unit: macros expanded, includes resolved |
 | `mincc parse <files...>` | the syntax tree over that stream |
 | `mincc resolve <files...>` | the lowered tree, the scopes, and each name with the declaration it denotes |
+| `mincc check <files...>` | the table of types and the verdict — `--ast` prints every node with the type it was given |
 
-`-D name[=body]`, `-U name` and `-I dir` are front-end options, so all three
-accept them, and a `-D` is a real source file (`<command line>`) so a caret on a
-command-line token points at something a reader can find.
+`-D name[=body]`, `-U name` and `-I dir` are front-end options, so every command
+that preprocesses accepts them, and a `-D` is a real source file
+(`<command line>`) so a caret on a command-line token points at something a
+reader can find. `--target systemv-amd64|windows-x64` (`check`) picks the ABI the
+C type spellings mean against, so `long` is 64 bits on the first and 32 on the
+second — the width is read from a table, never from the machine running the
+compiler.
 
 ```console
 $ mincc lex examples/002_variables.mx
@@ -140,6 +148,39 @@ $ mincc resolve examples/002_variables.mx
 The design behind lowering and resolution — the item tree, the scope model, the
 language decisions they depend on — is in
 [`docs/architectures/resolve.md`](docs/architectures/resolve.md).
+
+Type checking is the last stage, and `mincc check` is its view: it types every
+expression, decides the width of every C spelling against the *target* rather
+than the host, and reports the verdict without emitting anything.
+
+```console
+$ mincc check --types examples/002_variables.mx
+# types 21  target systemv-amd64  long=64  pointer=64
+  #0  <error>  error  size=0  align=0
+  #1  void  void  size=0  align=0
+  ...
+  #9  i32  int  size=4  align=4
+  ...
+  #20  fn i32()  function  size=0  align=0  params=0
+
+$ mincc check examples/002_variables.mx
+# types 21  target systemv-amd64  long=64  pointer=64
+  ...
+# examples/002_variables.mx  (scopes 2, defs 5, refs 1, functions 1)  0 error(s), 0 warning(s)
+
+$ printf 'fn i32 main() {\n  let x: uintt = 1;\n  return 0;\n}\n' | mincc check -
+<stdin>:2:10: error[sema-unknown-type]: `uintt` is not a type
+    let x: uintt = 1;
+           ^^^^^
+<stdin>:2:10: note: did you mean `uint`?
+```
+
+`--ast` prints the same tree `resolve --ast` does, plus the type each node was
+given, so the two dumps differ by exactly what this stage added; `--target
+windows-x64` reads the C spellings against LLP64 (where `long` is 32 bits), and
+`-Wconversion` reports the implicit narrowing that C allows silently. The design
+— the type model, the conversions, and which stage owns which error — is in
+[`docs/architectures/sema.md`](docs/architectures/sema.md).
 
 ## Language features
 
@@ -392,16 +433,20 @@ which is where the algorithm that depends on them lives.
 
 ### Expressions and operators
 
-- [ ] Arithmetic, bitwise, comparison, and logical operators with C precedence
-- [ ] Short-circuit `&&` / `||`
-- [ ] Assignment and compound assignment
-- [ ] Conditional expression
+- [x] Arithmetic, bitwise, comparison, and logical operators with C precedence
+- [x] Short-circuit `&&` / `||` — parsed and typed (`bool` operands, `bool`
+      result); the short-circuit *evaluation* is the IR's
+- [x] Assignment and compound assignment, with the left side checked to be a
+      modifiable place
+- [x] Conditional expression `?:`, with both branches unified to one type
 - [ ] Casts
 - [ ] `sizeof`, `alignof`
 - [ ] Address-of and dereference (full set in *Pointers and raw memory*)
 - [ ] Member access and indexing
 - [ ] Slicing syntax `[?]`
-- [ ] Literals: integers (bases, suffixes), floats, chars, strings
+- [x] Literals: integers (bases, suffixes), floats, chars, strings — read by
+      one shared reader, so the type checker and the preprocessor cannot
+      disagree about what `0x10` or `0755` means
 - [ ] Escape sequences, raw and multiline strings `[?]`
 - [ ] String interpolation/formatting `[?]`
 
@@ -511,22 +556,27 @@ which is where the algorithm that depends on them lives.
   that go-to-definition is built on. `mincc resolve` is its view. Neither
   `src/ast` nor `src/resolve` is a bullet inside `src/sema`, and both keep the
   stage contract: errors are values with a code and a span, never text.
-- `src/sema/` — **next**: the type checker. It consumes the resolved tree — so
-  nothing in it searches a scope — and produces the typed AST the IR needs:
-  every expression with a type, the type store interned, C's conversions
-  implemented once. Design record, including the decisions above and the list of
-  which stage owns which error:
+- `src/sema/` — the type checker. It consumes the resolved tree — so nothing in
+  it searches a scope — and produces the typed AST the IR needs: every
+  expression with a type, the type store interned, C's conversions implemented
+  once, and a failed expression typed as a poison rather than as a missing
+  value. The typing is produced by a compilation-wide `Context` that owns the
+  type store and answers the same question for the same revision with the same
+  artifact, so the IR builder, a lint and the language server can all ask again
+  for free. `mincc check` is its view. Design record, including the decisions
+  above and the list of which stage owns which error:
   [`docs/architectures/sema.md`](docs/architectures/sema.md).
-- `src/ir/`, `src/backend/`, `src/cinterop/` — planned, in that order and for the
-  reasons in
+- `src/ir/`, `src/backend/`, `src/cinterop/` — **next**, in that order and for
+  the reasons in
   [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline).
 - `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
   `tests/unit/lex/examples_test.cc`, parsed by
   `tests/unit/parse/examples_parse_test.cc`, and carried through lowering,
-  validation and resolution by `tests/unit/driver/resolve_command_test.cc`, so
-  an example cannot drift into syntax the front end does not accept or names it
-  cannot resolve.
+  validation, resolution and type checking by
+  `tests/unit/sema/examples_test.cc`, so an example cannot drift into syntax the
+  front end does not accept, names it cannot resolve, or types that do not
+  check.
   - `001_main_func.mx` — the smallest program: one function and a `return`
   - `002_variables.mx` — `let` with an annotation and with inference
   - `003_types.mx` — the primitive type names and the C-compatible spellings,

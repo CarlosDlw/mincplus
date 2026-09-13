@@ -16,6 +16,14 @@ the C17 standard's conversion rules in 6.3.1.8 (usual arithmetic conversions),
 6.3.1 (integer promotions and boolean conversion) and 6.5.16 (simple
 assignment's constraint).
 
+**Status: shipped.** `src/sema` implements everything below but the parts the
+*Non-goals* section names, `mincc check` is its view, and the example corpus
+passes it clean. Two things the plan did not have, and three it described
+differently, are recorded where they belong: the compilation-wide `Context`
+(§ *The typed AST*), the shorthand type names (§ *The type-specifier grammar*),
+the store-enforced type budget and the token-tag spelling (§ *Decisions*, 14 and
+15), and the corrected claim rows (§ *How the claims above are checked*).
+
 ## Why this stage exists, and what it is not
 
 Three jobs, and each needs the whole file before it can be done at all:
@@ -201,29 +209,50 @@ The typed artifact is a **parallel array**, indexed by `AstId`:
 
 ```cpp
 struct TypedFile {
-  const ast::LoweredFile* ast;         // borrowed; never mutated
-  std::vector<TypeId> types;           // one per expression node, indexed by AstId
-  std::vector<ExprInfo> exprs;         // lvalue / constant, indexed by AstId
-  std::vector<FunctionInfo> functions; // per FnDecl: TypeId, return type
+  std::vector<TypeId> typeTable;          // one per node, indexed by AstId
+  std::vector<ExprInfo> exprFacts;        // lvalue / constant, indexed by AstId
+  std::vector<FunctionInfo> functionTable; // per FnDecl: TypeId, return type
 };
 
 struct ExprInfo {
   bool isLvalue;          // `x`, `(x)`, `x++` is not; `1` is not
   bool isConstant;        // every operand was a literal or a constant
-  ConstInt value;         // the folded value when isConstant
+  bool hasIntValue;       // ... and the value is an integer
+  ConstInt value;         // the folded value when hasIntValue
 };
 ```
+
+It does not hold the tree it describes. The checker borrows the lowered file for
+the duration of the check and the *reader* is handed both, which is what keeps
+the artifact a value a cache can own on its own.
 
 Three properties fall out of this and are worth stating because they are the
 reason for the shape:
 
-- **`types[e]` is total on expression nodes.** It is either a real type or
-  `Error`; there is no "sema did not get here".
+- **`typeOf(e)` is total.** It is either a real type or `Error`, and it answers
+  `Error` — rather than reading out of range — for an id from another unit;
+  there is no "sema did not get here".
 - **The tree stays hashable**, so the `(FileId, revision)` cache and the
   "typing a body never invalidates another body" invariant of `resolve.md`
   keep holding one stage higher.
-- **`--ast` is a dump of `types`,** not a second tree, so the printed form
+- **`--ast` is a dump of `typeTable`,** not a second tree, so the printed form
   cannot drift from the checked form.
+
+### `Context`, the compilation's checker
+
+The stage has two ways in, and the difference is the point. `checkUnit` is pure:
+same inputs, same output, no state kept, which is what the tests use. `Context`
+is what a compilation uses: it owns the **one** `TypeStore` — a type has to mean
+the same thing in every unit that compares against it — and it caches a unit's
+answer per `(FileId, revision)`, returning the *same* `TypedFile` rather than a
+second check that happens to agree.
+
+The difference from `resolve`'s store is deliberate and is a fact about types
+rather than a taste: resolution may reuse a unit when the **item tree** is
+unchanged, because a body edit cannot change which names are visible. A type
+*does* come out of a body, so there is no signature-level shortcut to take here,
+and the revision is the whole key. Pretending otherwise would be the one bug this
+store could have.
 
 ## Literals
 
@@ -355,15 +384,23 @@ A `Type` node is an identifier run, so sema parses it. The grammar is small, and
 the point of writing it down is that **every rejection has a sentence**:
 
 ```
-type        := primitive | c-specifier-seq
+type        := primitive | shorthand | c-specifier-seq
 primitive   := i8|i16|i32|i64|i128|isize | u8|u16|u32|u64|u128|usize
              | f32|f64|f80 | bool | char | str | void
              | size_t | ssize_t | ptrdiff_t        (aliases for usize/isize)
+shorthand   := uint      (unsigned int)
+             | __int128 | unsigned __int128      (the C spelling of i128/u128)
 c-specifier := signed | unsigned
              | short | long | long long
              | int | char | float | double
 ```
 
+- A **shorthand is expanded, not special-cased**: `uint` becomes the words
+  `unsigned int` before anything is interpreted, so it cannot reach a code path a
+  spelled-out type does not and `uint i32` earns the same refusal
+  `unsigned int i32` does. Matching is longest-first, which is the only way
+  `unsigned __int128` can mean `u128` instead of "`unsigned` applied to `i128`" —
+  the exact combination the reader exists to refuse.
 - At most one of each group; `int` is implied when a base is absent
   (`unsigned` = `unsigned int`, `long` = `long int`).
 - A primitive is a *whole* type and may not combine: `unsigned i32`,
@@ -379,8 +416,15 @@ c-specifier := signed | unsigned
   consulted — the *target's* ABI is. This is the cross-platform rule the rest of
   the project already follows for `support/fs`, applied to types.
 - An unknown word is `sema-unknown-type`, with a suggestion when the edit
-  distance is small — reusing resolve's bounded suggestion machinery rather than
-  a second one.
+  distance is small — the one bounded edit distance in `support/text`, shared
+  with resolution rather than written twice.
+- The suggestion table is exactly the words the reader understands, and a test
+  asserts every one of them is a type on its own: suggesting a spelling that
+  then fails would be the worst possible answer to a typo.
+- `char` is both a primitive and a C specifier word, so a run that is *all* C
+  specifier words is handed to the state machine before the primitive scan: that
+  is what makes `signed char` an `i8` rather than "a primitive combined with
+  another word".
 
 ## Errors as values
 
@@ -445,21 +489,27 @@ stage's work rather than a later cleanup.
 
 ## The command
 
-`mincc check` (already scaffolded) becomes the stage's view: preprocess, parse,
-lower, validate, resolve, then type-check; the summary and diagnostics on the
-usual streams; exit `Failure` when there is an error, `Ok` when there is only a
-warning.
+`mincc check` is the stage's view: preprocess, parse, lower, validate, resolve,
+then type-check; diagnostics on stderr, the tables on stdout; exit `Failure`
+when there is an error, `Ok` when there is only a warning.
 
 | Flag | Shows |
 | --- | --- |
-| default | the unit summary, and every diagnostic, with a caret |
-| `--ast` | the typed tree: every expression with its type, and the folded constant where there is one |
-| `--types` | the type store: every type the unit built, with its spelling and its size |
+| default | the type table, then one summary line per file, and every diagnostic, with a caret |
+| `--ast` | the typed tree: the function table as checked, then every node with the type it was given and the folded constant where there is one |
+| `--types` | only the type table: every type the compilation knows, with its spelling, size and alignment |
+| `--target NAME` | the ABI the C spellings are read against (`systemv-amd64`, `windows-x64`) |
 | `-Wconversion` | warn on the implicit narrowing of the assignment conversion (off by default) |
+
+`-Wunused` and `-Wshadow` are accepted too and forwarded to resolution, which
+is where they are decided: a warning a user asked for must not depend on which
+command they happened to run.
 
 The typed dump is deliberately the lowered dump plus a type column, so a reader
 comparing `mincc resolve --ast` and `mincc check --ast` sees *only* what sema
-added.
+added. The typing comes from the compilation's `Context`, not from a one-off
+call, so the cache the language server will live on is exercised by the command
+that proves the stage.
 
 ## Decisions
 
@@ -482,6 +532,9 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 | 11 | Does sema check definite assignment? | **No** — the IR's, with the other flow analyses | Doing it here without a CFG means either a false negative or a wrong error |
 | 12 | One constant-arithmetic implementation or two? | **One**, in `support`, shared with `#if` | Two evaluators disagree the first time one is fixed |
 | 13 | Where does the C spelling's width come from? | **The target's ABI table**, never the host's `#ifdef`s | `${host}` widths make a cross-compile silently wrong, which is the failure mode this project is built to avoid |
+| 14 | Who owns the type budget? | **The `TypeStore`**, checked before every insert, with `SemaOptions::maxTypes` lowering it | A budget the checker owned would be enforced after the allocation, and the two could disagree about which limit was hit |
+| 15 | How does the checker name a token, given that tokens and nodes share one tag space? | **As integer tags** (`tokens.h`), so the switches on them switch on a number | A token value is not an `SyntaxKind` enumerator, so a switch on it is either a `-Wswitch` error under CI or a second enumerator per token that has to be kept in step |
+| 16 | Does a `void` binding get one diagnostic or two? | **One**, reported before the initializer is checked | `let x: void = 1;` would otherwise also report "cannot be assigned to `void`", which is the same mistake said twice |
 
 ## Non-goals
 
@@ -503,14 +556,15 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 
 | Claim | Checked by |
 | --- | --- |
-| Every example type-checks | the whole `examples/` corpus, zero diagnostics, in one test per directory |
-| Every code is reachable | one named input per `SemaErrorCode`, plus the sweep over the table |
-| Types are identities | spelling-variant test: `i32`, `int`, `signed int` produce one `TypeId` |
-| Conversions match C | a table-driven test over every pair of arithmetic types asserting the common type of `a op b`, generated from the promotion rules, not hand-listed |
-| Deferred literals default | `1`, `1.5` as whole initializers are `i32`, `f64`; `let x: u8 = 255` is `u8`; `let x: u8 = 256` is one error |
-| No cascades | `let x: i33 = 1 / 0;` produces exactly the errors of the two independent mistakes; an unknown type in a body produces one error at every nesting depth |
-| The boundary with `validate` holds | a `let` with no type and no initializer is produced by `validate` and by nothing in `sema` |
-| The tree is untouched | the lowered AST's bytes are identical before and after checking (the node array is compared), and `--ast` of `resolve` still matches |
-| Deep input is a diagnostic | the deepest accepted program type-checks under ASan/UBSan on the 1 MiB stack, and the type store's depth bound is exercised |
-| Determinism | the same file checked twice, with a different locale and a shuffled environment, yields byte-identical output |
-| `main` | `fn f64 main()`, `fn i32 main(i32 x)`, and a missing `main` are the three cases, and only the third is not an error here |
+| Every example type-checks | the whole `examples/` corpus through the real pipeline, zero diagnostics, in `sema/examples_test.cc`; and `mincc check` is run over the corpus by `make examples` |
+| Every code is reachable | one named input per `SemaErrorCode`, plus the sweep asserting the set of reached codes *equals* `allSemaErrorCodes()` |
+| Types are identities | spelling-variant test: `int` and `i32` produce one `TypeId`; `i32`/`u32`/`i64` are distinct |
+| Conversions match C | `convert_test.cc`: one case per rule — promotion of every small type, equal-rank unsigned winning, a wider signed winning, a float winning from either side, and the two deliberate departures (`bool`/`str`) |
+| Deferred literals default | `1`, `1.5` as whole initializers are `i32`, `f64`; `let x: u8 = 255` is `u8`; `let x: u8 = 256` is one error; a value past 64 bits is accepted only where the context can hold it |
+| No cascades | an unknown type in a signature produces one error however many calls sit on top of it; a name resolution already reported adds nothing here; a parse error adds nothing here; `let x: void = 1;` is one diagnostic, not two |
+| The boundary with `validate` holds | a `let` with no type and no initializer and a `const` with no value are `ast-missing-type` / `ast-const-without-value`, and `sema` has no code for either |
+| The tree is untouched | *by construction*: the checker holds `const ast::LoweredFile&` and the artifact is a separate array, so there is no mutating path to test — and `resolve --ast` output still matches after checking |
+| Deep input is a diagnostic | an expression 5 000 levels deep is checked under ASan/UBSan without a crash, and the depth bound is reported as `sema-limit-types` when the parser lets it through |
+| Determinism | the same unit dumped twice is byte-identical: no addresses, no hash-order iteration |
+| The store is a cache and not a second opinion | the same `(FileId, revision)` returns the same pointer (hits/misses counted); a new revision rechecks even for structurally identical text; two files share one type store and neither evicts the other |
+| `main` | `fn i32 main()` passes, `fn f64 main()` and `fn void main()` are `sema-main-signature`, and a unit with no `main` is not this stage's finding |

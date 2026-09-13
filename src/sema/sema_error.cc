@@ -1,0 +1,78 @@
+// Copyright (c) 2026 minc+ contributors.
+// SPDX-License-Identifier: MIT
+#include "sema/sema_error.h"
+
+#include <array>
+#include <cstddef>
+#include <string_view>
+#include <utility>
+
+namespace minc::sema {
+namespace {
+
+// The codes, in one table: the name a user greps for and the severity cannot
+// drift from the enumerator, and a code added to the enum without a row is a
+// compile error here rather than a hole to find.
+// NOLINTBEGIN(readability-identifier-naming): table name follows the project's
+// convention for the other stages' code tables.
+constexpr std::array<SemaErrorCodeInfo, 20> kSemaErrorCodeInfos{{
+    {SemaErrorCode::UnknownType, "sema-unknown-type", false},
+    {SemaErrorCode::MalformedType, "sema-malformed-type", false},
+    {SemaErrorCode::TypeNotValue, "sema-type-not-value", false},
+    {SemaErrorCode::LiteralOutOfRange, "sema-literal-out-of-range", false},
+    {SemaErrorCode::ConditionNotBool, "sema-condition-not-bool", false},
+    {SemaErrorCode::InvalidOperands, "sema-invalid-operands", false},
+    {SemaErrorCode::InvalidAssignment, "sema-invalid-assignment", false},
+    {SemaErrorCode::AssignToConst, "sema-assign-to-const", false},
+    {SemaErrorCode::IncDecNotLvalue, "sema-incdec-not-lvalue", false},
+    {SemaErrorCode::NotAFunction, "sema-not-a-function", false},
+    {SemaErrorCode::ArgumentCount, "sema-argument-count", false},
+    {SemaErrorCode::ReturnMismatch, "sema-return-mismatch", false},
+    {SemaErrorCode::ReturnMissingValue, "sema-return-missing-value", false},
+    {SemaErrorCode::ReturnVoidValue, "sema-return-void-value", false},
+    {SemaErrorCode::MissingReturn, "sema-missing-return", false},
+    {SemaErrorCode::MainSignature, "sema-main-signature", false},
+    {SemaErrorCode::DivisionByZero, "sema-division-by-zero", false},
+    {SemaErrorCode::LimitTypes, "sema-limit-types", false},
+    {SemaErrorCode::UnreachableCode, "sema-unreachable-code", true},
+    {SemaErrorCode::ImplicitConversion, "sema-implicit-conversion", true},
+}};
+// NOLINTEND(readability-identifier-naming)
+
+template <std::size_t... Indexes>
+[[nodiscard]] constexpr auto codesFromTable(std::index_sequence<Indexes...>) {
+  return std::array<SemaErrorCode, sizeof...(Indexes)>{kSemaErrorCodeInfos[Indexes].code...};
+}
+
+constexpr auto kAllSemaErrorCodes =
+    codesFromTable(std::make_index_sequence<kSemaErrorCodeInfos.size()>{});
+
+} // namespace
+
+std::span<const SemaErrorCodeInfo> semaErrorCodeInfos() {
+  return kSemaErrorCodeInfos;
+}
+
+std::span<const SemaErrorCode> allSemaErrorCodes() {
+  return kAllSemaErrorCodes;
+}
+
+std::string_view toString(SemaErrorCode code) {
+  for (const SemaErrorCodeInfo& info : kSemaErrorCodeInfos) {
+    if (info.code == code) {
+      return info.name;
+    }
+  }
+  return "sema-unknown";
+}
+
+bool isWarning(SemaErrorCode code) {
+  for (const SemaErrorCodeInfo& info : kSemaErrorCodeInfos) {
+    if (info.code == code) {
+      return info.warning;
+    }
+  }
+  return false;
+}
+
+} // namespace minc::sema

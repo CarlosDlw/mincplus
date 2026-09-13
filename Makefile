@@ -120,12 +120,14 @@ examples: build
 	  $(BIN) lex "$$file" > /dev/null; \
 	  $(BIN) parse --no-trivia "$$file" > /dev/null; \
 	  $(BIN) resolve "$$file" > /dev/null; \
+	  $(BIN) check "$$file" > /dev/null; \
 	done; \
 	for file in examples/pp/*.mx; do \
 	  echo "== $$file"; \
 	  $(BIN) pp -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	  $(BIN) parse -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	  $(BIN) resolve -I $(INCLUDE_DIR) "$$file" > /dev/null; \
+	  $(BIN) check -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	done; \
 	echo "examples ok"
 

@@ -64,12 +64,21 @@ struct CliOptions {
   // meaningful (every use, with the unresolved ones marked), so not one enum.
   bool showRefs = false;
   bool showUnresolved = false;
-  // `--ast`: print the lowered AST instead of the scope/def tables.
+  // `--ast`: print the lowered AST instead of the scope/def tables. For `check`
+  // it is the *typed* tree, which has a type on every node.
   bool showAst = false;
+  // `--types`: print only the type table.
+  bool showTypes = false;
+  // `--target`: the ABI the C type spellings and the layout are read against.
+  // A name, resolved through `sema/target.h`, so a target can only mean the row
+  // that table prints for it.
+  std::string target = "systemv-amd64";
   // `-Wunused`, `-Wshadow`. Off by default, like every other warning here: a
   // compiler that warns about ordinary code teaches people to ignore it.
   bool warnUnused = false;
   bool warnShadow = false;
+  // `-Wconversion`. Off by default for the same reason as the others.
+  bool warnConversion = false;
   // `--at [file:]line` for `pp`, `[file:]line:col` for `resolve`.
   std::string at;
   std::string error; // non-empty => usage error; ignore the rest

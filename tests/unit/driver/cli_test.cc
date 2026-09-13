@@ -229,7 +229,67 @@ TEST(HelpTextTest, ImplementedAndScaffoldedListsAreExact) {
 
   EXPECT_EQ(namesAfter(help, "Implemented: "), implemented);
   EXPECT_EQ(namesAfter(help, "Scaffolded:  "), scaffolded);
-  EXPECT_NE(help.find("Implemented: lex"), std::string::npos);
+  // Not one name is written in the text: the list starts with the first
+  // implemented command in the table's order, whatever that turns out to be.
+  ASSERT_FALSE(implemented.empty());
+  EXPECT_NE(help.find("Implemented: " + implemented.front()), std::string::npos);
+  EXPECT_FALSE(scaffolded.empty());
+}
+
+TEST(CliTest, TheTargetOptionIsCarriedAndDefaultsToSystemV) {
+  {
+    const char* argv[] = {"mincc", "check", "a.mx"};
+    const CliOptions opts = parseArgs(3, argv);
+    EXPECT_EQ(opts.error, "");
+    EXPECT_EQ(opts.target, "systemv-amd64");
+  }
+  {
+    const char* argv[] = {"mincc", "check", "--target", "windows-x64", "a.mx"};
+    const CliOptions opts = parseArgs(5, argv);
+    EXPECT_EQ(opts.error, "");
+    EXPECT_EQ(opts.target, "windows-x64");
+  }
+  {
+    // `--target=name` is the same thing, because half the world writes it that
+    // way and a CLI that accepts only one spelling is a paper cut.
+    const char* argv[] = {"mincc", "check", "--target=windows-x64", "a.mx"};
+    const CliOptions opts = parseArgs(4, argv);
+    EXPECT_EQ(opts.error, "");
+    EXPECT_EQ(opts.target, "windows-x64");
+  }
+  {
+    const char* argv[] = {"mincc", "check", "--target", "nonsense", "a.mx"};
+    const CliOptions opts = parseArgs(5, argv);
+    // The *name* is validated by the command, which knows the table; the parser
+    // only guarantees it got a value.
+    EXPECT_EQ(opts.error, "");
+    EXPECT_EQ(opts.target, "nonsense");
+  }
+  {
+    const char* argv[] = {"mincc", "check", "--target"};
+    const CliOptions opts = parseArgs(3, argv);
+    EXPECT_FALSE(opts.error.empty());
+  }
+}
+
+TEST(CliTest, TheConversionWarningIsOptInLikeTheOthers) {
+  {
+    const char* argv[] = {"mincc", "check", "a.mx"};
+    const CliOptions opts = parseArgs(3, argv);
+    EXPECT_FALSE(opts.warnConversion);
+  }
+  {
+    const char* argv[] = {"mincc", "check", "-Wconversion", "a.mx"};
+    const CliOptions opts = parseArgs(4, argv);
+    EXPECT_EQ(opts.error, "");
+    EXPECT_TRUE(opts.warnConversion);
+  }
+  {
+    const char* argv[] = {"mincc", "check", "--types", "a.mx"};
+    const CliOptions opts = parseArgs(4, argv);
+    EXPECT_EQ(opts.error, "");
+    EXPECT_TRUE(opts.showTypes);
+  }
 }
 
 TEST(CliTest, LexIsMarkedImplementedInTheTable) {

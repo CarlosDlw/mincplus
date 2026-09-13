@@ -8,26 +8,17 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <utility>
+
+#include "support/consteval/const_int.h"
+#include "support/consteval/literal.h"
 
 namespace minc::pp {
+
+// The value and its arithmetic are shared with the type checker's constant
+// folding; only the grammar over tokens lives here.
+using ConstInt = support::ConstInt;
+
 namespace {
-
-constexpr std::uint64_t kUint64Max = ~std::uint64_t{0};
-
-// Value of one hex digit, or -1.
-[[nodiscard]] int hexValue(char c) {
-  if (c >= '0' && c <= '9') {
-    return c - '0';
-  }
-  if (c >= 'a' && c <= 'f') {
-    return 10 + (c - 'a');
-  }
-  if (c >= 'A' && c <= 'F') {
-    return 10 + (c - 'A');
-  }
-  return -1;
-}
 
 class Parser {
 public:
@@ -157,7 +148,7 @@ private:
     while (!failed_ && peek().is(lex::TokenKind::Pipe)) {
       take();
       const ConstInt right = parseBitXor();
-      left = fold(left, right, left.bits | right.bits);
+      left = support::bitOr(left, right);
     }
     return left;
   }
@@ -167,7 +158,7 @@ private:
     while (!failed_ && peek().is(lex::TokenKind::Caret)) {
       take();
       const ConstInt right = parseBitAnd();
-      left = fold(left, right, left.bits ^ right.bits);
+      left = support::bitXor(left, right);
     }
     return left;
   }
@@ -177,7 +168,7 @@ private:
     while (!failed_ && peek().is(lex::TokenKind::Amp)) {
       take();
       const ConstInt right = parseEquality();
-      left = fold(left, right, left.bits & right.bits);
+      left = support::bitAnd(left, right);
     }
     return left;
   }
@@ -207,7 +198,12 @@ private:
       }
       take();
       const ConstInt right = parseShift();
-      left = ConstInt::fromSigned(compare(kind, left, right) ? 1 : 0);
+      const int order = support::compare(left, right);
+      const bool holds = kind == lex::TokenKind::Less        ? order < 0
+                         : kind == lex::TokenKind::Greater   ? order > 0
+                         : kind == lex::TokenKind::LessEqual ? order <= 0
+                                                             : order >= 0;
+      left = ConstInt::fromSigned(holds ? 1 : 0);
     }
     return left;
   }
@@ -224,15 +220,16 @@ private:
       if (failed_) {
         return ConstInt{};
       }
-      if (right.bits >= 64) {
+      const std::optional<ConstInt> shifted = kind == lex::TokenKind::LessLess
+                                                  ? support::shiftLeft(left, right)
+                                                  : support::shiftRight(left, right);
+      if (!shifted.has_value()) {
         fail(spanOf(op), "shift count " + std::to_string(right.bits) + " is out of range");
         return ConstInt{};
       }
-      const std::uint64_t count = right.bits;
-      const std::uint64_t bits =
-          kind == lex::TokenKind::LessLess ? (left.bits << count) : (left.bits >> count);
-      // The result of `<<`/`>>` has the promoted type of the left operand.
-      left = ConstInt{bits, left.isUnsigned};
+      // The result of `<<`/`>>` has the promoted type of the left operand, which
+      // the shared operation already carries.
+      left = *shifted;
     }
     return left;
   }
@@ -246,9 +243,7 @@ private:
       }
       take();
       const ConstInt right = parseMultiplicative();
-      const std::uint64_t bits =
-          kind == lex::TokenKind::Plus ? left.bits + right.bits : left.bits - right.bits;
-      left = fold(left, right, bits);
+      left = kind == lex::TokenKind::Plus ? support::add(left, right) : support::sub(left, right);
     }
     return left;
   }
@@ -268,22 +263,26 @@ private:
       }
       switch (kind) {
       case lex::TokenKind::Star:
-        left = fold(left, right, left.bits * right.bits);
+        left = support::mul(left, right);
         break;
-      case lex::TokenKind::Slash:
-        if (right.bits == 0) {
+      case lex::TokenKind::Slash: {
+        const std::optional<ConstInt> quotient = support::divide(left, right);
+        if (!quotient.has_value()) {
           fail(spanOf(op), "division by zero in #if expression");
           return ConstInt{};
         }
-        left = fold(left, right, left.bits / right.bits);
+        left = *quotient;
         break;
-      default:
-        if (right.bits == 0) {
+      }
+      default: {
+        const std::optional<ConstInt> rest = support::remainder(left, right);
+        if (!rest.has_value()) {
           fail(spanOf(op), "remainder by zero in #if expression");
           return ConstInt{};
         }
-        left = fold(left, right, left.bits % right.bits);
+        left = *rest;
         break;
+      }
       }
     }
     return left;
@@ -301,13 +300,13 @@ private:
       const ConstInt operand = parseUnary();
       switch (kind) {
       case lex::TokenKind::Minus:
-        return ConstInt{0U - operand.bits, operand.isUnsigned};
+        return support::negate(operand);
       case lex::TokenKind::Plus:
         return operand;
       case lex::TokenKind::Bang:
-        return ConstInt::fromSigned(operand.truthy() ? 0 : 1);
+        return support::logicalNot(operand);
       default:
-        return ConstInt{~operand.bits, operand.isUnsigned};
+        return support::bitNot(operand);
       }
     }
     return parsePrimary();
@@ -365,40 +364,6 @@ private:
 
   // --- helpers --------------------------------------------------------------
 
-  // The operand types of a binary operator: unsigned when either side is.
-  [[nodiscard]] static ConstInt fold(const ConstInt& left, const ConstInt& right,
-                                     std::uint64_t bits) {
-    return ConstInt{bits, left.isUnsigned || right.isUnsigned};
-  }
-
-  [[nodiscard]] static bool compare(lex::TokenKind kind, const ConstInt& left,
-                                    const ConstInt& right) {
-    if (left.isUnsigned || right.isUnsigned) {
-      switch (kind) {
-      case lex::TokenKind::Less:
-        return left.bits < right.bits;
-      case lex::TokenKind::Greater:
-        return left.bits > right.bits;
-      case lex::TokenKind::LessEqual:
-        return left.bits <= right.bits;
-      default:
-        return left.bits >= right.bits;
-      }
-    }
-    const std::int64_t lhs = left.signedValue();
-    const std::int64_t rhs = right.signedValue();
-    switch (kind) {
-    case lex::TokenKind::Less:
-      return lhs < rhs;
-    case lex::TokenKind::Greater:
-      return lhs > rhs;
-    case lex::TokenKind::LessEqual:
-      return lhs <= rhs;
-    default:
-      return lhs >= rhs;
-    }
-  }
-
   ConstInt parseIntegerLiteral(const PPToken& token) {
     const std::string_view text = spelling(token);
     if (text.empty()) {
@@ -406,164 +371,30 @@ private:
       return ConstInt{};
     }
 
-    std::size_t index = 0;
-    unsigned base = 10;
-    if (text.size() >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
-      base = 16;
-      index = 2;
-    } else if (text.size() >= 2 && text[0] == '0' && (text[1] == 'b' || text[1] == 'B')) {
-      base = 2;
-      index = 2;
-    } else if (text.size() >= 2 && text[0] == '0') {
-      base = 8;
-      index = 1;
-    }
-
-    std::uint64_t value = 0;
-    bool overflowed = false;
-    bool anyDigit = false;
-    for (; index < text.size(); ++index) {
-      const int digit = hexValue(text[index]);
-      if (digit < 0 || static_cast<unsigned>(digit) >= base) {
-        break;
-      }
-      anyDigit = true;
-      const std::uint64_t digitValue = static_cast<std::uint64_t>(digit);
-      // Overflow is decided *before* multiplying, against the exact room left.
-      // A "did the value shrink" or `value > max / base` test rejects
-      // `0xFFFFFFFFFFFFFFFF`, which fits in 64 bits and is the very literal a
-      // `#if` is most likely to compare against.
-      if (value > (kUint64Max - digitValue) / base) {
-        overflowed = true;
-      }
-      // Keep consuming digits after the overflow: the suffix scan starts where
-      // the digits end, and stopping early would leave `...0bignumULL` half
-      // lexed.
-      value = value * base + digitValue;
-    }
-    if (!anyDigit) {
-      failToken(token, "malformed integer literal '" + std::string(text) + "' in #if expression");
+    // `.mx` does not inherit C's implicit octal, but a `#if` reads C -- the
+    // directive and the headers it came from -- so the one rule the two literal
+    // readers disagree about is named at the call instead of assumed.
+    const support::IntegerLiteral parsed =
+        support::parseIntegerLiteral(text, support::IntegerBaseRule::ImplicitOctal);
+    if (!parsed.ok) {
+      failToken(token, parsed.message);
       return ConstInt{};
     }
-
-    bool isUnsigned = false;
-    for (; index < text.size(); ++index) {
-      const char suffix = text[index];
-      if (suffix == 'u' || suffix == 'U') {
-        isUnsigned = true;
-      } else if (suffix != 'l' && suffix != 'L') {
-        failToken(token, "unknown suffix in integer literal '" + std::string(text) + "'");
-        return ConstInt{};
-      }
-    }
-    if (overflowed) {
-      failToken(token, "integer literal '" + std::string(text) + "' does not fit in 64 bits");
-      return ConstInt{};
-    }
-    // A decimal literal too large for intmax_t is evaluated as unsigned, which
-    // is the standard's behaviour rather than a diagnostic.
-    if (!isUnsigned && value > static_cast<std::uint64_t>(INT64_MAX)) {
-      isUnsigned = true;
-    }
-    return ConstInt{value, isUnsigned};
+    return parsed.value;
   }
 
   ConstInt parseCharLiteral(const PPToken& token) {
     const std::string_view text = spelling(token);
-    // Strip the quotes the lexer guarantees; the body may be empty or escaped,
-    // which the lexer has already flagged as a lexical problem.
     if (text.size() < 2) {
       failToken(token, "malformed character literal in #if expression");
       return ConstInt{};
     }
-    std::string_view body = text.substr(1, text.size() - 2);
-    std::uint64_t value = 0;
-    std::size_t index = 0;
-    while (index < body.size()) {
-      const auto decoded = decodeChar(body, index);
-      if (!decoded.has_value()) {
-        failToken(token, "unknown escape in character literal '" + std::string(text) + "'");
-        return ConstInt{};
-      }
-      index = decoded->second;
-      // Multi-character literals are implementation-defined; this is the
-      // packed value GCC produces, which is the least surprising choice.
-      value = (value << 8U) | decoded->first;
+    const support::IntegerLiteral parsed = support::parseCharLiteral(text);
+    if (!parsed.ok) {
+      failToken(token, parsed.message);
+      return ConstInt{};
     }
-    return ConstInt::fromSigned(static_cast<std::int64_t>(value));
-  }
-
-  // Decodes the character or escape at `index`, returning (value, next index).
-  [[nodiscard]] static std::optional<std::pair<std::uint64_t, std::size_t>>
-  decodeChar(std::string_view body, std::size_t index) {
-    if (body[index] != '\\') {
-      return std::make_pair(static_cast<std::uint64_t>(static_cast<unsigned char>(body[index])),
-                            index + 1);
-    }
-    if (index + 1 >= body.size()) {
-      return std::nullopt;
-    }
-    const char escape = body[index + 1];
-    switch (escape) {
-    case 'n':
-      return std::make_pair(10U, index + 2);
-    case 't':
-      return std::make_pair(9U, index + 2);
-    case 'r':
-      return std::make_pair(13U, index + 2);
-    case 'a':
-      return std::make_pair(7U, index + 2);
-    case 'b':
-      return std::make_pair(8U, index + 2);
-    case 'f':
-      return std::make_pair(12U, index + 2);
-    case 'v':
-      return std::make_pair(11U, index + 2);
-    case '0':
-    case '1':
-    case '2':
-    case '3':
-    case '4':
-    case '5':
-    case '6':
-    case '7': {
-      std::uint64_t value = 0;
-      std::size_t next = index + 1;
-      std::size_t digits = 0;
-      while (next < body.size() && digits < 3 && body[next] >= '0' && body[next] <= '7') {
-        value = value * 8U + static_cast<std::uint64_t>(body[next] - '0');
-        ++next;
-        ++digits;
-      }
-      return std::make_pair(value, next);
-    }
-    case 'x':
-    case 'X': {
-      std::uint64_t value = 0;
-      std::size_t next = index + 2;
-      std::size_t digits = 0;
-      while (next < body.size()) {
-        const int digit = hexValue(body[next]);
-        if (digit < 0) {
-          break;
-        }
-        value = value * 16U + static_cast<std::uint64_t>(digit);
-        ++next;
-        ++digits;
-      }
-      if (digits == 0) {
-        return std::nullopt;
-      }
-      return std::make_pair(value, next);
-    }
-    case '\\':
-    case '\'':
-    case '"':
-      return std::make_pair(static_cast<std::uint64_t>(static_cast<unsigned char>(escape)),
-                            index + 2);
-    default:
-      return std::nullopt;
-    }
+    return parsed.value;
   }
 
   // --- state ----------------------------------------------------------------

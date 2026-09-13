@@ -212,7 +212,8 @@ resolve) and lowers the AST to HIR before type checking; Roslyn runs
 [`architecture.md#the-pipeline`](architecture.md#the-pipeline).
 
 **Shipped.** `mincc resolve` runs the front end through this stage
-(`lex -> preprocess -> parse -> lower -> validate -> resolve`); `sema` is next.
+(`lex -> preprocess -> parse -> lower -> validate -> resolve`), and
+`mincc check` runs it and then type-checks; `ir` is next.
 
 - [x] `src/ast` — lowering the lossless green tree into a compact, arena-backed
       AST. Not the same thing as the *typed view* section 3 already has: that is
@@ -274,48 +275,57 @@ grammar, the error codes (with the list of which stage owns which error), and
 the language decisions this stage had to make — `void`, conditions requiring
 `bool`, implicit narrowing at assignment, `str` not being arithmetic.
 
+**Shipped**, for every form the grammar produces today. What is left in this
+section is the type and analysis work the *syntax* does not exist for yet
+(pointers, arrays, aggregates, casts) plus the control-flow checks that need a
+CFG, which is why the last items of this list read the way they do.
+
 - [x] Design record: [`architectures/sema.md`](architectures/sema.md)
-- [ ] The type model: an interned, hash-consed `TypeId` with structural
+- [x] The type model: an interned, hash-consed `TypeId` with structural
       identity, so `i32`, `int` and `signed int` are one type; built-ins with
       stable ids; `Error` as a real poison type so a failure never cascades
-- [ ] The typed AST as a parallel `TypeId` array beside the lowered tree, so
-      `src/ast` never depends on the type language and the tree stays a value
-- [ ] The type-specifier grammar over the `Type` identifier run, with the
+- [x] The typed AST as a parallel array beside the lowered tree, so `src/ast`
+      never depends on the type language and the tree stays a value — plus a
+      compilation-wide `Context` that owns the type store and answers the same
+      question for the same revision with the same artifact
+- [x] The type-specifier grammar over the `Type` identifier run, with the
       **target ABI** supplying `long`/`long double` widths — never the host's
-      `#ifdef`s
-- [ ] Conversions: integer promotions and C17 6.3.1.8 usual arithmetic
-      conversions, assignment conversion with `-Wconversion` designed for, and
-      the rule that a condition must be `bool`
-- [ ] Deferred literal typing: context decides, `i32`/`f64` is the default, and
+      `#ifdef`s — including the `uint` and `__int128` shorthands and the C
+      spellings of `char`
+- [x] Conversions: integer promotions and C17 6.3.1.8 usual arithmetic
+      conversions, assignment conversion with `-Wconversion` implemented and off
+      by default, and the rule that a condition must be `bool`
+- [x] Deferred literal typing: context decides, `i32`/`f64` is the default, and
       a literal that does not fit its type is an error rather than a silent
-      truncation
-- [ ] Lvalue/modifiable-lvalue rules, so assignment and `++`/`--` to a `const`
-      or to a non-lvalue are errors
-- [ ] Function checking: return type, `return;` vs `return expr;`,
+      truncation (a value past 64 bits is accepted only where the context can
+      hold it)
+- [x] Lvalue/modifiable-lvalue rules, so assignment and `++`/`--` to a `const`
+      or to a non-lvalue are errors — including through parentheses
+- [x] Function checking: return type, `return;` vs `return expr;`,
       `sema-missing-return`, and `main` being `fn i32 main()`
-- [ ] `sema-division-by-zero` for a constant operand, and the shared
-      constant-arithmetic core extracted to `support` so `#if` and sema cannot
-      disagree about integer arithmetic
-- [ ] `mincc check` (scaffolded today): the stage's command, with `--ast`
-      printing the typed tree and `--types` the type store
+- [x] `sema-division-by-zero` for a constant operand, and the constant-arithmetic
+      core extracted to `support` (`support/consteval`) so `#if` and sema cannot
+      disagree about integer arithmetic — the preprocessor's evaluator now
+      calls it too
+- [x] `mincc check`: the stage's command, with `--ast` printing the typed tree
+      and `--types` the type table, `--target` the ABI, and `-Wconversion` the
+      narrowing lint
+- [x] The example corpus type-checks clean, as a test and through
+      `make examples`
 
-- [ ] Type system: the decided primitive set (`i8`..`i128`, `u8`..`u128`,
-      `f32`/`f64`/`f80`, `bool`, `char`, `str`) plus the C-compatible spellings
-      (`int`, `long`, `long long int`, ...) mapped per target ABI, with `char`
-      fixed unsigned rather than inheriting C's sign, plus qualifiers, arrays,
-      functions, pointers
-- [ ] Usual arithmetic conversions, integer promotions, implicit conversions
-- [ ] Constant expressions and folding (shared with `#if` evaluation)
-- [ ] Type checking for every expression and statement form
-- [ ] Lvalue/rvalue rules, address-of requirements, assignment compatibility
+- [ ] Type system: qualifiers (`const`/`volatile` on the pointee), arrays, and
+      function-pointer types — the primitive set and the C-compatible spellings
+      are done (`i8`..`i128`, `u8`..`u128`, `f32`/`f64`/`f80`, `bool`, `char`,
+      `str`, `void`, `int`/`long`/`long long int`/… per target ABI, with `char`
+      fixed unsigned rather than inheriting C's sign)
 - [ ] Pointer semantics: element-scaled arithmetic, casts, byte-aliasing rules,
       and the provenance model the optimizer may rely on
-- [ ] Control-flow checks: `break`/`continue` context, `goto` targets,
-      missing `return`
+- [ ] Control-flow checks that need a CFG: definite assignment, `break`/`continue`
+      context, `goto` targets
 - [ ] Storage classes and linkage: `static`, `extern`, tentative definitions
 - [ ] Symbol table exported for the backend and C interop
-- [ ] Warning set: unused entities, unreachable code, sign/conversion issues,
-      shadowing (each with a code and a test)
+- [ ] Warning set: sign/conversion issues beyond `-Wconversion`, and the rest of
+      the lints (each with a code and a test)
 
 ## 6. IR — `src/ir`
 
@@ -350,10 +360,13 @@ the language decisions this stage had to make — `void`, conditions requiring
 
 ## 9. Driver — `src/driver`
 
-- [ ] `check`: run lex/parse/sema, render `DiagBag`, no codegen
+- [x] `check`: the whole front end through type checking, `DiagBag` rendered,
+      no codegen — `--ast`, `--types`, `--target`, `-Wunused`/`-Wshadow`,
+      `-Wconversion`
 - [ ] `build`: full pipeline → `.o` → link; `-o`, multiple inputs
 - [ ] `run`: build then execute, forwarding program arguments after `--`
-- [ ] Common flags: `-I`, `-D`, `-O`, `--emit`, `--target`
+- [ ] Common flags: `-O`, `--emit`; `-I`, `-D` and `--target` are wired for the
+      front-end commands and will be shared by `build`/`run`
 - [ ] Response files (`@file`) for long command lines
 - [ ] `--color` with tty detection and `NO_COLOR`; wire `DiagRenderer` colors
 - [ ] `-ferror-limit` and a "too many errors" path using `kMaxDiagnostics`

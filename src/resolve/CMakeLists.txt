@@ -13,7 +13,7 @@ minc_add_library(minc_resolve
     dump.cc
     def.cc
     resolve_error.cc
-  DEPS minc_ast minc_intern minc_span minc_source
+  DEPS minc_ast minc_intern minc_span minc_source minc_text
 )
 
 # Both error tables -> diagnostics. Separate target on purpose: a consumer that

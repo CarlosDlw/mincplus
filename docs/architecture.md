@@ -533,7 +533,7 @@ source (.mx)
   [x]             lower      the green tree    -> compact AST
   [x]             validate   the AST           -> the AST, structurally legal
   [x]             resolve    the AST           -> scopes + a symbol per name
-  [ ]             sema       the resolved AST  -> typed AST
+  [x]             sema       the resolved AST  -> typed AST
   [ ]             ir         the typed AST     -> CFG (init / borrow / optimize)
   [ ]             codegen    the IR            -> object file / assembly
   [ ]             link       objects           -> executable
@@ -565,12 +565,13 @@ code. That is what makes a stage testable without a `Session`, fuzzable without
 a terminal, and reusable by the language server — which needs `resolve` and
 `sema` and never wants a process exit.
 
-The stages through `resolve` are shipped and **wired**: `mincc parse` runs the
-whole front end, so a file that begins with `#define` has a syntax tree of its
-translation unit rather than a lex error on the `#`, and `mincc resolve` runs
-that tree through lowering, validation and name resolution. The four commands
-are four views of one pipeline, and each names the others so a reader is never
-left guessing which one to reach for:
+The stages through `sema` are shipped and **wired**: `mincc parse` runs the whole
+front end, so a file that begins with `#define` has a syntax tree of its
+translation unit rather than a lex error on the `#`; `mincc resolve` runs that
+tree through lowering, validation and name resolution; and `mincc check` runs
+all of it, types every expression, and reports the verdict without emitting
+anything. The five commands are five views of one pipeline, and each names the
+others so a reader is never left guessing which one to reach for:
 
 | Command | Stage | Sees |
 | --- | --- | --- |
@@ -578,6 +579,7 @@ left guessing which one to reach for:
 | `mincc pp` | lexer + preprocessor | the token stream of the translation unit — macros expanded, includes resolved |
 | `mincc parse` | lexer + preprocessor + parser | the syntax tree over the preprocessed stream |
 | `mincc resolve` | the front end through name resolution | the lowered AST, the scopes, and every name with the declaration it denotes |
+| `mincc check` | the front end through type checking | the table of types, and every node with the type it was given — `--ast` |
 
 `-D`/`-U`/`-I`/`-isystem` belong to the *front end*, not to one command that
 prints it, so all three commands that preprocess accept them and one helper
@@ -609,7 +611,7 @@ warnings inside them are dropped at the report step while errors are not.
   validation, two-phase resolution, the item tree, the scope tables, the error
   codes, the bounds, and the language decisions they depend on. `mincc resolve`
   is the command that proves them.
-- **sema** is next, and it is the first stage that consumes a tree where every
+- **sema** (`src/sema`) is the first stage that consumes a tree where every
   name already denotes a declaration, so nothing in it searches a scope. It is
   about types and nothing else, filtered by the type checklist in `README.md`.
   Lowering, validation and resolution are stages of their own rather than
@@ -618,11 +620,27 @@ warnings inside them are dropped at the report step while errors are not.
   rather than bolted on when the LSP arrives. It returns the *typed* AST the IR
   consumes — types interned, conversions implemented once, and a failed
   expression typed as a poison rather than as a missing value, which is what
-  keeps one mistake from becoming twenty. Design record:
-  [`architectures/sema.md`](architectures/sema.md) — the type model, the
-  conversion rules, the node-by-node surface, which stage owns which error, and
-  the decisions the language had to make with it. `mincc check` is the command
-  that proves it.
+  keeps one mistake from becoming twenty.
+
+  The shape is a small one, and each part exists for a consumer that already
+  exists or is one stage away: `TypeStore` interns a type by *structure*, so
+  `int`, `i32` and `signed int` are one `TypeId` — which is the property the IR
+  and the linker need before they can compare two signatures. Its widths come
+  from `sema/target.h`, a table selected by name (`--target systemv-amd64`,
+  `--target windows-x64`), so `long` means what the *target* means and a cross
+  build is not silently wrong; there is no `#ifdef` in the stage. The typed AST
+  is a **parallel array** beside the lowered tree rather than a field inside its
+  nodes, the same decision `resolve` made for its `NameRef`s: the tree stays a
+  value, so it stays hashable and the item-tree cache keeps working. And
+  `sema::Context` is the compilation's central checker — one type store, one
+  answer per `(FileId, revision)`, re-queryable for free — which is what lets
+  the IR builder, a lint, and the language server all ask the same question
+  without re-checking the unit or risking a different verdict.
+
+  Design record: [`architectures/sema.md`](architectures/sema.md) — the type
+  model, the conversion rules, the node-by-node surface, which stage owns which
+  error, and the decisions the language had to make with it. `mincc check` is
+  the command that proves it.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

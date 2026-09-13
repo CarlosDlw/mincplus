@@ -8,6 +8,8 @@ add_subdirectory(intern)
 add_subdirectory(utf8)
 add_subdirectory(session)
 add_subdirectory(fs)
+add_subdirectory(text)
+add_subdirectory(consteval)
 
 add_library(minc_support INTERFACE)
 target_link_libraries(minc_support INTERFACE
@@ -21,5 +23,7 @@ target_link_libraries(minc_support INTERFACE
   minc_utf8
   minc_session
   minc_fs
+  minc_text
+  minc_consteval
 )
 target_include_directories(minc_support INTERFACE ${PROJECT_SOURCE_DIR}/include)
