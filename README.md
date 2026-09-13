@@ -28,14 +28,26 @@ preprocessor (`src/pp`), the parser and syntax tree (`src/parse`, `src/syntax`),
 and the `mincc` driver. The front end is wired end to end: `mincc parse` runs
 `source -> lex -> preprocess -> parse`, so a file that starts with `#define` has
 a syntax tree of its translation unit. `build`, `run`, and `check` parse
-correctly but report that they are not implemented, and there is no semantic
-analysis or backend yet. `--help` and `--version` are functional.
+correctly but report that they are not implemented. `--help` and `--version`
+are functional.
+
+The stage order is fixed and written down once, in
+[`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline):
+`lex` and `preprocess` (phases 3 and 4 of translation), then
+`parse -> lower -> validate -> resolve -> sema -> ir -> codegen -> link`.
+The first four are shipped; **lower**, **validate** and **resolve** are next,
+in that order, and they are stages of their own rather than part of `sema` —
+a C-like grammar lets a call name a function defined further down, so name
+resolution has to finish before any body can be type-checked. Each stage takes
+one artifact and returns one, reports nothing, and leaves every error as a
+value with a code and a span; only the `*_report` libraries and the driver turn
+those into text and an exit code.
 
 Three commands, three views, one pipeline — each names the stage it shows:
 
 | Command | Shows |
 | --- | --- |
-| `mincc lex <files...>` | one file's raw tokens, no preprocessing (a `#` is `lex-invalid-character` there) |
+| `mincc lex <files...>` | one file's raw tokens, no preprocessing — a directive's `#` is an ordinary `Hash` token there |
 | `mincc pp <files...>` | the token stream of the translation unit: macros expanded, includes resolved |
 | `mincc parse <files...>` | the syntax tree over that stream |
 
@@ -400,7 +412,12 @@ hidden escape hatch.
   adapter that lets the parser read it, kept a separate target so the
   preprocessor never links the grammar. Design in
   [`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md).
-- `src/sema|ir|backend|cinterop/` — planned.
+- `src/ast/`, `src/resolve/`, `src/sema/`, `src/ir/`, `src/backend/`,
+  `src/cinterop/` — planned, in that order and for the reasons in
+  [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline).
+  `src/ast` lowers the green tree into a compact AST for analysis; `src/resolve`
+  builds scopes and ties every name to a declaration. Neither is a bullet inside
+  `src/sema`.
 - `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
   `tests/unit/lex/examples_test.cc` and parsed by
@@ -415,9 +432,9 @@ hidden escape hatch.
   - `005_literals.mx` — integers in four bases, decimal/hex floats, character
     and string escapes, and both comment styles
   - `pp/` — the **preprocessor corpus**. A different contract from the five
-    above: these files contain directives, so what must lex and parse cleanly is
-    the *result* of preprocessing them, not the file itself -- `mincc lex`
-    still flags their `#` by design, because it is the raw per-file view, while
+    above: these files contain directives, and a directive's `#` is an ordinary
+    `Hash` token, so they lex cleanly too -- `mincc lex` shows the `#` and the
+    directive name as tokens, without pretending to know what they mean, while
     `mincc parse` preprocesses them first. Each file documents the expansion it
     produces, and every file is preprocessed with one flag,
     `-I examples/pp/include`, which is the corpus's entire configuration.
@@ -434,8 +451,14 @@ hidden escape hatch.
       rule, and `__VA_OPT__`
     - `pp/007_builtins.mx` — `__FILE__`, `__LINE__`, `__COUNTER__`,
       `__has_include`
+    - `pp/008_header_names.mx` — header-names as the language defines them
+      (`//` and `/*` are ordinary characters inside `<...>`, escapes do not
+      exist inside `"..."`), and `__has_include` asked about the same search
+      list the guarded `#include` then uses
     - `pp/include/minc_limits.h`, `pp/include/minc_config.h` — the guarded
       headers `pp/005` pulls in, one of which includes the other
+    - `pp/include/minc_pragma.h` — a header with no `#ifndef` guard at all,
+      protected by `_Pragma("once")`, and included twice to prove it
 
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in

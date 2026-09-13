@@ -9,6 +9,15 @@ Design targets: a compiler that runs on Linux, macOS, and Windows (Clang, GCC,
 MSVC); an LLVM-based backend kept isolated so the front end never depends on
 it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 
+The stage order is not re-decided here: it is stated once, in
+[`architecture.md#the-pipeline`](architecture.md#the-pipeline), as
+`lex` and `preprocess` (phases 3 and 4 of translation) then `parse` -> `lower`
+-> `validate` -> `resolve` -> `sema` -> `ir` -> `codegen` -> `link`. The sections
+below follow that order, and a stage is added where the pipeline puts it rather
+than appended to the end of this file. `lower`, `validate` and `resolve` are
+their own stages because name resolution must *finish* before a body can be
+type-checked, which is what section 4 is about.
+
 ## 0. Foundation (current)
 
 - [x] `support/` — spans, lines, UTF-8 (decoding, validation, BOM), sources,
@@ -20,9 +29,12 @@ it; emitted objects following the System V AMD64 ABI and linking with `cc`/`ld`.
 - [x] Build system, presets, cross-platform CI, format and tidy gates
 - [x] ASan + UBSan preset (`cmake --preset sanitize`) as one build-wide switch,
       so no module can be left uninstrumented by accident
-- [x] Architecture contract map in [`architecture.md`](architecture.md), lexer
-      design in [`architectures/lexer.md`](architectures/lexer.md), parser and
-      syntax-tree design in [`architectures/parser.md`](architectures/parser.md)
+- [x] Architecture contract map in [`architecture.md`](architecture.md),
+      **including the stage order** ([`#the-pipeline`](architecture.md#the-pipeline)),
+      lexer design in [`architectures/lexer.md`](architectures/lexer.md), parser
+      and syntax-tree design in [`architectures/parser.md`](architectures/parser.md),
+      preprocessor design in
+      [`architectures/preprocessor.md`](architectures/preprocessor.md)
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
@@ -138,7 +150,7 @@ lossless per-file token buffer.
 - [x] AddressSanitizer + UndefinedBehaviorSanitizer preset, run in CI
 - [ ] Fuzz target wired to a fuzzing engine (libFuzzer/AFL) in CI
 
-## 3. Parser — `src/parse` · syntax tree + AST — `src/syntax`
+## 3. Parser and syntax tree — `src/parse` · `src/syntax`
 
 Design decided in [`architectures/parser.md`](architectures/parser.md): a
 hand-written recursive-descent parser that emits **events**, consumed by a
@@ -184,9 +196,50 @@ typed AST view on top.
 - [ ] Reserved syntax kinds for macro calls, token trees, and attributes
 - [ ] Grammar documented next to the code it implements
 
-## 4. Semantic analysis — `src/sema`
+## 4. AST lowering and name resolution — `src/ast` · `src/resolve`
 
-- [ ] Scopes and name resolution, with shadowing rules
+The stages between the syntax tree and type checking, and the reason they are
+stages rather than bullets inside `sema`: a C-like grammar lets a file-scope
+call name a function defined further down, so no body can be type-checked before
+every declaration visible to it exists. Name resolution has to finish first.
+`rustc` gives it a crate of its own (`rustc_resolve`, two phases: collect, then
+resolve) and lowers the AST to HIR before type checking; Roslyn runs
+`parse -> declaration table -> bind -> emit`; TypeScript has the binder; Zig has
+`AstGen -> ZIR` and then `Sema -> AIR`. The order is stated once, in
+[`architecture.md#the-pipeline`](architecture.md#the-pipeline).
+
+- [ ] `src/ast` — lowering the lossless green tree into a compact, arena-backed
+      AST. Not the same thing as the *typed view* section 3 already has: that is
+      a set of accessors that makes the green tree pleasant to traverse, and it
+      still carries trivia and error nodes. The green tree exists for *fidelity*
+      (trivia, error nodes, byte-exact reconstruction), which is what the
+      formatter and the LSP need and what analysis should not have to walk. The
+      lowered AST is a separate arena built for analysis, and every node keeps
+      the `(FileId, range)` it came from so a diagnostic still lands on the
+      user's bytes
+- [ ] Structural validation the parser could not do: a duplicate parameter, an
+      attribute where it has no meaning, `break` outside a loop. Cheap, and it
+      runs before the expensive passes (`rustc` calls it AST validation)
+- [ ] `src/resolve` — two phases, deliberately: **collect** every declaration
+      into its scope first, then **resolve** each use against scopes that are
+      complete by then. One phase cannot work; forward reference is the point
+- [ ] Scopes and shadowing rules, with a `SymId` per name interned once, so
+      identity is compared instead of spelling
+- [ ] Every identifier node records the declaration it denotes, so `sema` never
+      searches a scope again
+- [ ] Redeclaration and unknown-name errors, plus the warnings that need scopes
+      and nothing else (unused entity, shadowing)
+- [ ] Caching keyed `(FileId, revision)`, because an editor asks the same
+      question on every keystroke
+- [ ] `mincc resolve <files...>`: the scopes, and each name with the declaration
+      it resolved to
+- [ ] Design record: `docs/architectures/resolve.md` (planned)
+
+## 5. Semantic analysis — `src/sema`
+
+Consumes a **resolved** tree — every name already tied to a declaration — so
+nothing here searches a scope.
+
 - [ ] Type system: the decided primitive set (`i8`..`i128`, `u8`..`u128`,
       `f32`/`f64`/`f80`, `bool`, `char`, `str`) plus the C-compatible spellings
       (`int`, `long`, `long long int`, ...) mapped per target ABI, with `char`
@@ -205,7 +258,7 @@ typed AST view on top.
 - [ ] Warning set: unused entities, unreachable code, sign/conversion issues,
       shadowing (each with a code and a test)
 
-## 5. IR — `src/ir`
+## 6. IR — `src/ir`
 
 - [ ] IR design and textual form `[?]` typed SSA vs. simple three-address
 - [ ] Module/type/function/block/value model with an arena-backed builder
@@ -215,7 +268,7 @@ typed AST view on top.
       CFG simplification
 - [ ] Debug-info hooks so source locations survive into the backend
 
-## 6. Backend — `src/backend/llvm` (isolated)
+## 7. Backend — `src/backend/llvm` (isolated)
 
 - [ ] LLVM target initialization for AMD64; target machine and data layout
 - [ ] IR → LLVM IR translation
@@ -225,7 +278,7 @@ typed AST view on top.
 - [ ] `[?]` Whether a hand-written AMD64 codegen is in scope at all
 - [ ] `[?]` Whether non-AMD64 targets are ever planned
 
-## 7. C interoperability — `src/cinterop`
+## 8. C interoperability — `src/cinterop`
 
 - [ ] System V AMD64 argument classification (INTEGER/SSE/MEMORY) and returns
 - [ ] Aggregates by value: struct passing/returning, unions, alignments
@@ -236,7 +289,7 @@ typed AST view on top.
 - [ ] `[?]` Whether to parse C headers directly or require declaration blocks
 - [ ] Interop test suite that links against libc in both directions
 
-## 8. Driver — `src/driver`
+## 9. Driver — `src/driver`
 
 - [ ] `check`: run lex/parse/sema, render `DiagBag`, no codegen
 - [ ] `build`: full pipeline → `.o` → link; `-o`, multiple inputs
@@ -248,21 +301,21 @@ typed AST view on top.
 - [ ] `--version` printing version, host, and target triple
 - [ ] `[?]` Incremental compilation / on-disk cache
 
-## 9. Language extras
+## 10. Language extras
 
 - [ ] `[?]` Fix the extension list with the language checklist
 - [ ] Specify each extra: syntax, semantics, and C-interop interaction
 - [ ] Reject extensions cleanly when a C-compatible mode is requested
 - [ ] Language reference documenting every extension with rationale
 
-## 10. Runtime and standard library
+## 11. Runtime and standard library
 
 - [ ] `[?]` Reuse libc only, or ship a small bundled runtime/stdlib
 - [ ] Entry-point handling and startup (`main`, CRT assumptions)
 - [ ] Headers for interop and for the extras that need library support
 - [ ] Decide what "minimal C" guarantees beyond the C standard subset
 
-## 11. Quality
+## 12. Quality
 
 - [x] Unit tests per shipped module (support, lexer, parser, syntax tree,
       driver); preprocessor, sema, and IR suites land with those stages
@@ -277,7 +330,7 @@ typed AST view on top.
 - [ ] Coverage reporting and compile-time/memory benchmarks
 - [ ] Cross-platform CI extended from `support` to the whole pipeline
 
-## 12. Release and maintenance
+## 13. Release and maintenance
 
 - [ ] Versioning policy and `CHANGELOG.md`
 - [ ] Packaging: install layout, `mincc` on `PATH`, tarballs/installers

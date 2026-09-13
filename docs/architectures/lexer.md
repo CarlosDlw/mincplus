@@ -271,7 +271,9 @@ implementation-defined. The arena now refuses such a request itself
 
 ## Non-goals for the lexer
 
-- No type information, no name resolution, no semantic checks — those are sema.
+- No type information, no name resolution, no semantic checks — name resolution
+  is `src/resolve`, the rest is `src/sema`
+  ([`../architecture.md#the-pipeline`](../architecture.md#the-pipeline)).
 - No source reading, buffering, or encoding validation — that is `SourceManager`.
 - No macro expansion or directive handling — that is the preprocessor
   ([`preprocessor.md`](preprocessor.md)).

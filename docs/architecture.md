@@ -485,10 +485,50 @@ checks all three. The load-bearing decisions:
 
 ## The pipeline
 
-`source -> lex -> preprocess -> parse (AST) -> sema -> ir -> backend -> C
-interop`, with the driver orchestrating the stages. Tokenization is phase 3 and
-directives are phase 4, so the lexer feeds the preprocessor rather than the
-other way round.
+One order, fixed here so a stage is never inserted in the wrong place and never
+forgotten. Each row is one module with one artifact on each side; `[x]` is
+shipped, `[ ]` is planned.
+
+```
+source (.mx)
+  [x] phase 3     lex        one file          -> TokenStream (lossless)
+  [x] phase 4     preprocess the unit          -> preprocessed text + stream
+  [x]             parse      the token stream  -> event stream + errors
+  [x]             syntax     events + tokens   -> lossless green tree, typed view
+  [ ]             lower      the green tree    -> compact AST
+  [ ]             validate   the AST           -> the AST, structurally legal
+  [ ]             resolve    the AST           -> scopes + a symbol per name
+  [ ]             sema       the resolved AST  -> typed AST
+  [ ]             ir         the typed AST     -> CFG (init / borrow / optimize)
+  [ ]             codegen    the IR            -> object file / assembly
+  [ ]             link       objects           -> executable
+```
+
+Tokenization is phase 3 and directives are phase 4, so the lexer feeds the
+preprocessor rather than the other way round, and no stage *after* the
+preprocessor reads the source bytes directly: everything above it consumes the
+preprocessed stream, which is the only reason a directive is not a syntax error
+in the grammar.
+
+**`lower`, `validate` and `resolve` are stages, not part of `sema`.** The order
+is forced by the language, not chosen for tidiness. A C-like grammar lets a
+file-scope call name a function defined further down, so no body can be checked
+before every declaration visible to it exists: name resolution must *finish*
+before type checking starts. And the green tree is built for fidelity — trivia,
+error nodes, byte-exact reconstruction — which is exactly what the formatter and
+the LSP need and the opposite of what analysis wants to walk. Every large
+compiler separates these the same way: `rustc` has `rustc_resolve` (two phases:
+collect, then resolve) and lowers the AST to HIR before type checking; Roslyn
+runs `parse -> declaration table -> bind -> emit`; TypeScript has the binder as
+its own pass; Zig has `AstGen -> ZIR` and then `Sema -> AIR`.
+
+**The contract every stage obeys.** A stage receives an artifact and returns an
+artifact. It never prints, never exits, and never sees a `DiagBag`: every error
+is a *value* with a stable code and a span, and the `*_report` libraries and the
+driver are the only code that turns those values into text and into an exit
+code. That is what makes a stage testable without a `Session`, fuzzable without
+a terminal, and reusable by the language server — which needs `resolve` and
+`sema` and never wants a process exit.
 
 The first four stages are shipped and **wired**: `mincc parse` runs the whole
 front end, so a file that begins with `#define` has a syntax tree of its
@@ -522,8 +562,17 @@ warnings inside them are dropped at the report step while errors are not.
   the resource budgets that make it total on untrusted input, and the file
   identity rules that make `#pragma once` and include guards correct on
   case-insensitive filesystems.
-- **sema** is next: it consumes the `SyntaxTree` plus the `TreeStore`, filtered
-  by what the type checklist in `README.md` decided.
+- **lower**, **validate**, **resolve**, then **sema** are next, in that order.
+  `lower` turns the green tree into a compact arena AST that still points back
+  at `(FileId, range)`, so a diagnostic lands on the user's bytes. `validate`
+  is the cheap structural pass the parser could not do (a duplicate parameter,
+  an attribute in a position that has no meaning). `resolve` builds the scopes
+  and answers what each name denotes, which is also the layer an editor asks
+  "where is this defined"; it is a module of its own (`src/resolve`) rather
+  than a bullet inside `sema`, for the reason above. `sema` then consumes a
+  *resolved* tree and is only about types, filtered by the type checklist in
+  `README.md`. Each gets a design record under `architectures/` before it gets
+  code, like the three that came before.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

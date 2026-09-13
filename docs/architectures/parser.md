@@ -683,7 +683,9 @@ is breadth: malformed inputs worth reviewing as text. It is a `[ ]` in
 
 ## Non-goals for the parser and the tree
 
-- No name resolution, no types, no const evaluation — that is sema.
+- No name resolution, no types, no const evaluation — name resolution is
+  `src/resolve`, types and const evaluation are `src/sema`; see
+  [`../architecture.md#the-pipeline`](../architecture.md#the-pipeline).
 - No macro expansion — that is a later layer over the token stream.
 - No incremental reparse yet — the tree is *shaped* for it, but the diff-driven
   layer comes with the LSP.
