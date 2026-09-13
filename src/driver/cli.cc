@@ -11,7 +11,7 @@ constexpr std::array<CommandInfo, 7> kCommands{{
     {Command::Build, "build", "<files...>", "Compile sources and link an executable", false},
     {Command::Run, "run", "<files...>", "Build and run the resulting program", false},
     {Command::Check, "check", "[options] <files...>",
-     "Check only: type-check every unit; no code is emitted", true},
+     "Check only: type-check every unit; silent on success, no code is emitted", true},
     // The three stages, each with the view it is responsible for, and the
     // pipeline written out where a reader looks for it: `lex` is the raw bytes
     // of one file (which is why a `#` is an error there), `pp` is the token
@@ -163,11 +163,13 @@ CliOptions parseArgs(int argc, const char* const* argv) {
         opts.showDeps = opts.showDeps || arg == "--deps";
         continue;
       }
-      if (arg == "--refs" || arg == "--unresolved" || arg == "--ast" || arg == "--types") {
+      if (arg == "--refs" || arg == "--unresolved" || arg == "--ast" || arg == "--types" ||
+          arg == "--stats") {
         opts.showRefs = opts.showRefs || arg == "--refs";
         opts.showUnresolved = opts.showUnresolved || arg == "--unresolved";
         opts.showAst = opts.showAst || arg == "--ast";
         opts.showTypes = opts.showTypes || arg == "--types";
+        opts.stats = opts.stats || arg == "--stats";
         continue;
       }
       // `--target NAME`. The name is validated by the command, not here, so the

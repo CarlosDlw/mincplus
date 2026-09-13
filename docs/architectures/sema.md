@@ -490,26 +490,34 @@ stage's work rather than a later cleanup.
 ## The command
 
 `mincc check` is the stage's view: preprocess, parse, lower, validate, resolve,
-then type-check; diagnostics on stderr, the tables on stdout; exit `Failure`
-when there is an error, `Ok` when there is only a warning.
+then type-check. Diagnostics go to stderr in the usual format with a caret; the
+exit code is `Failure` when there is an error and `Ok` when there is only a
+warning.
 
-| Flag | Shows |
+**Stdout is empty unless something is asked for**, which is the behaviour a
+compiler has and the reason the command is usable from a build script: a clean
+file says nothing, and the exit code is the answer.
+
+| Flag | Prints |
 | --- | --- |
-| default | the type table, then one summary line per file, and every diagnostic, with a caret |
+| *none* | nothing — the diagnostics are the output |
+| `--stats` | one summary line per file: `# <path>  (scopes 2, defs 5, refs 1, functions 1)  0 error(s), 0 warning(s)` |
+| `--types` | the type table, once for the invocation: every type the compilation knows, with its spelling, size and alignment |
 | `--ast` | the typed tree: the function table as checked, then every node with the type it was given and the folded constant where there is one |
-| `--types` | only the type table: every type the compilation knows, with its spelling, size and alignment |
-| `--target NAME` | the ABI the C spellings are read against (`systemv-amd64`, `windows-x64`) |
-| `-Wconversion` | warn on the implicit narrowing of the assignment conversion (off by default) |
+| `--target NAME` | nothing by itself; it picks the ABI the C spellings are read against (`systemv-amd64`, `windows-x64`) |
+| `-Wconversion` | nothing by itself; it warns on the implicit narrowing of the assignment conversion (off by default) |
 
-`-Wunused` and `-Wshadow` are accepted too and forwarded to resolution, which
-is where they are decided: a warning a user asked for must not depend on which
-command they happened to run.
+Each flag prints exactly one thing, so `--types --stats` is the table and the
+summary and nothing more. `-Wunused` and `-Wshadow` are accepted too and
+forwarded to resolution, which is where they are decided: a warning a user asked
+for must not depend on which command they happened to run.
 
 The typed dump is deliberately the lowered dump plus a type column, so a reader
 comparing `mincc resolve --ast` and `mincc check --ast` sees *only* what sema
-added. The typing comes from the compilation's `Context`, not from a one-off
-call, so the cache the language server will live on is exercised by the command
-that proves the stage.
+added — which is also why `--ast` does not print the type table: the table is
+what `--types` is for. The typing comes from the compilation's `Context`, not
+from a one-off call, so the cache the language server will live on is exercised
+by the command that proves the stage.
 
 ## Decisions
 

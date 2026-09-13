@@ -289,6 +289,19 @@ TEST(CliTest, TheConversionWarningIsOptInLikeTheOthers) {
     const CliOptions opts = parseArgs(4, argv);
     EXPECT_EQ(opts.error, "");
     EXPECT_TRUE(opts.showTypes);
+    EXPECT_FALSE(opts.stats);
+  }
+  {
+    // `--stats` is opt-in: `check` prints nothing on success without it.
+    const char* argv[] = {"mincc", "check", "a.mx"};
+    const CliOptions opts = parseArgs(3, argv);
+    EXPECT_FALSE(opts.stats);
+  }
+  {
+    const char* argv[] = {"mincc", "check", "--stats", "a.mx"};
+    const CliOptions opts = parseArgs(4, argv);
+    EXPECT_EQ(opts.error, "");
+    EXPECT_TRUE(opts.stats);
   }
 }
 

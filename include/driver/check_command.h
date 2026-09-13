@@ -13,17 +13,21 @@
 // checker (`sema::Context`), not by a one-off call, so the cache the language
 // server will live on is exercised by the command that proves the stage.
 //
-// Output:
-//   * the type table, so a reader can see what the compilation decided a type is
-//     and how wide it is (this is where `long` on `--target windows-x64` differs
-//     from the System V default);
-//   * one summary line per file -- scopes, defs, refs, types, errors, warnings;
-//   * with `--ast`, the typed tree instead: every node with the type it was
-//     given, which is what makes a surprising conversion visible where it
-//     happens.
+// Output: **nothing on stdout unless a flag asks for it**, which is what makes
+// the command usable the way a compiler is used. The exit code is the answer, the
+// diagnostics are on stderr, and a clean file prints nothing to scroll past.
+//   * default: diagnostics only;
+//   * `--stats`: the default, plus one summary line per file -- scopes, defs,
+//     refs, functions, errors, warnings;
+//   * `--types`: the type table, once for the invocation, showing what the
+//     compilation decided a type is and how wide it is (this is where `long` on
+//     `--target windows-x64` differs from the System V default);
+//   * `--ast`: the typed tree, every node with the type it was given, which is
+//     what makes a surprising conversion visible where it happens.
 //
-// Diagnostics go to stderr, the exit code follows `exit_code.h`, and a unit with
-// one error in any stage fails the command.
+// Each flag prints exactly one thing, so `--types --stats` is the table and the
+// summary and nothing else. Diagnostics go to stderr, the exit code follows
+// `exit_code.h`, and a unit with one error in any stage fails the command.
 #pragma once
 
 #include <iosfwd>
@@ -49,6 +53,8 @@ struct CheckRequest {
   bool showAst = false;
   // `--types`: print only the type table.
   bool showTypes = false;
+  // `--stats`: print one summary line per file, and no tables.
+  bool stats = false;
   // `-Wconversion`: warn when an implicit conversion may lose information.
   bool warnConversion = false;
   // `-Wunused`, `-Wshadow`: forwarded to resolution, which is where those two

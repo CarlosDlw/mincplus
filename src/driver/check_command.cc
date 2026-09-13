@@ -168,31 +168,32 @@ int checkInputs(const CheckRequest& request, std::ostream& out, std::ostream& er
     }
   }
 
+  // Nothing on stdout unless something was asked for. That is what makes
+  // `mincc check` usable the way a compiler is used: a build script reads the
+  // exit code, a human reads stderr, and a clean file produces no output at all
+  // to scroll past. Each flag below prints exactly one thing.
+  if (request.showTypes) {
+    // Once for the invocation, not once per file: that is what makes two units'
+    // types visibly one `TypeId`.
+    out << sema::dumpTypeStore(sema.types());
+  }
   if (request.showAst) {
-    // The typed tree already carries a type on every node, so printing the table
-    // as well would be the same information twice.
     for (const Unit& unit : units) {
       out << "# " << unit.path << ": typed AST\n";
       out << sema::dumpTypedFile(*unit.file, unit.typed->typed, sema.types());
     }
-  } else {
-    // The type table first: it is the vocabulary the per-file output is written
-    // in, and printing it once for the invocation (rather than once per file) is
-    // what makes two units' types visibly one `TypeId`.
-    out << sema::dumpTypeStore(sema.types());
-    if (!request.showTypes) {
-      for (const Unit& unit : units) {
-        // The summary names what the reader can check at a glance: how much the
-        // front end built, and whether it was satisfied. The counts come from
-        // the stages' own artifacts, not from a running tally.
-        out << "# " << unit.path;
-        if (unit.resolved != nullptr) {
-          out << "  (scopes " << unit.resolved->map.scopes.size() << ", defs "
-              << unit.resolved->map.defs.size() << ", refs " << unit.resolved->map.refs.size()
-              << ", functions " << unit.typed->typed.functionTable.size() << ")";
-        }
-        out << "  " << unit.errors << " error(s), " << unit.warnings << " warning(s)\n";
+  } else if (request.stats) {
+    // One line per unit, and nothing else: how much the front end built, and
+    // whether it was satisfied. The counts come from the stages' own artifacts,
+    // not from a running tally.
+    for (const Unit& unit : units) {
+      out << "# " << unit.path;
+      if (unit.resolved != nullptr) {
+        out << "  (scopes " << unit.resolved->map.scopes.size() << ", defs "
+            << unit.resolved->map.defs.size() << ", refs " << unit.resolved->map.refs.size()
+            << ", functions " << unit.typed->typed.functionTable.size() << ")";
       }
+      out << "  " << unit.errors << " error(s), " << unit.warnings << " warning(s)\n";
     }
   }
   out.flush();
@@ -219,6 +220,7 @@ int runCheck(const CliOptions& options) {
   request.target = *target;
   request.showAst = options.showAst;
   request.showTypes = options.showTypes;
+  request.stats = options.stats;
   request.warnConversion = options.warnConversion;
   request.warnUnused = options.warnUnused;
   request.warnShadow = options.warnShadow;

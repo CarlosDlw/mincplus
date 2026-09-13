@@ -27,6 +27,8 @@ constexpr const char* kOptionsBlock =
     "  --unresolved     resolve: print only the uses with no target, with reasons\n"
     "  --ast            resolve: the lowered AST and the item tree\n"
     "                   check: the typed tree, with a type on every node\n"
+    "  --stats          check: one summary line per file (nothing is printed\n"
+    "                   on success without it)\n"
     "  --types          check: print only the table of types\n"
     "  --target NAME    check: ABI the C type spellings mean against\n"
     "                   (systemv-amd64, windows-x64; default systemv-amd64)\n"

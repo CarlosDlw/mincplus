@@ -69,6 +69,9 @@ struct CliOptions {
   bool showAst = false;
   // `--types`: print only the type table.
   bool showTypes = false;
+  // `--stats`: one summary line per input, and no tables. `check` prints
+  // nothing on success without it.
+  bool stats = false;
   // `--target`: the ABI the C type spellings and the layout are read against.
   // A name, resolved through `sema/target.h`, so a target can only mean the row
   // that table prints for it.

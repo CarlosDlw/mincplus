@@ -54,7 +54,7 @@ Five commands, five views, one pipeline — each names the stage it shows:
 | `mincc pp <files...>` | the token stream of the translation unit: macros expanded, includes resolved |
 | `mincc parse <files...>` | the syntax tree over that stream |
 | `mincc resolve <files...>` | the lowered tree, the scopes, and each name with the declaration it denotes |
-| `mincc check <files...>` | the table of types and the verdict — `--ast` prints every node with the type it was given |
+| `mincc check <files...>` | the verdict, and nothing else on success — `--stats` adds one summary line per file, `--types` the type table, `--ast` every node with the type it was given |
 
 `-D name[=body]`, `-U name` and `-I dir` are front-end options, so every command
 that preprocesses accepts them, and a `-D` is a real source file
@@ -151,9 +151,17 @@ language decisions they depend on — is in
 
 Type checking is the last stage, and `mincc check` is its view: it types every
 expression, decides the width of every C spelling against the *target* rather
-than the host, and reports the verdict without emitting anything.
+than the host, and reports the verdict without emitting anything. Like a
+compiler, it prints **nothing on success** — the exit code is the answer — and
+everything else is opt-in.
 
 ```console
+$ mincc check examples/002_variables.mx && echo ok
+ok
+
+$ mincc check --stats examples/002_variables.mx
+# examples/002_variables.mx  (scopes 2, defs 5, refs 1, functions 1)  0 error(s), 0 warning(s)
+
 $ mincc check --types examples/002_variables.mx
 # types 21  target systemv-amd64  long=64  pointer=64
   #0  <error>  error  size=0  align=0
@@ -163,16 +171,13 @@ $ mincc check --types examples/002_variables.mx
   ...
   #20  fn i32()  function  size=0  align=0  params=0
 
-$ mincc check examples/002_variables.mx
-# types 21  target systemv-amd64  long=64  pointer=64
-  ...
-# examples/002_variables.mx  (scopes 2, defs 5, refs 1, functions 1)  0 error(s), 0 warning(s)
-
 $ printf 'fn i32 main() {\n  let x: uintt = 1;\n  return 0;\n}\n' | mincc check -
 <stdin>:2:10: error[sema-unknown-type]: `uintt` is not a type
     let x: uintt = 1;
            ^^^^^
 <stdin>:2:10: note: did you mean `uint`?
+$ echo $?
+1
 ```
 
 `--ast` prints the same tree `resolve --ast` does, plus the type each node was
@@ -630,7 +635,8 @@ references -- are in
 Requires CMake 3.28+, Ninja, a C++20 compiler (Clang, GCC, or MSVC), and
 GTest. GTest is found through the CMake package config, then `pkg-config`,
 then a pinned `FetchContent` download; pass `-DMINC_FETCH_GTEST=OFF` to forbid
-the download. ccache is used when present.
+the download. ccache is used when present. The CMake presets are the source of
+truth for every flag; the `Makefile` is a shortcut over them and nothing else.
 
 ```sh
 cmake --preset dev      # dev (Debug) | release | ci | sanitize

@@ -579,7 +579,7 @@ others so a reader is never left guessing which one to reach for:
 | `mincc pp` | lexer + preprocessor | the token stream of the translation unit — macros expanded, includes resolved |
 | `mincc parse` | lexer + preprocessor + parser | the syntax tree over the preprocessed stream |
 | `mincc resolve` | the front end through name resolution | the lowered AST, the scopes, and every name with the declaration it denotes |
-| `mincc check` | the front end through type checking | the table of types, and every node with the type it was given — `--ast` |
+| `mincc check` | the front end through type checking | the verdict — silent on success; `--stats` one line per file, `--types` the table of types, `--ast` every node with the type it was given |
 
 `-D`/`-U`/`-I`/`-isystem` belong to the *front end*, not to one command that
 prints it, so all three commands that preprocess accept them and one helper
