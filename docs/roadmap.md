@@ -34,7 +34,9 @@ type-checked, which is what section 4 is about.
       lexer design in [`architectures/lexer.md`](architectures/lexer.md), parser
       and syntax-tree design in [`architectures/parser.md`](architectures/parser.md),
       preprocessor design in
-      [`architectures/preprocessor.md`](architectures/preprocessor.md)
+      [`architectures/preprocessor.md`](architectures/preprocessor.md), and the
+      lowering/name-resolution design in
+      [`architectures/resolve.md`](architectures/resolve.md)
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
@@ -233,7 +235,9 @@ resolve) and lowers the AST to HIR before type checking; Roslyn runs
       question on every keystroke
 - [ ] `mincc resolve <files...>`: the scopes, and each name with the declaration
       it resolved to
-- [ ] Design record: `docs/architectures/resolve.md` (planned)
+- [x] Design record: [`architectures/resolve.md`](architectures/resolve.md) --
+      lowering, structural validation, two-phase resolution, the item tree and
+      the scopes, with the open questions that are the language's to answer
 
 ## 5. Semantic analysis — `src/sema`
 

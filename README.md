@@ -462,11 +462,12 @@ hidden escape hatch.
 
 Module contracts, ownership, and the dependency graph are documented in
 [`docs/architecture.md`](docs/architecture.md); the implementation plan is in
-[`docs/roadmap.md`](docs/roadmap.md); the lexer, parser, and preprocessor
-designs and their research references are in
+[`docs/roadmap.md`](docs/roadmap.md); the lexer, parser, preprocessor and
+lowering/name-resolution designs -- with their research references -- are in
 [`docs/architectures/lexer.md`](docs/architectures/lexer.md),
-[`docs/architectures/parser.md`](docs/architectures/parser.md), and
-[`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md).
+[`docs/architectures/parser.md`](docs/architectures/parser.md),
+[`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md), and
+[`docs/architectures/resolve.md`](docs/architectures/resolve.md).
 
 ## Build
 

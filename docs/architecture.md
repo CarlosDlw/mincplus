@@ -280,7 +280,7 @@ Design record: [`docs/architectures/preprocessor.md`](architectures/preprocessor
 
 ### `parse` — the grammar
 
-Design record: [`architecture/parser.md`](architectures/parser.md).
+Design record: [`architectures/parser.md`](architectures/parser.md).
 
 - The parser emits **events**, never a node: `Start(kind)` / `Finish` / `Token`
   as a flat `std::vector<Event>`. A separate builder turns them into the tree,
@@ -571,8 +571,11 @@ warnings inside them are dropped at the report step while errors are not.
   "where is this defined"; it is a module of its own (`src/resolve`) rather
   than a bullet inside `sema`, for the reason above. `sema` then consumes a
   *resolved* tree and is only about types, filtered by the type checklist in
-  `README.md`. Each gets a design record under `architectures/` before it gets
-  code, like the three that came before.
+  `README.md`. The design record for the first three exists:
+  [`architectures/resolve.md`](architectures/resolve.md) — lowering, structural
+  validation, two-phase resolution, the item tree, the scope tables, the error
+  codes, the bounds, and the open questions that are the language's to answer
+  rather than this document's.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it
