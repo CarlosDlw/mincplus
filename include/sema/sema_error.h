@@ -59,6 +59,10 @@ enum class SemaErrorCode : std::uint8_t {
   MissingReturn,
   // `main` is declared and is not `fn i32 main()`.
   MainSignature,
+  // `break` with no loop to break out of.
+  BreakOutsideLoop,
+  // `continue` with no loop to continue.
+  ContinueOutsideLoop,
   // A constant division or remainder by zero.
   DivisionByZero,
   // The type budget was reached. A hazard bound, not a language rule.

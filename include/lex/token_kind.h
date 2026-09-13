@@ -43,11 +43,20 @@ enum class TokenKind : std::uint8_t {
   // cannot be reassembled from ordinary tokens.
   HeaderName,
 
-  // Keywords.
+  // Keywords. The statement keywords are here rather than left as identifiers
+  // because the grammar needs them to start a statement: a `let` and an `if`
+  // cannot be told apart by position alone, and the parser is trivia-blind, so
+  // the classification has to be lexical.
   KwFn,
   KwLet,
   KwConst,
   KwReturn,
+  KwIf,
+  KwElse,
+  KwWhile,
+  KwFor,
+  KwBreak,
+  KwContinue,
 
   // Punctuation.
   LParen,
@@ -143,10 +152,52 @@ enum class TokenKind : std::uint8_t {
   case TokenKind::KwLet:
   case TokenKind::KwConst:
   case TokenKind::KwReturn:
+  case TokenKind::KwIf:
+  case TokenKind::KwElse:
+  case TokenKind::KwWhile:
+  case TokenKind::KwFor:
+  case TokenKind::KwBreak:
+  case TokenKind::KwContinue:
     return true;
   default:
     return false;
   }
+}
+
+// The keywords that introduce a control-flow statement: exactly the five that
+// head one and are not a declaration or a `return`. `else` is deliberately not
+// here -- it continues an `if` rather than starting anything.
+//
+// The parser asks this instead of repeating the list, so "which words begin a
+// statement" has one owner and a keyword added without a production cannot
+// silently become a valid expression position.
+[[nodiscard]] constexpr bool isControlFlowKeyword(TokenKind kind) {
+  switch (kind) {
+  case TokenKind::KwIf:
+  case TokenKind::KwWhile:
+  case TokenKind::KwFor:
+  case TokenKind::KwBreak:
+  case TokenKind::KwContinue:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Is this token a *name* to the preprocessor?
+//
+// The preprocessor runs in translation phase 4, and phase 4 has no keywords: a
+// directive name, a macro name and the operand of `#if` are all `identifier`
+// preprocessing-tokens (C 6.4), while keyword-ness is decided in phase 7, after
+// every directive is gone. `#if` is therefore the hash followed by the
+// *identifier* `if`, and it must go on meaning that once `if` becomes a keyword
+// for the grammar -- which it is, and which is why the two spellings can never
+// be told apart by anything but the hash in front of them.
+//
+// So this is what the preprocessor asks instead of `kind == Identifier`, at
+// every place it reads a name.
+[[nodiscard]] constexpr bool isIdentifierLike(TokenKind kind) {
+  return kind == TokenKind::Identifier || isKeyword(kind);
 }
 
 [[nodiscard]] constexpr bool isLiteral(TokenKind kind) {

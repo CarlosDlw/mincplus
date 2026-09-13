@@ -449,12 +449,37 @@ void Checker::runSignatures() {
       returnType = resolveTypeNode(typeNode);
     }
 
+    // Parameters. The type is read here, in the signature pass, and written to
+    // the parameter's own definition, so a use anywhere in the body -- and a
+    // call, which compares against the function's type -- sees a real type
+    // rather than whatever the walk happened to reach first.
     std::vector<TypeId> params;
     const ast::AstId paramList = childOf(decl, ast::NodeKind::ParamList);
     if (paramList.valid() && !inError(paramList)) {
       for (const ast::AstId param : operandsOf(paramList)) {
+        if (kindOf(param) != ast::NodeKind::Param) {
+          continue; // the `Error` slot for a parameter the parser could not read
+        }
         const ast::AstId paramType = childOf(param, ast::NodeKind::Type);
-        params.push_back(paramType.valid() ? resolveTypeNode(paramType) : kTypeError);
+        TypeId declared = paramType.valid() ? resolveTypeNode(paramType) : kTypeError;
+        if (declared.valid() && types_.isVoid(declared)) {
+          // A parameter is an object, so `void` names nothing it can be. The
+          // message cannot be written by the type reader, which has no idea
+          // where the type was written.
+          error(paramType.valid() ? paramType : param, SemaErrorCode::TypeNotValue,
+                "`void` is not a type a parameter can have");
+          declared = kTypeError;
+        }
+        params.push_back(declared);
+        if (const std::optional<resolve::DefId> def =
+                defAtName(childOf(param, ast::NodeKind::Name))) {
+          if (def->index < defTypes_.size()) {
+            defTypes_[def->index] = declared;
+            // A parameter is a mutable binding: a function that cannot assign to
+            // its own parameter would have to copy it into a `let` first.
+            defIsConst_[def->index] = false;
+          }
+        }
       }
     }
 
@@ -530,17 +555,208 @@ bool Checker::terminates(ast::AstId stmt) const {
   case ast::NodeKind::ReturnStmt:
     return true;
   case ast::NodeKind::Block:
+    // A block terminates when *some* statement in it does: the statements after
+    // that one are unreachable, so they cannot change the answer.
     for (const ast::AstId child : file_.childrenOf(stmt)) {
       if (!file_.at(child).isToken() && terminates(child)) {
         return true;
       }
     }
     return false;
-  default:
-    // An expression statement, a binding, an empty statement: control always
-    // reaches the next one. The grammar has no branches yet, so "terminates"
-    // is exact rather than conservative.
+  case ast::NodeKind::IfStmt: {
+    // Both arms, or it is not a guarantee. `if (x) return 1;` falls through when
+    // `x` is false, and pretending otherwise would accept a function that can
+    // reach its end without a value.
+    const ast::AstId thenBlock = childOf(stmt, ast::NodeKind::Block);
+    const ast::AstId elseClause = childOf(stmt, ast::NodeKind::ElseClause);
+    if (!thenBlock.valid() || !elseClause.valid() || !terminates(thenBlock)) {
+      return false;
+    }
+    for (const ast::AstId arm : file_.childrenOf(elseClause)) {
+      if (!file_.at(arm).isToken()) {
+        return terminates(arm);
+      }
+    }
     return false;
+  }
+  case ast::NodeKind::WhileStmt:
+  case ast::NodeKind::ForStmt:
+    return loopsForever(stmt);
+  default:
+    // An expression statement, a binding, an empty statement, a jump: control
+    // always reaches the next one.
+    return false;
+  }
+}
+
+bool Checker::loopsForever(ast::AstId stmt) const {
+  ast::AstId condition;
+  if (kindOf(stmt) == ast::NodeKind::WhileStmt) {
+    for (const ast::AstId operand : operandsOf(stmt)) {
+      if (kindOf(operand) != ast::NodeKind::Block) {
+        condition = operand;
+        break;
+      }
+    }
+  } else {
+    const std::vector<ast::AstId> clause = operandsOf(childOf(stmt, ast::NodeKind::ForCondition));
+    if (!clause.empty()) {
+      condition = clause.front();
+    }
+  }
+
+  // No condition at all is the language's spelling of `true`: `for ;; {}` and
+  // `while true {}` are the same loop, and both leave only through `return`.
+  if (condition.valid()) {
+    const std::optional<bool> value = constantCondition(condition);
+    if (!value.has_value() || !*value) {
+      return false;
+    }
+  }
+
+  // ... and only if nothing in the body can leave it early. A `break` aimed at
+  // this loop makes falling out of the bottom possible, and control then
+  // continues after the loop.
+  const ast::AstId body = childOf(stmt, ast::NodeKind::Block);
+  return body.valid() && !hasBreakForThisLoop(body);
+}
+
+bool Checker::hasBreakForThisLoop(ast::AstId node) const {
+  if (!node.valid() || inError(node)) {
+    return false;
+  }
+  switch (kindOf(node)) {
+  case ast::NodeKind::BreakStmt:
+    return true;
+  case ast::NodeKind::WhileStmt:
+  case ast::NodeKind::ForStmt:
+    // A `break` inside belongs to that loop, not to the one we are asking about,
+    // so the scan stops here rather than descending.
+    return false;
+  case ast::NodeKind::IfStmt:
+  case ast::NodeKind::ElseClause:
+  case ast::NodeKind::Block:
+    for (const ast::AstId child : file_.childrenOf(node)) {
+      if (!file_.at(child).isToken() && hasBreakForThisLoop(child)) {
+        return true;
+      }
+    }
+    return false;
+  default:
+    return false;
+  }
+}
+
+std::optional<bool> Checker::constantCondition(ast::AstId condition) const {
+  if (!condition.valid()) {
+    return std::nullopt;
+  }
+  const ExprInfo& facts = out_.typed.infoOf(condition);
+  if (!facts.isConstant || !facts.hasIntValue) {
+    // A float condition is impossible (`bool` is required) and a `bool` constant
+    // folds to 0 or 1, so "a constant with no integer value" is a condition this
+    // stage could not resolve -- and saying so is better than guessing.
+    return std::nullopt;
+  }
+  return std::optional<bool>(facts.value.truthy());
+}
+
+// --- control flow ------------------------------------------------------------
+
+void Checker::checkCondition(ast::AstId condition, std::string_view what) {
+  const TypeId type = checkExpr(condition, kInvalidType);
+  if (types_.isError(type)) {
+    return;
+  }
+  if (types_.get(type).kind != TypeKind::Bool) {
+    error(condition, SemaErrorCode::ConditionNotBool,
+          "the condition of `" + std::string(what) + "` must be `bool`; `" + types_.spelling(type) +
+              "` is not one");
+  }
+}
+
+void Checker::checkIf(ast::AstId stmt, TypeId returnType) {
+  const ast::AstId thenBlock = childOf(stmt, ast::NodeKind::Block);
+  const ast::AstId elseClause = childOf(stmt, ast::NodeKind::ElseClause);
+
+  // The condition is whichever direct child is neither of those two, which is
+  // how the expression is found without counting children.
+  for (const ast::AstId operand : operandsOf(stmt)) {
+    if (operand != thenBlock && operand != elseClause) {
+      checkCondition(operand, "if");
+      break;
+    }
+  }
+  if (thenBlock.valid()) {
+    checkBlock(thenBlock, returnType);
+  }
+  // An `else` arm is a block or another `if`; nothing else can get in, because
+  // that is the only thing the grammar accepts after `else`.
+  for (const ast::AstId arm : operandsOf(elseClause)) {
+    if (kindOf(arm) == ast::NodeKind::Block) {
+      checkBlock(arm, returnType);
+    } else if (kindOf(arm) == ast::NodeKind::IfStmt) {
+      checkIf(arm, returnType);
+    }
+  }
+}
+
+void Checker::checkWhile(ast::AstId stmt, TypeId returnType) {
+  const ast::AstId body = childOf(stmt, ast::NodeKind::Block);
+  for (const ast::AstId operand : operandsOf(stmt)) {
+    if (operand != body) {
+      checkCondition(operand, "while");
+      break;
+    }
+  }
+  if (body.valid()) {
+    // `break` and `continue` are checked against this counter, so one declared
+    // outside any loop is an error rather than a jump to nowhere.
+    ++loopDepth_;
+    checkBlock(body, returnType);
+    --loopDepth_;
+  }
+}
+
+void Checker::checkFor(ast::AstId stmt, TypeId returnType) {
+  // The clauses are read by kind: the initializer is a statement, and the
+  // condition and the step are wrapped in their own kinds precisely so that a
+  // reader does not have to rely on their order.
+  ast::AstId init;
+  ast::AstId body;
+  const std::vector<ast::AstId> condition = operandsOf(childOf(stmt, ast::NodeKind::ForCondition));
+  const std::vector<ast::AstId> step = operandsOf(childOf(stmt, ast::NodeKind::ForStep));
+  for (const ast::AstId child : operandsOf(stmt)) {
+    switch (kindOf(child)) {
+    case ast::NodeKind::LetStmt:
+    case ast::NodeKind::ConstStmt:
+    case ast::NodeKind::ExprStmt:
+    case ast::NodeKind::EmptyStmt:
+      init = child;
+      break;
+    case ast::NodeKind::Block:
+      body = child;
+      break;
+    default:
+      break;
+    }
+  }
+
+  if (init.valid()) {
+    checkStatement(init, returnType);
+  }
+  if (!condition.empty()) {
+    checkCondition(condition.front(), "for");
+  }
+  if (!step.empty()) {
+    // The step's value is discarded, so any type is acceptable -- the same rule
+    // an expression statement follows.
+    (void)checkExpr(step.front(), kInvalidType);
+  }
+  if (body.valid()) {
+    ++loopDepth_;
+    checkBlock(body, returnType);
+    --loopDepth_;
   }
 }
 
@@ -554,8 +770,12 @@ void Checker::checkBlock(ast::AstId block, TypeId returnType) {
   for (const ast::AstId stmt : operandsOf(block)) {
     if (terminated && !reported && !inError(stmt)) {
       reported = true;
+      // "does not complete" rather than "returns": a `return` is one way a
+      // statement fails to fall through, and control flow now has more than one
+      // -- a loop that cannot leave, and an `if` whose every arm is one of these.
       warning(stmt, SemaErrorCode::UnreachableCode,
-              "this statement can never be reached, because the statement before it returns");
+              "this statement can never be reached, because the statement before it never "
+              "completes");
     }
     checkStatement(stmt, returnType);
     if (terminates(stmt)) {
@@ -671,6 +891,28 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
   }
   case ast::NodeKind::Block:
     checkBlock(stmt, returnType);
+    return;
+  case ast::NodeKind::IfStmt:
+    checkIf(stmt, returnType);
+    return;
+  case ast::NodeKind::WhileStmt:
+    checkWhile(stmt, returnType);
+    return;
+  case ast::NodeKind::ForStmt:
+    checkFor(stmt, returnType);
+    return;
+  case ast::NodeKind::BreakStmt:
+    if (loopDepth_ == 0) {
+      error(stmt, SemaErrorCode::BreakOutsideLoop,
+            "`break` is only valid inside a loop: there is nothing here to leave");
+    }
+    return;
+  case ast::NodeKind::ContinueStmt:
+    if (loopDepth_ == 0) {
+      error(stmt, SemaErrorCode::ContinueOutsideLoop,
+            "`continue` is only valid inside a loop: there is nothing here to "
+            "continue");
+    }
     return;
   case ast::NodeKind::EmptyStmt:
     return;

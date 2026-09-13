@@ -536,7 +536,10 @@ void Preprocessor::drainContexts(std::size_t base, std::vector<PPToken>& out, bo
     if (!isSignificant(token)) {
       continue;
     }
-    if (expression && token.is(lex::TokenKind::Identifier)) {
+    // `defined` and `__has_include` are recognized by spelling in a `#if`, and
+    // they are operators there, not keywords of the grammar -- so a token the
+    // lexer classified as a keyword is as much a candidate as an identifier.
+    if (expression && token.isName()) {
       const std::string_view text = spelling(token);
       if (text == "defined") {
         handleDefined(out, base, token);
@@ -547,7 +550,7 @@ void Preprocessor::drainContexts(std::size_t base, std::vector<PPToken>& out, bo
         continue;
       }
     }
-    if (token.is(lex::TokenKind::Identifier) && tryExpand(token, /*emitPath=*/false)) {
+    if (token.isName() && tryExpand(token, /*emitPath=*/false)) {
       continue;
     }
     out.push_back(token);
@@ -581,7 +584,7 @@ void Preprocessor::handleDefined(std::vector<PPToken>& out, std::size_t base,
   }
 
   bool defined = false;
-  if (!next.has_value() || !next->is(lex::TokenKind::Identifier)) {
+  if (!next.has_value() || !next->isName()) {
     pushError(PPError{operatorToken.loc.spelling.span(),
                       "'defined' expects an identifier, optionally in parentheses",
                       PPErrorCode::ExpressionSyntax});

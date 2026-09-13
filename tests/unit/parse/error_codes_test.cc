@@ -46,8 +46,14 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::ExpectedExpression},
     {"token that cannot start a statement", "fn i32 main() { , }\n",
      ParseErrorCode::ExpectedStatement},
-    {"parameters not accepted yet", "fn i32 main(i32 x) {}\n",
-     ParseErrorCode::UnsupportedParameters},
+    // The two halves of a parameter a reader can leave out. `(i32)` gives the
+    // type and no name; `(x:)` gives the name and no type. Something that can
+    // start neither is reported at the name, because the name is what the one
+    // spelling the grammar has puts first (`name: type`); without a colon the
+    // token cannot be the type half either.
+    {"parameter with no name", "fn i32 main(i32) {}\n", ParseErrorCode::ExpectedName},
+    {"parameter with no type", "fn i32 main(x:) {}\n", ParseErrorCode::ExpectedType},
+    {"parameter with neither", "fn i32 main(; ) {}\n", ParseErrorCode::ExpectedName},
 };
 
 [[nodiscard]] std::string deepInput() {

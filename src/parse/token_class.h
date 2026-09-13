@@ -103,6 +103,12 @@ inline constexpr std::size_t kBinaryOpCount = sizeof(kBinaryOps) / sizeof(kBinar
 }
 
 [[nodiscard]] inline bool isStatementStart(lex::TokenKind kind) {
+  // The control-flow keywords are one list, owned by the lexer, so a keyword
+  // that heads a statement is classified there once and recognized here without
+  // a second enumeration to keep in step.
+  if (lex::isControlFlowKeyword(kind)) {
+    return true;
+  }
   switch (kind) {
   case lex::TokenKind::KwLet:
   case lex::TokenKind::KwConst:

@@ -74,6 +74,7 @@ minc_add_executable(minc_unit_tests
     pp/differential_test.cc
     parse/syntax_kind_test.cc
     parse/parser_test.cc
+    parse/statement_test.cc
     parse/error_codes_test.cc
     parse/examples_parse_test.cc
     syntax/tree_test.cc

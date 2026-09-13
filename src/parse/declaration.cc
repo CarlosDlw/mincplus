@@ -26,20 +26,81 @@ void Parser::parseFnDecl() {
   decl.complete(SyntaxKind::FnDecl);
 }
 
+// A parameter is a binding, and it is written exactly like one:
+//
+//   `x: i32`
+//
+// which is the same shape as `let x: i32`. One spelling for "a name with a
+// type" in the whole language means one thing to learn, one node shape for
+// every later stage to read, and one place for the diagnostic to point.
+//
+// The C order `i32 x` is deliberately *not* accepted, and the reason is not
+// taste. A type is a run of identifiers and a name is an identifier, so
+// `fn i32 f(unsigned long) { return long; }` -- a name forgotten -- is
+// indistinguishable from `unsigned` named `long`: the type reader would quietly
+// build `u32` and the parameter would be called `long`. The colon removes the
+// guess. Everything between it and the `,`/`)` is the type, which is also what
+// makes a future declarator (`x: *i32`, `buf: [8]u8`) delimited by the same two
+// tokens instead of becoming a C declarator puzzle.
 void Parser::parseParamList() {
   Marker params = start();
-  // Parameter syntax is not decided yet (the annotation form `name: T` and the
-  // C form `T name` are both plausible), so the parser accepts the empty list
-  // and says so plainly rather than guessing one of them into the grammar.
-  if (!at(lex::TokenKind::RParen) && !atEnd()) {
-    error("function parameters are not supported yet", ParseErrorCode::UnsupportedParameters);
+  while (!at(lex::TokenKind::RParen) && !atEnd() && !bailedOut_) {
+    parseParam();
+    if (!at(lex::TokenKind::Comma)) {
+      break;
+    }
+    bump();
+    // The loop condition runs again, which is how a trailing comma before `)`
+    // ends the list instead of starting another parameter.
+  }
+  params.complete(SyntaxKind::ParamList);
+}
+
+void Parser::parseParam() {
+  Marker param = start();
+  // Progress is the loop's correctness condition, not a courtesy: a construct
+  // this function does not consume would make `parseParamList` spin forever on
+  // a token that cannot start a parameter. The span of the current token is the
+  // witness -- if it did not move, the token is junk and is taken as such.
+  const std::uint32_t before = currentSpan().begin;
+
+  if (at(lex::TokenKind::Identifier) && nth(1) == lex::TokenKind::Colon) {
+    Marker name = start();
+    bump();
+    name.complete(SyntaxKind::Name);
+    bump(); // `:`
+    parseType();
+  } else {
+    // Two ways to be here, and they are worth telling apart: one identifier run
+    // with no colon is a type somebody forgot to name, while two or more is the
+    // C argument order, which is a habit rather than a slip and is the one case
+    // where the message can teach the syntax.
+    const bool cOrder = at(lex::TokenKind::Identifier) && nth(1) == lex::TokenKind::Identifier;
+    error(cOrder ? "parameters are written `name: type`, not `type name`"
+                 : "expected a parameter written `name: type`",
+          ParseErrorCode::ExpectedName);
+
+    // Consumed as an `Error` node, not a `Type`: the run is not a type, and
+    // spelling it as one would let the type reader report the same mistake a
+    // second time. One mistake, one diagnostic, and the bytes still belong to
+    // exactly one node.
     Marker junk = start();
-    while (!at(lex::TokenKind::RParen) && !atEnd()) {
+    while (at(lex::TokenKind::Identifier)) {
       bump();
     }
     junk.complete(SyntaxKind::Error);
   }
-  params.complete(SyntaxKind::ParamList);
+
+  if (currentSpan().begin == before && !at(lex::TokenKind::Comma) && !at(lex::TokenKind::RParen) &&
+      !atEnd() && !bailedOut_) {
+    Marker junk = start();
+    while (!at(lex::TokenKind::Comma) && !at(lex::TokenKind::RParen) && !atEnd()) {
+      bump();
+    }
+    junk.complete(SyntaxKind::Error);
+  }
+
+  param.complete(SyntaxKind::Param);
 }
 
 void Parser::parseTypeAndName() {

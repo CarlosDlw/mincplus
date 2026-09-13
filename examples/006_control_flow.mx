@@ -1,0 +1,107 @@
+// Control flow: `if` / `else if` / `else`, `while`, the C-style `for`, `break`
+// and `continue`.
+//
+// The parentheses around a condition are optional everywhere one appears. A
+// condition is an expression and a `{` can never continue one, so the parser
+// knows where the condition ends whether or not the reader wrote the parens.
+
+fn i32 classify(value: i32)
+{
+  if value < 0
+  {
+    return 0 - 1;
+  }
+  else if value == 0
+  {
+    return 0;
+  }
+  else
+  {
+    return 1;
+  }
+}
+
+fn i32 signs(value: i32)
+{
+  // The same condition, written with the parentheses a C reader expects.
+  if (value < 0)
+  {
+    return 0 - 1;
+  }
+
+  return 1;
+}
+
+fn i32 factorial(n: i32)
+{
+  let result: i32 = 1;
+  let i: i32 = 2;
+
+  while i <= n
+  {
+    result *= i;
+    i += 1;
+  }
+
+  return result;
+}
+
+fn i32 countUpTo(limit: i32)
+{
+  let seen: i32 = 0;
+
+  while (seen < limit)
+  {
+    seen += 1;
+    if seen == 3
+    {
+      break;
+    }
+  }
+
+  return seen;
+}
+
+fn i32 sumSkippingMultiplesOfThree(limit: i32)
+{
+  let total: i32 = 0;
+
+  for let i: i32 = 0; i < limit; i += 1
+  {
+    if i % 3 == 0
+    {
+      continue;
+    }
+
+    total += i;
+  }
+
+  return total;
+}
+
+fn i32 sumWithAnEmptyInitializer(n: i32)
+{
+  // Any clause of a `for` may be left out: here there is no initializer, and
+  // the binding lives before the loop.
+  let total: i32 = 0;
+  let i: i32 = 0;
+
+  for ; i < n; i += 1
+  {
+    total += i;
+  }
+
+  return total;
+}
+
+fn i32 main()
+{
+  let kind: i32 = classify(0 - 5);
+  let sign: i32 = signs(7);
+  let factorialOfFive: i32 = factorial(5);
+  let counted: i32 = countUpTo(10);
+  let skipped: i32 = sumSkippingMultiplesOfThree(10);
+  let summed: i32 = sumWithAnEmptyInitializer(4);
+
+  return kind + sign + factorialOfFive + counted + skipped + summed;
+}

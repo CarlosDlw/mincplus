@@ -184,7 +184,11 @@ TEST(CheckTest, AUnitWithNoMainIsNotThisStagesProblem) {
   EXPECT_EQ(f.errorCount(), 0u);
 }
 
-TEST(CheckTest, ReachabilityIsExactWhileTheGrammarHasNoBranches) {
+// The baseline the branch-aware cases build on: a body is terminating when its
+// last statement returns, and a nested block is no different. The `if`, the
+// `else` and the loops are the tests that follow, and each of them has to agree
+// with this rule rather than replace it.
+TEST(CheckTest, StraightLineReachabilityIsExact) {
   {
     SemaFixture f;
     f.source("fn i32 f() { return 1; }\n");
@@ -272,6 +276,202 @@ TEST(CheckTest, AskingTwiceGivesTheSameAnswer) {
   // no hash-order iteration.
   EXPECT_EQ(first, second);
   EXPECT_NE(first.find("u8 [const] =7"), std::string::npos) << first;
+}
+
+// --- control flow ------------------------------------------------------------
+
+TEST(CheckTest, ConditionsMustBeBoolInEveryConstruct) {
+  // One rule, one owner: `if`, `while` and `for` disagree about nothing here.
+  for (const std::string source :
+       {"fn i32 f() { if 1 { } return 0; }\n", "fn i32 f() { while 1 { } return 0; }\n",
+        "fn i32 f() { for ; 1; { } return 0; }\n"}) {
+    SemaFixture f;
+    f.source(source);
+    ASSERT_TRUE(f.build()) << source;
+    EXPECT_TRUE(f.hasError("sema-condition-not-bool")) << source;
+  }
+}
+
+TEST(CheckTest, ABoolConditionIsAccepted) {
+  SemaFixture f;
+  f.source("fn i32 f(a: i32)\n{\n  if a == 1 { return 1; }\n  while a > 0 { a = a - 1; }\n  for ; "
+           "a < 3; a = a + 1 { }\n  return a;\n}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
+}
+
+TEST(CheckTest, AnIfWithBothArmsReturningSatisfiesTheReturnCheck) {
+  SemaFixture f;
+  f.source("fn i32 f(a: bool) { if a { return 1; } else { return 2; } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, AnIfWithOneArmReturningDoesNot) {
+  // The false branch falls through, so the function can reach its end without a
+  // value. Accepting this would be accepting a missing `return`.
+  SemaFixture f;
+  f.source("fn i32 f(a: bool) { if a { return 1; } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, AnElseIfChainCountsAsBothArms) {
+  SemaFixture f;
+  f.source("fn i32 f(a: i32) { if a == 1 { return 1; } else if a == 2 { return 2; } else { return "
+           "3; } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, ALoopThatCannotLeaveIsTerminating) {
+  // `while true` with no `break` never falls through, so the function never
+  // reaches its end and nothing is missing.
+  SemaFixture f;
+  f.source("fn i32 f() { while true { let x = 1; x = x + 1; } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, ABreakMakesTheLoopAbleToLeave) {
+  SemaFixture f;
+  f.source("fn i32 f() { while true { break; } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, ABreakAnywhereInTheBodyCounts) {
+  // Buried in an `if` inside the loop's `else`: the scan has to find it, or this
+  // function would be accepted with a path that returns nothing.
+  SemaFixture f;
+  f.source("fn i32 f(a: bool) { while true { if a { } else { break; } } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, ABreakInANestedLoopBelongsToThatLoop) {
+  // The inner `break` leaves the inner loop, not the outer one, so the outer
+  // loop still cannot fall through. Counting it would be a false "missing
+  // return" on correct code.
+  SemaFixture f;
+  f.source("fn i32 f() { while true { while true { break; } } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, AnEmptyForConditionMeansForever) {
+  SemaFixture f;
+  f.source("fn i32 f() { for ;; { let x = 1; } }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.hasError("sema-missing-return"));
+}
+
+TEST(CheckTest, AJumpOutsideALoopIsAnError) {
+  {
+    SemaFixture f;
+    f.source("fn i32 f() { break; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-break-outside-loop"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 f() { continue; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-continue-outside-loop"));
+  }
+}
+
+TEST(CheckTest, AJumpInsideAnIfInsideALoopIsFine) {
+  SemaFixture f;
+  f.source("fn i32 f(a: i32) { for let i = 0; i < a; i = i + 1 { if a == i { continue; } break; } "
+           "return 0; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
+}
+
+TEST(CheckTest, AStatementAfterAnInfiniteLoopIsUnreachable) {
+  SemaFixture f;
+  f.source("fn i32 f() { while true { } return 1; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasWarning("sema-unreachable-code"));
+}
+
+// --- parameters --------------------------------------------------------------
+
+TEST(CheckTest, AParameterIsATypedMutableBinding) {
+  SemaFixture f;
+  f.source("fn i32 f(a: i32)\n{\n  a = a + 1;\n  return a;\n}\n");
+  ASSERT_TRUE(f.build());
+  // Assignable: a parameter is not a `const`. A function that could not assign
+  // to its own parameter would have to copy it first.
+  EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
+}
+
+TEST(CheckTest, AParameterUsesTheTypeItsDeclarationGaveIt) {
+  SemaFixture f;
+  f.source("fn i32 f(a: i32)\n{\n  return a;\n}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
+}
+
+TEST(CheckTest, ArgumentsAreCheckedAgainstTheParameterTypes) {
+  const std::string_view declares = "fn i32 f(a: i32) { return a; }\n";
+  {
+    SemaFixture f;
+    f.source(std::string(declares) + "fn i32 main() { return f(1); }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
+  }
+  {
+    // A literal adapts to the parameter's type, so this is the count that is
+    // wrong, not the value.
+    SemaFixture f;
+    f.source(std::string(declares) + "fn i32 main() { return f(); }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-argument-count"));
+  }
+  {
+    // `str` does not convert to `i32`.
+    SemaFixture f;
+    f.source(std::string(declares) + "fn i32 main() { return f(\"x\"); }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-invalid-assignment"));
+  }
+}
+
+TEST(CheckTest, AParameterTypeIsUsedInTheSignature) {
+  // Calling through the wrong shim is what a mis-read parameter type would look
+  // like from the outside: the argument no longer fits.
+  SemaFixture f;
+  f.source("fn i32 f(unsigned long long int x) { return 0; }\n"
+           "fn i32 main() { return f(1); }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
+  EXPECT_FALSE(f.hasError("sema-unknown-type"));
+}
+
+TEST(CheckTest, AVoidParameterIsRejected) {
+  SemaFixture f;
+  f.source("fn i32 f(x: void) { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-type-not-value"));
+}
+
+TEST(CheckTest, AParameterShadowsNothingAndAnUnknownTypeIsNamed) {
+  SemaFixture f;
+  f.source("fn i32 f(a: i33) { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasError("sema-unknown-type"));
+}
+
+TEST(CheckTest, ParametersOfEveryArityWork) {
+  SemaFixture f;
+  f.source("fn i32 zero() { return 0; }\n"
+           "fn i32 one(a: i32) { return a; }\n"
+           "fn i32 two(a: i32, b: i32) { return a + b; }\n"
+           "fn i32 main() { return zero() + one(1) + two(2, 3); }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
 }
 
 TEST(CheckTest, APathologicalNestingIsADiagnosticAndNotAStackOverflow) {

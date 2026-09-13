@@ -101,10 +101,35 @@ private:
   void checkBody(ast::AstId block, TypeId returnType);
   void checkStatement(ast::AstId stmt, TypeId returnType);
   void checkBlock(ast::AstId block, TypeId returnType);
-  // Can control reach the end of this statement? Exact while the grammar has no
-  // branches: a `return`, a block whose last reachable statement returns, or a
-  // region the parser already reported.
+
+  // -- control flow -----------------------------------------------------------
+
+  // The one place a condition is decided, for `if`, `while`, `for` and `?:`
+  // alike: a condition is a `bool`, and an arithmetic value is not silently one.
+  // `what` names the construct, so the sentence says which condition it is about.
+  void checkCondition(ast::AstId condition, std::string_view what);
+  void checkIf(ast::AstId stmt, TypeId returnType);
+  void checkWhile(ast::AstId stmt, TypeId returnType);
+  void checkFor(ast::AstId stmt, TypeId returnType);
+
+  // Can control reach the end of this statement? Exact rather than conservative
+  // wherever the language allows an exact answer: a `return`; a block whose last
+  // reachable statement terminates; an `if` whose *both* arms terminate; a loop
+  // whose condition is a constant `true` and whose body contains no `break` that
+  // could leave it; and a region the parser already reported (where saying
+  // "control falls off the end" would be a second sentence about one mistake).
   [[nodiscard]] bool terminates(ast::AstId stmt) const;
+  // Is this loop guaranteed to leave only through a `return`? True for a
+  // constant-true condition with no `break` aimed at *this* loop -- a `break`
+  // inside a nested loop belongs to that loop and does not count.
+  [[nodiscard]] bool loopsForever(ast::AstId stmt) const;
+  [[nodiscard]] bool hasBreakForThisLoop(ast::AstId node) const;
+  // The folded value of a condition, when the checker folded one. `nullopt` for
+  // a condition it could not resolve to a constant.
+  [[nodiscard]] std::optional<bool> constantCondition(ast::AstId condition) const;
+  // `break`/`continue` are the only statements whose *validity* depends on where
+  // they were written, so the loop nesting is tracked as the walk descends.
+  std::uint32_t loopDepth_ = 0;
 
   // --- types -----------------------------------------------------------------
 

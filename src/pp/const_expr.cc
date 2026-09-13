@@ -317,6 +317,26 @@ private:
       return ConstInt{};
     }
     const PPToken& token = peek();
+
+    // Phase 4 has no keywords, so every word here is a name: `#if if` is an
+    // identifier that names no macro, which is 0 -- not a syntax error. The
+    // check comes before the switch because a keyword kind has no case of its
+    // own and would otherwise fall through to "expected an integer".
+    if (lex::isIdentifierLike(token.kind)) {
+      // A name that is not a macro is 0 (the standard's rule). Recorded so the
+      // caller can report it under -Wundef, which is the check that catches
+      // typos in `#if FEATURE_X`.
+      take();
+      if (!suppressed_) {
+        result_.undefinedNames.push_back(PPError{spanOf(token),
+                                                 "undefined identifier '" +
+                                                     std::string(spelling(token)) +
+                                                     "' is replaced by 0 in this expression",
+                                                 PPErrorCode::UndefinedIdentifier});
+      }
+      return ConstInt::fromSigned(0);
+    }
+
     switch (token.kind) {
     case lex::TokenKind::IntegerLiteral:
       return parseIntegerLiteral(take());
@@ -337,20 +357,6 @@ private:
         take();
       }
       return inner;
-    }
-    case lex::TokenKind::Identifier: {
-      // A name that is not a macro is 0 (the standard's rule). Recorded so the
-      // caller can report it under -Wundef, which is the check that catches
-      // typos in `#if FEATURE_X`.
-      take();
-      if (!suppressed_) {
-        result_.undefinedNames.push_back(PPError{spanOf(token),
-                                                 "undefined identifier '" +
-                                                     std::string(spelling(token)) +
-                                                     "' is replaced by 0 in this expression",
-                                                 PPErrorCode::UndefinedIdentifier});
-      }
-      return ConstInt::fromSigned(0);
     }
     default:
       if (atEnd()) {

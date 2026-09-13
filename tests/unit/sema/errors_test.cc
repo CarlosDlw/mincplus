@@ -336,6 +336,14 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       {"fn i32 main() { return 0; }\n", false},                               // maxTypes = 0
       {"fn i32 f() { return 1; let x = 2; return x; }\n", false},             // unreachable
       {"fn i32 main() { let a: i32 = 1; let b: i8 = a; return 0; }\n", true}, // -Wconversion
+      {"fn i32 f() { break; }\n", false},                                     // break with no loop
+      {"fn i32 f() { continue; }\n", false},              // continue with no loop
+      {"fn i32 f() { if 1 { } return 0; }\n", false},     // if condition not bool
+      {"fn i32 f() { while 1 { } return 0; }\n", false},  // while condition not bool
+      {"fn i32 f() { for ; 1; { } return 0; }\n", false}, // for condition not bool
+      {"fn i32 f(void a) { return 0; }\n", false},        // void parameter
+      {"fn i32 f(a: i32) { return a; }\nfn i32 main() { return f(); }\n", false},
+      {"fn i32 f(a: i32) { return a; }\nfn i32 main() { return f(\"x\"); }\n", false},
   };
 
   for (const Case& one : cases) {

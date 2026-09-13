@@ -610,7 +610,7 @@ void Preprocessor::spliceHeaderNames(std::vector<PPToken>& line, std::string_vie
   std::vector<std::size_t> candidates;
   std::size_t index = 1;
   const PPToken* name = detail::nextSignificant(line, index);
-  if (name == nullptr || !name->is(lex::TokenKind::Identifier)) {
+  if (name == nullptr || !name->isName()) {
     return;
   }
   const std::string_view directive = spelling(*name);
@@ -626,7 +626,7 @@ void Preprocessor::spliceHeaderNames(std::vector<PPToken>& line, std::string_vie
     // `__has_include(<name>)`: the name is one operand of an expression, so it
     // can sit anywhere in the line, not only first.
     for (std::size_t i = 1; i < line.size(); ++i) {
-      if (!line[i].is(lex::TokenKind::Identifier) || spelling(line[i]) != "__has_include") {
+      if (!line[i].isName() || spelling(line[i]) != "__has_include") {
         continue;
       }
       std::size_t cursor = i + 1;
@@ -729,7 +729,9 @@ void Preprocessor::handleDirective() {
     }
     return;
   }
-  if (!nameToken->is(lex::TokenKind::Identifier)) {
+  // A name, not necessarily an identifier: `#if` and `#else` are directives
+  // whose names the grammar also uses for statements.
+  if (!nameToken->isName()) {
     if (conditionals_.emitting()) {
       pushError(PPError{nameToken->loc.spelling.span(), "expected a directive name after '#'",
                         PPErrorCode::InvalidDirective});
@@ -897,7 +899,7 @@ PPResult Preprocessor::run(support::FileId mainFile) {
       }
       continue;
     }
-    if (token.is(lex::TokenKind::Identifier) && tryExpand(token, /*emitPath=*/true)) {
+    if (token.isName() && tryExpand(token, /*emitPath=*/true)) {
       continue;
     }
     if (lex::isPreprocessorOp(token.kind)) {

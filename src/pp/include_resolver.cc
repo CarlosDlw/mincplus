@@ -22,8 +22,11 @@ struct DirectiveToken {
   std::string_view spelling;
 };
 
-[[nodiscard]] bool isIdentifier(const DirectiveToken& token, std::string_view name) {
-  return token.token->is(lex::TokenKind::Identifier) && token.spelling == name;
+// The directive name, matched by *spelling* after the hash. Which is the whole
+// reason `#if` and `#else` are unaffected by `if` and `else` being keywords: the
+// hash is the difference, and past it a name is a name.
+[[nodiscard]] bool isDirectiveNamed(const DirectiveToken& token, std::string_view name) {
+  return lex::isIdentifierLike(token.token->kind) && token.spelling == name;
 }
 
 } // namespace
@@ -187,22 +190,22 @@ std::optional<support::SymId> sniffIncludeGuard(const lex::TokenStream& stream,
     ++cursor;
     return true;
   };
-  if (!expectHash() || !isIdentifier(significant[cursor], "ifndef")) {
+  if (!expectHash() || !isDirectiveNamed(significant[cursor], "ifndef")) {
     return std::nullopt;
   }
   ++cursor;
-  if (significant[cursor].token->kind != lex::TokenKind::Identifier) {
+  if (!lex::isIdentifierLike(significant[cursor].token->kind)) {
     return std::nullopt;
   }
   const std::string_view guardName = significant[cursor].spelling;
   ++cursor;
 
   // `#define GUARD` must follow immediately, with the same name.
-  if (!expectHash() || !isIdentifier(significant[cursor], "define")) {
+  if (!expectHash() || !isDirectiveNamed(significant[cursor], "define")) {
     return std::nullopt;
   }
   ++cursor;
-  if (significant[cursor].token->kind != lex::TokenKind::Identifier ||
+  if (!lex::isIdentifierLike(significant[cursor].token->kind) ||
       significant[cursor].spelling != guardName) {
     return std::nullopt;
   }
@@ -222,10 +225,11 @@ std::optional<support::SymId> sniffIncludeGuard(const lex::TokenStream& stream,
     if (cursor >= significant.size()) {
       return std::nullopt;
     }
-    if (isIdentifier(significant[cursor], "if") || isIdentifier(significant[cursor], "ifdef") ||
-        isIdentifier(significant[cursor], "ifndef")) {
+    if (isDirectiveNamed(significant[cursor], "if") ||
+        isDirectiveNamed(significant[cursor], "ifdef") ||
+        isDirectiveNamed(significant[cursor], "ifndef")) {
       ++depth;
-    } else if (isIdentifier(significant[cursor], "endif")) {
+    } else if (isDirectiveNamed(significant[cursor], "endif")) {
       --depth;
       if (depth == 0) {
         // Only trivia may follow; a significant token means the file has

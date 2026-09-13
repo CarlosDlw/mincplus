@@ -143,11 +143,28 @@ public:
   void parseItem();
   void parseFnDecl();
   void parseParamList();
+  void parseParam();
   void parseBlock();
   void parseStmt();
   void parseLetStmt(bool isConst);
+  // The binding itself -- `let x: T = e` -- with no terminator. `parseLetStmt`
+  // is this plus the `;`, and the `for` initializer is this plus the `;` that
+  // separates the clauses. One implementation, so the two spellings of a
+  // binding cannot drift apart.
+  void parseBinding();
   void parseReturnStmt();
   void parseExprStmt();
+  void parseIfStmt();
+  void parseWhileStmt();
+  // `for init; cond; step { body }`. The parentheses around the clauses are
+  // optional, as in every other condition in the language.
+  void parseForStmt();
+  void parseForInit();
+  // The condition or the step of a `for`, wrapped in its own kind so a consumer
+  // asks for it by name instead of by position. An omitted clause is a
+  // zero-width node of that kind.
+  void parseForClause(SyntaxKind wrapper);
+  void parseJumpStmt(SyntaxKind kind);
   void parseType();        // type-only position (after `:`)
   void parseTypeAndName(); // `fn` return type followed by the function name
 

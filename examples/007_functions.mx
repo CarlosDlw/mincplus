@@ -1,0 +1,57 @@
+// Functions and parameters.
+//
+// A parameter is a binding, so it is written the way every binding is written:
+// `name: type`, the same shape as `let name: type = ...`. There is no second
+// spelling, because a type is a run of identifiers and a name is an identifier,
+// so `fn i32 f(i32 a)` cannot say which word was the name -- the wrong order is
+// rejected rather than guessed at.
+
+fn i32 add(left: i32, right: i32)
+{
+  return left + right;
+}
+
+fn i32 multiply(left: i32, right: i32)
+{
+  return left * right;
+}
+
+// A function may be called before it is written: file-scope names do not depend
+// on order, here as everywhere else.
+fn i32 square(value: i32)
+{
+  return multiply(value, value);
+}
+
+// A `bool` parameter, so a condition can be passed in as a value.
+fn i32 choose(flag: bool, ifTrue: i32, ifFalse: i32)
+{
+  return flag ? ifTrue : ifFalse;
+}
+
+// No parameters at all: an empty list, not a `void` one.
+fn i32 zero()
+{
+  return 0;
+}
+
+// A `void` function may `return;` with no value, or fall off the end.
+fn void touch(value: i32)
+{
+  if value < 0
+  {
+    return;
+  }
+}
+
+fn i32 main()
+{
+  let sum: i32 = add(1, 2);
+  let product: i32 = multiply(4, 5);
+  let squared: i32 = square(6);
+  let picked: i32 = choose(sum < product, product, sum);
+
+  touch(picked);
+
+  return picked + squared + zero() + add(sum, product);
+}

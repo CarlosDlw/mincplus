@@ -51,6 +51,22 @@ enum class SyntaxKind : std::uint16_t {
   ReturnStmt,
   ExprStmt,
   EmptyStmt,
+  // `IfStmt` is the whole `if`, condition and both arms. The `else` arm is an
+  // `ElseClause` so that "there is an else" is a child and not a flag, and so
+  // that `else if` is one nested `IfStmt` inside it rather than a special kind.
+  IfStmt,
+  ElseClause,
+  WhileStmt,
+  // `ForStmt` holds its three clauses as nodes, in source order, then the body
+  // block. The condition and the step get their own kinds so that a reader asks
+  // for them *by name*: three bare expressions in a row could only be told apart
+  // by counting, and counting is what breaks when a clause is added. The init is
+  // a statement -- possibly an empty one -- because that is what it is.
+  ForStmt,
+  ForCondition,
+  ForStep,
+  BreakStmt,
+  ContinueStmt,
 
   // Names and types. A type is a *position*, not a token kind: `i32`, `long`,
   // and `unsigned long long int` are all `Type` nodes made of identifiers.

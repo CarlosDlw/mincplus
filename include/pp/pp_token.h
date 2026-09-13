@@ -134,6 +134,15 @@ struct PPToken {
   [[nodiscard]] constexpr bool is(lex::TokenKind other) const {
     return kind == other;
   }
+  // Is this token a name *to this stage*? Phase 4 has no keywords, so `if` is
+  // an identifier here whether or not the lexer called it one -- which is what
+  // keeps `#if`, `#define` and `#undef` working when the grammar claims those
+  // spellings. The kind is left untouched, so the parser still sees a keyword in
+  // the preprocessed stream: the two readings are a property of the question,
+  // not of the token.
+  [[nodiscard]] constexpr bool isName() const {
+    return lex::isIdentifierLike(kind);
+  }
   [[nodiscard]] constexpr bool has(PPTokenFlag flag) const {
     return hasFlag(flags, flag);
   }

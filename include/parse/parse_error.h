@@ -38,8 +38,6 @@ enum class ParseErrorCode : std::uint8_t {
   ExpectedExpression,
   // A token that cannot start a statement.
   ExpectedStatement,
-  // Syntax that is planned but deliberately not accepted yet.
-  UnsupportedParameters,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

@@ -231,14 +231,51 @@ private:
         continue;
       }
       // The function's body block *is* the function scope, as in C: there is no
-      // second block scope around it, and a parameter would enter this scope.
+      // second block scope around it, and the parameters enter this scope, so a
+      // parameter and a `let` at the top of the body cannot both take one name.
       const ScopeId functionScope =
           createScope(ScopeKind::Function, map_.fileScope, bodyNode.origin, body.index);
       if (!functionScope.valid()) {
         continue;
       }
       map_.itemScopes[i] = functionScope;
+      declareParameters(item, functionScope);
       walkBody(body, functionScope);
+    }
+  }
+
+  // Parameters are declared in the function scope before the body is walked, so
+  // a use anywhere in the body -- including in a nested block that shadows them
+  // -- answers to the parameter's definition. They live in the `ParamList`, which
+  // is a *sibling* of the body block, so nothing in the body walk would reach
+  // them; that is why this is a step of its own rather than a case in `visit`.
+  void declareParameters(const ast::Item& item, ScopeId functionScope) {
+    if (item.paramCount == 0) {
+      return;
+    }
+    const AstId decl{item.node};
+    if (!decl.valid()) {
+      return;
+    }
+    const AstId paramList = file_.childOfKind(decl, NodeKind::ParamList);
+    if (!paramList.valid()) {
+      return;
+    }
+    for (const AstId child : file_.childrenOf(paramList)) {
+      const Node& param = file_.at(child);
+      if (param.isToken() || param.kind != NodeKind::Param) {
+        continue;
+      }
+      const AstId nameNode = file_.childOfKind(child, NodeKind::Name);
+      if (!nameNode.valid()) {
+        continue;
+      }
+      const Node& name = file_.at(nameNode);
+      if (name.name == support::kInvalidSym) {
+        continue; // the parser already reported the missing name
+      }
+      (void)insertDef(functionScope, Namespace::Ordinary, name.name, param.origin, name.origin,
+                      DefKind::Parameter, Linkage::None, param.inError || name.inError);
     }
   }
 
@@ -273,6 +310,18 @@ private:
       const ScopeId inner = createScope(ScopeKind::Block, scope, self.origin, node.index);
       if (inner.valid()) {
         pushChildren(node, inner, stack);
+      }
+      return;
+    }
+    case NodeKind::ForStmt: {
+      // A `for` opens a scope of its own, so a binding declared in the
+      // initializer is visible in the condition, the step and the body, and
+      // nowhere else -- and so it cannot outlive the loop. The body block then
+      // opens a `Block` inside it, which is what makes a shadowing declaration
+      // in the body legal.
+      const ScopeId loop = createScope(ScopeKind::Loop, scope, self.origin, node.index);
+      if (loop.valid()) {
+        pushChildren(node, loop, stack);
       }
       return;
     }

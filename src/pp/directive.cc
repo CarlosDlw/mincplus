@@ -94,7 +94,9 @@ bool Preprocessor::buildMacroInfo(const std::vector<PPToken>& definition, const 
                                   const SourceLoc& defineName, MacroInfo& out) {
   std::size_t index = 0;
   skipTrivia(definition, index);
-  if (index >= definition.size() || !definition[index].is(lex::TokenKind::Identifier)) {
+  // A macro name is a name in phase 4, so a word the grammar reserves is a
+  // perfectly good one here -- the lexer's classification is phase 7's business.
+  if (index >= definition.size() || !definition[index].isName()) {
     pushError(PPError{defineName.valid() ? defineName.span() : define.span(),
                       "expected a macro name", PPErrorCode::MissingMacroName});
     return false;
@@ -154,7 +156,7 @@ bool Preprocessor::buildParameterList(const std::vector<PPToken>& definition, st
       index += 3;
       break;
     }
-    if (index >= definition.size() || !definition[index].is(lex::TokenKind::Identifier)) {
+    if (index >= definition.size() || !definition[index].isName()) {
       return fail("expected a parameter name in this macro's parameter list");
     }
     MacroParam param;
@@ -223,9 +225,7 @@ bool Preprocessor::buildReplacementList(const std::vector<PPToken>& definition, 
     // spelling in the body is the parameter's name and the replacement carries
     // its own spelling. Matching is by text because the same name can be spelled
     // in a synthetic definition (a `-D`) with no source span to intern from.
-    entry.param = token.is(lex::TokenKind::Identifier)
-                      ? parameterIndex(text, out, session_->symbols())
-                      : kNotAParameter;
+    entry.param = token.isName() ? parameterIndex(text, out, session_->symbols()) : kNotAParameter;
     entry.spellingOffset = static_cast<std::uint32_t>(out.spellings.size());
     entry.spellingLength = static_cast<std::uint32_t>(text.size());
     out.spellings.append(text);
@@ -264,7 +264,7 @@ bool Preprocessor::buildReplacementList(const std::vector<PPToken>& definition, 
   // ever emitted. It is C23, ubiquitous in headers that also build with older
   // compilers, and eleven lines of work once the pair is marked.
   for (std::size_t i = 0; i < out.body.size(); ++i) {
-    if (!out.body[i].token.is(lex::TokenKind::Identifier) || out.spellingOf(i) != "__VA_OPT__") {
+    if (!out.body[i].token.isName() || out.spellingOf(i) != "__VA_OPT__") {
       continue;
     }
     if (!out.variadic) {
@@ -325,7 +325,7 @@ bool Preprocessor::buildReplacementList(const std::vector<PPToken>& definition, 
 void Preprocessor::handleDefine(const std::vector<PPToken>& line, const SourceLoc& directive) {
   std::size_t index = detail::afterDirectiveName(line);
   const PPToken* nameToken = nextSignificant(line, index);
-  if (nameToken == nullptr || !nameToken->is(lex::TokenKind::Identifier)) {
+  if (nameToken == nullptr || !nameToken->isName()) {
     pushError(
         PPError{directive.span(), "#define requires a macro name", PPErrorCode::MissingMacroName});
     return;
@@ -350,7 +350,7 @@ void Preprocessor::handleDefine(const std::vector<PPToken>& line, const SourceLo
 void Preprocessor::handleUndef(const std::vector<PPToken>& line, const SourceLoc& directive) {
   std::size_t index = detail::afterDirectiveName(line);
   const PPToken* nameToken = nextSignificant(line, index);
-  if (nameToken == nullptr || !nameToken->is(lex::TokenKind::Identifier)) {
+  if (nameToken == nullptr || !nameToken->isName()) {
     pushError(
         PPError{directive.span(), "#undef requires a macro name", PPErrorCode::MissingMacroName});
     return;
@@ -621,7 +621,7 @@ void Preprocessor::handleConditional(const std::vector<PPToken>& line, const Sou
   } else {
     const bool wanted = isIf ? emitting : conditionals_.shouldEvaluateElif();
     if (wanted) {
-      if (argument == nullptr || !argument->is(lex::TokenKind::Identifier)) {
+      if (argument == nullptr || !argument->isName()) {
         report(PPErrorCode::InvalidDirective, "'#" + std::string(name) + "' expects a macro name");
       } else {
         const bool defined = macros_.isDefined(session_->symbols().intern(spelling(*argument)));
@@ -732,7 +732,7 @@ void Preprocessor::handleErrorOrWarning(const std::vector<PPToken>& line,
 void Preprocessor::handlePragma(const std::vector<PPToken>& line, const SourceLoc& directive) {
   std::size_t index = detail::afterDirectiveName(line);
   const PPToken* name = nextSignificant(line, index);
-  if (name != nullptr && name->is(lex::TokenKind::Identifier) && spelling(*name) == "once") {
+  if (name != nullptr && name->isName() && spelling(*name) == "once") {
     if (!files_.empty()) {
       resolver_.markOnce(files_.back().identity);
     }
@@ -743,11 +743,10 @@ void Preprocessor::handlePragma(const std::vector<PPToken>& line, const SourceLo
   // *found* through `-I` and still be one nobody should be asked to fix -- a
   // vendored library, a generated header -- and it is cheap to honor: the region
   // starts at the pragma, so the part of the file above it is still the user's.
-  if (name != nullptr && name->is(lex::TokenKind::Identifier) && spelling(*name) == "GCC") {
+  if (name != nullptr && name->isName() && spelling(*name) == "GCC") {
     std::size_t rest = index + 1;
     const PPToken* subject = nextSignificant(line, rest);
-    if (subject != nullptr && subject->is(lex::TokenKind::Identifier) &&
-        spelling(*subject) == "system_header") {
+    if (subject != nullptr && subject->isName() && spelling(*subject) == "system_header") {
       if (!files_.empty()) {
         markSystemHeader(directive.file, directive.offset);
       }

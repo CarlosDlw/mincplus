@@ -17,6 +17,18 @@ std::string_view tokenSpelling(lex::TokenKind kind) {
     return "const";
   case lex::TokenKind::KwReturn:
     return "return";
+  case lex::TokenKind::KwIf:
+    return "if";
+  case lex::TokenKind::KwElse:
+    return "else";
+  case lex::TokenKind::KwWhile:
+    return "while";
+  case lex::TokenKind::KwFor:
+    return "for";
+  case lex::TokenKind::KwBreak:
+    return "break";
+  case lex::TokenKind::KwContinue:
+    return "continue";
   case lex::TokenKind::LParen:
     return "(";
   case lex::TokenKind::RParen:

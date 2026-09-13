@@ -185,14 +185,22 @@ typed AST view on top.
 - [x] Tree dump for inspection (`mincc parse <files...>`, `--no-trivia`)
 - [x] Lossless-reconstruction check over every example
 - [x] Declarations: functions and the `let`/`const` forms
+- [x] Parameter lists, written `name: type` — the `let` shape, and only that;
+      the C order `type name` is rejected by name rather than guessed at, because
+      a forgotten name would silently become a parameter (see
+      [`architectures/parser.md#ambiguity-policy`](architectures/parser.md#ambiguity-policy))
 - [x] Statements and blocks
+- [x] `if` / `else` / `else if` — condition without parentheses (and accepts
+      them), each arm a block, so the dangling-`else` ambiguity cannot arise
+- [x] `while` and C-style `for` (`for init; cond; step`, parentheses optional;
+      any clause may be empty, so `for ;;` is an infinite loop)
+- [x] `break` / `continue`
 - [x] `TreeStore`, keyed `(FileId, revision)`, owning the shared node cache so
       identical subtrees in two files are one node. It lives in `src/syntax`
       rather than in `Session` because `support` is syntax-free by contract; it
       builds into the session's arena by reference
 - [ ] Golden-file tests (`tests/parse/data/*.mx` with expected tree and errors)
-- [ ] `if`/`else`, loops, `break`/`continue`, `switch` — when their syntax is
-      decided
+- [ ] `switch` — when its syntax is decided
 - [ ] `struct`/`union`/`enum`, typedefs, and the full C declarator grammar
 - [ ] Initializers, `sizeof`/`alignof`, casts, and the C-compatible `fn` forms
 - [ ] Generated typed AST layer, once the node count justifies the generator
@@ -320,8 +328,13 @@ CFG, which is why the last items of this list read the way they do.
       fixed unsigned rather than inheriting C's sign)
 - [ ] Pointer semantics: element-scaled arithmetic, casts, byte-aliasing rules,
       and the provenance model the optimizer may rely on
-- [ ] Control-flow checks that need a CFG: definite assignment, `break`/`continue`
-      context, `goto` targets
+- [x] Control-flow typing: `if`/`while`/`for` conditions must be `bool`, and
+      `break`/`continue` outside a loop are `sema-break-outside-loop` /
+      `sema-continue-outside-loop`. `terminates()` handles the branch and loop
+      shapes, so `fn i32 f() { if c { return 1; } else { return 2; } }` has no
+      missing-return and `while true {}` without a `break` does not either
+- [ ] Control-flow checks that need a CFG: definite assignment, `goto` targets,
+      unreachable-code precision inside loops
 - [ ] Storage classes and linkage: `static`, `extern`, tentative definitions
 - [ ] Symbol table exported for the backend and C interop
 - [ ] Warning set: sign/conversion issues beyond `-Wconversion`, and the rest of

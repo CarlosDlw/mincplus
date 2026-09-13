@@ -12,19 +12,25 @@ namespace {
 // plus an enumerator in token_kind.h; the lexer, the dump, and the tests all
 // read this table instead of repeating the list.
 //
-// Deliberately tiny: only what the examples in `examples/` actually use.
-// Primitive type names (`i32`, `u8`, and the C spellings) and `true`/`false`
-// are *not* keywords yet. They are reserved words in the language design, but
-// making them lexical keywords is a decision that follows the type system, and
-// until it is taken they lex as plain identifiers.
+// Still deliberately small: the declaration and statement words the grammar
+// has a production for. Primitive type names (`i32`, `u8`, and the C spellings)
+// and `true`/`false` are *not* keywords yet. They are reserved words in the
+// language design, but making them lexical keywords is a decision that follows
+// the type system, and until it is taken they lex as plain identifiers.
 //
 // Sorted by spelling so the table can be binary-searched and so that a diff
 // adding a keyword is obviously in the right place.
-constexpr std::array<Keyword, 4> kKeywords{{
+constexpr std::array<Keyword, 10> kKeywords{{
+    {"break", TokenKind::KwBreak},
     {"const", TokenKind::KwConst},
+    {"continue", TokenKind::KwContinue},
+    {"else", TokenKind::KwElse},
     {"fn", TokenKind::KwFn},
+    {"for", TokenKind::KwFor},
+    {"if", TokenKind::KwIf},
     {"let", TokenKind::KwLet},
     {"return", TokenKind::KwReturn},
+    {"while", TokenKind::KwWhile},
 }};
 
 } // namespace
@@ -81,6 +87,18 @@ const char* toString(TokenKind kind) {
     return "KwConst";
   case TokenKind::KwReturn:
     return "KwReturn";
+  case TokenKind::KwIf:
+    return "KwIf";
+  case TokenKind::KwElse:
+    return "KwElse";
+  case TokenKind::KwWhile:
+    return "KwWhile";
+  case TokenKind::KwFor:
+    return "KwFor";
+  case TokenKind::KwBreak:
+    return "KwBreak";
+  case TokenKind::KwContinue:
+    return "KwContinue";
   case TokenKind::LParen:
     return "LParen";
   case TokenKind::RParen:

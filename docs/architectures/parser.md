@@ -431,12 +431,24 @@ C's ambiguity is famous and worth stating explicitly, because it is the reason
 to live with that choice.
 
 **What we get for free.** Types appear only in *type positions* in `.mx`:
-after `fn` (return type), after `:` in `let`/`const`, and (later) in parameter
-lists. A variable declaration is introduced by `let`, not by a bare type name,
-so the C statement/declaration ambiguity — `i32 x;` could be a declaration or a
-misuse of two expressions — **does not exist here**. That is a direct
+after `fn` (return type), after `:` in `let`/`const`, and after `:` in a
+parameter. A variable declaration is introduced by `let`, not by a bare type
+name, so the C statement/declaration ambiguity — `i32 x;` could be a declaration
+or a misuse of two expressions — **does not exist here**. That is a direct
 consequence of the `let`/`const` decision and it removes the single largest
 source of C parser complexity.
+
+**A parameter is a binding, so it is written like one.** `fn i32 add(a: i32,
+b: i32)`, the same shape as `let a: i32`. The C order `type name` is *rejected*,
+and not for style: the type is a run of identifiers and the name is an
+identifier, so `fn i32 f(unsigned long)` — a forgotten name — is
+a run indistinguishable from `unsigned` named `long`. Accepting it means the
+type reader silently builds `u32` and the parameter is called `long`, which is
+worse than any inconvenience the colon could cause. The colon is also the only
+delimiter that survives declarators: `x: *i32` and `buf: [8]u8` are closed by
+the `,`/`)` that follows, where the C order would need the declarator puzzle
+below. Cost of the rule: a parameter the reader leaves unnamed is an error
+(`parse-expected-name`) rather than a guess.
 
 **The type position grammar is therefore a decision, not a guess.** After `:`
 or after `fn`, the parser enters *type position* and consumes a sequence of
@@ -596,6 +608,8 @@ decisions keep them possible — and which would foreclose them.
 | 14 | Diagnostics | `minc_parse` has no diag dependency; `minc_parse_report` converts errors. |
 | 15 | `SyntaxKind` | **One** u16 tag space covering tokens and nodes; the token range is pinned to `TokenKind` by a `static_assert`. |
 | 16 | Grammar source of truth | One declarative grammar file drives the node-kind list and a consistency test; accessor code generation is a follow-up, not day one. |
+| 17 | Parameter syntax | **`name: type`, only.** The C order `type name` is rejected with a message that names it, because a run of identifiers cannot say which word was the name and `unsigned long` with the name forgotten would silently mean `unsigned` named `long`. |
+| 18 | Statement bodies | **Braces required** after `if`/`else`/`while`/`for`. Single-statement bodies are gone, so the dangling-`else` ambiguity cannot arise and a branch is always a `Block`. |
 
 ## `SyntaxKind` — one tag space, pinned to the lexer
 

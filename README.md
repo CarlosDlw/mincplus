@@ -393,6 +393,8 @@ hidden escape hatch.
 ### Declarations and modules
 
 - [x] Top-level functions, including `main`
+- [x] Function parameters, written `name: type` — the same shape as `let`, and
+      only that: the C order `type name` is rejected rather than guessed at
 - [ ] Global variables, constants
 - [ ] `extern` declarations bound to C symbols
 - [ ] Visibility (`pub` / `private`) and namespaces
@@ -427,11 +429,14 @@ which is where the algorithm that depends on them lives.
 ### Statements and control flow
 
 - [x] Blocks and `return`
-- [ ] `if` / `else`
-- [ ] `while`, `for`, `do`/`while`
+- [x] `if` / `else` / `else if` — the condition takes no parentheses (and accepts
+      them), and each arm is a block
+- [x] `while`, and C-style `for` (`for init; cond; step`), parentheses optional
+- [ ] `do`/`while`
 - [ ] Range/`for`-in iteration `[?]`
 - [ ] C `switch` and/or pattern `match` `[?]`
-- [ ] `break` / `continue`, with labels `[?]`
+- [x] `break` / `continue`
+- [ ] Labels on `break` / `continue` `[?]`
 - [ ] `goto` and labels (C compatibility)
 - [ ] `defer` `[?]`
 - [ ] Assertions and checked runtime conditions

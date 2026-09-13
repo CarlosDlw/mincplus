@@ -62,6 +62,47 @@ TEST(LexerTest, IdentifiersAndKeywords) {
   EXPECT_EQ(lexFirst("i32").kind, TokenKind::Identifier); // type names are not keywords yet
 }
 
+TEST(LexerTest, ControlFlowKeywordsAreClassifiedOnce) {
+  // The five that head a control-flow statement, and the two facts the parser
+  // depends on: each lexes to its own kind, and the classification is a list the
+  // lexer owns rather than a list the parser repeats.
+  const struct {
+    const char* text;
+    TokenKind kind;
+  } cases[] = {
+      {"if", TokenKind::KwIf},       {"while", TokenKind::KwWhile},       {"for", TokenKind::KwFor},
+      {"break", TokenKind::KwBreak}, {"continue", TokenKind::KwContinue},
+  };
+  for (const auto& testCase : cases) {
+    const Token token = lexFirst(testCase.text);
+    EXPECT_EQ(token.kind, testCase.kind) << testCase.text;
+    EXPECT_TRUE(isKeyword(token.kind)) << testCase.text;
+    EXPECT_TRUE(isControlFlowKeyword(token.kind)) << testCase.text;
+  }
+
+  // `else` is a keyword but heads nothing: it continues an `if`, so the parser
+  // must not treat it as the start of a statement.
+  EXPECT_EQ(lexFirst("else").kind, TokenKind::KwElse);
+  EXPECT_TRUE(isKeyword(TokenKind::KwElse));
+  EXPECT_FALSE(isControlFlowKeyword(TokenKind::KwElse));
+  // ... and the same for the declaration words, which the statement dispatch
+  // handles itself. If these ever came back true, `isStatementStart` would be
+  // answering a different question than the parser asks it.
+  EXPECT_FALSE(isControlFlowKeyword(TokenKind::KwFn));
+  EXPECT_FALSE(isControlFlowKeyword(TokenKind::KwLet));
+  EXPECT_FALSE(isControlFlowKeyword(TokenKind::KwConst));
+  EXPECT_FALSE(isControlFlowKeyword(TokenKind::KwReturn));
+  EXPECT_FALSE(isControlFlowKeyword(TokenKind::Identifier));
+}
+
+TEST(LexerTest, KeywordsNearMissesOfTheNewOnesStayIdentifiers) {
+  EXPECT_EQ(lexFirst("iff").kind, TokenKind::Identifier);
+  EXPECT_EQ(lexFirst("If").kind, TokenKind::Identifier);
+  EXPECT_EQ(lexFirst("For").kind, TokenKind::Identifier);
+  EXPECT_EQ(lexFirst("breaks").kind, TokenKind::Identifier);
+  EXPECT_EQ(lexFirst("continu").kind, TokenKind::Identifier);
+}
+
 TEST(LexerTest, IdentifierConsumesTrailingDigitsAndUnderscores) {
   const std::string_view text = "a_1_b";
   const Token token = lexFirst(text);
@@ -216,12 +257,14 @@ TEST(LexerTest, NumberStopsBeforeAnIdentifier) {
   EXPECT_TRUE(number.has(TokenFlag::MissingDigits));
   EXPECT_EQ(lexOne(hex, number.end()).kind, TokenKind::Identifier);
 
-  // `1else` is `1` then `else`: an exponent needs digits.
+  // `1else` is `1` then `else`: an exponent needs digits. The suffix is a
+  // keyword rather than an identifier, which is the point -- the number ends at
+  // the first byte that cannot continue it, whatever that byte begins.
   const std::string_view word = "1else";
   const Token one = lexFirst(word);
   EXPECT_EQ(one.kind, TokenKind::IntegerLiteral);
   EXPECT_EQ(one.length, 1u);
-  EXPECT_EQ(lexOne(word, one.end()).kind, TokenKind::Identifier);
+  EXPECT_EQ(lexOne(word, one.end()).kind, TokenKind::KwElse);
 }
 
 TEST(LexerTest, ExponentNeedsDigits) {

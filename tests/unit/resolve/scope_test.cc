@@ -179,6 +179,106 @@ TEST(ScopeTest, SourceToDefFindsTheDeclaration) {
   EXPECT_TRUE(found);
 }
 
+TEST(ScopeTest, ParametersAreDefinitionsInTheFunctionScope) {
+  ResolveFixture f;
+  f.source("fn i32 add(a: i32, b: i32)\n{\n  return a + b;\n}\n");
+  ASSERT_TRUE(f.build());
+
+  const resolve::Def* a = f.defNamed("a");
+  const resolve::Def* b = f.defNamed("b");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_EQ(a->kind, resolve::DefKind::Parameter);
+  EXPECT_EQ(b->kind, resolve::DefKind::Parameter);
+  // The parameter list is a sibling of the body, so nothing in the body walk
+  // would reach it. Asserting the scope is what proves the declaration step runs
+  // before the walk and lands where a reader expects: with the body's top level,
+  // which is the function scope itself.
+  EXPECT_EQ(f.map().scope(a->scope).kind, ScopeKind::Function);
+  EXPECT_EQ(a->linkage, resolve::Linkage::None);
+  // Both uses in the body answered to the parameters and not to nothing.
+  EXPECT_EQ(a->refCount, 1u);
+  EXPECT_EQ(b->refCount, 1u);
+}
+
+// A parameter's type is a run of identifiers when it is one of the C spellings,
+// and none of those words is a name. Resolution walks the tree looking for uses,
+// so the words inside a `Type` are exactly the ones it must not offer to lookup:
+// `unsigned` here is a type, not a variable somebody forgot to declare.
+TEST(ScopeTest, AMultiWordParameterTypeIsNotANameUse) {
+  ResolveFixture f;
+  f.source("fn i32 f(x: unsigned long)\n{\n  return 0;\n}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.defNamed("unsigned"), nullptr);
+  EXPECT_EQ(f.defNamed("long"), nullptr);
+  EXPECT_FALSE(f.hasResolveError("resolve-unknown-name"));
+}
+
+TEST(ScopeTest, DuplicateParameterNamesAreARedeclaration) {
+  ResolveFixture f;
+  f.source("fn i32 f(a: i32, a: i32)\n{\n  return a;\n}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasResolveError("resolve-redeclaration"));
+}
+
+TEST(ScopeTest, AParameterAndALocalAtTheTopOfTheBodyCollide) {
+  // They are in one scope, because the body block *is* the function scope. If
+  // that were not so, this would silently shadow instead of colliding.
+  ResolveFixture f;
+  f.source("fn i32 f(a: i32)\n{\n  let a = 1;\n  return a;\n}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasResolveError("resolve-redeclaration"));
+}
+
+TEST(ScopeTest, AForBindingLivesInALoopScope) {
+  ResolveFixture f;
+  f.source("fn i32 main()\n{\n  for let i = 0; i < 3; i = i + 1\n  {\n    let j = i;\n  }\n  "
+           "return 0;\n}\n");
+  ASSERT_TRUE(f.build());
+
+  const resolve::Def* i = f.defNamed("i");
+  ASSERT_NE(i, nullptr);
+  EXPECT_EQ(i->kind, resolve::DefKind::Variable);
+  const resolve::Scope& loop = f.map().scope(i->scope);
+  EXPECT_EQ(loop.kind, ScopeKind::Loop);
+  // The loop scope hangs off the function scope, so the initializer's binding
+  // covers the condition, the step and the body -- and does not outlive them.
+  EXPECT_EQ(f.map().scope(loop.parent).kind, ScopeKind::Function);
+  // The body is a block inside the loop, which is why a declaration there can
+  // shadow the loop's own binding without colliding.
+  EXPECT_EQ(f.map().scope(f.defNamed("j")->scope).kind, ScopeKind::Block);
+}
+
+TEST(ScopeTest, AForBindingIsNotVisibleAfterTheLoop) {
+  ResolveFixture f;
+  f.source("fn i32 main()\n{\n  for let i = 0; i < 3; i = i + 1 {}\n  return i;\n}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_TRUE(f.hasResolveError("resolve-unknown-name"));
+  // The use after the loop still got an answer -- a `NameRef` with a reason --
+  // so "every use has an answer" holds even for the misuse.
+  EXPECT_EQ(f.map().refs.size(), 4u);
+}
+
+TEST(ScopeTest, NestedLoopsGetAScopeEach) {
+  ResolveFixture f;
+  f.source("fn i32 main()\n{\n  for let i = 0; i < 1; i = i + 1\n  {\n    for let j = 0; j < 1; j "
+           "= j + 1 {}\n  }\n  return 0;\n}\n");
+  ASSERT_TRUE(f.build());
+
+  const resolve::Def* i = f.defNamed("i");
+  const resolve::Def* j = f.defNamed("j");
+  ASSERT_NE(i, nullptr);
+  ASSERT_NE(j, nullptr);
+  EXPECT_EQ(f.map().scope(i->scope).kind, ScopeKind::Loop);
+  EXPECT_EQ(f.map().scope(j->scope).kind, ScopeKind::Loop);
+  EXPECT_NE(i->scope, j->scope); // the inner loop is a scope of its own
+  // And the inner one is nested inside the outer, not beside it: its parent is
+  // the inner loop's body block, whose parent is the outer loop's scope.
+  const resolve::ScopeId innerParent = f.map().scope(j->scope).parent;
+  EXPECT_EQ(f.map().scope(innerParent).kind, ScopeKind::Block);
+  EXPECT_EQ(f.map().scope(innerParent).parent, i->scope);
+}
+
 TEST(ScopeTest, ResolutionIsDeterministic) {
   const std::string source = "fn i32 main()\n{\n  let a = 1;\n  let b = a;\n  return missing;\n}\n";
   ResolveFixture first;
