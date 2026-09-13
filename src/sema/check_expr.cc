@@ -391,6 +391,9 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
     return kTypeError;
   }
   const TypeId result = promote(types_, inner);
+  // The operand is computed at the promoted type -- `-c` on a `char` is an `i32`
+  // `sub` -- so the conversion is recorded like any other.
+  recordOperationOperand(expr, 0, operand, result);
   if (innerInfo.hasIntValue) {
     info.value = kind == kTokMinus   ? support::negate(innerInfo.value)
                  : kind == kTokTilde ? support::bitNot(innerInfo.value)
@@ -538,7 +541,12 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
         return kTypeError;
       }
       if (arithmetic) {
-        static_cast<void>(usualArithmetic(types_, left, right));
+        // The two values are compared at their common type, and the pair is
+        // recorded: `u8 == i32` is an `icmp` at `i32`, so the conversion is
+        // required by the IR rather than an optimisation of it.
+        const TypeId opType = usualArithmetic(types_, left, right);
+        recordOperationOperand(expr, 0, lhs, opType);
+        recordOperationOperand(expr, 1, rhs, opType);
       }
       return kTypeBool;
     }
@@ -548,7 +556,9 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
                 types_.spelling(left) + "` and `" + types_.spelling(right) + "`");
       return kTypeError;
     }
-    static_cast<void>(usualArithmetic(types_, left, right));
+    const TypeId opType = usualArithmetic(types_, left, right);
+    recordOperationOperand(expr, 0, lhs, opType);
+    recordOperationOperand(expr, 1, rhs, opType);
     return kTypeBool;
   }
 
@@ -572,34 +582,23 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
                 types_.spelling(left) + "` and `" + types_.spelling(right) + "`");
       return kTypeError;
     }
+    // The operation is at the *promoted left operand*, so that is the width the
+    // count is measured against -- and the width the instruction is performed
+    // at, which is why both operands are recorded as converting to it.
+    const TypeId opType = operationType(types_, /*shift=*/true, left, right);
     // The count has a range, and it is not the value's range: it is the width of
     // the value being moved. C leaves a count at or past that width -- and a
     // negative one -- undefined, and the backend inherits a poison value: a `>>`
     // that does not shift is a silent wrong answer, and a `<<` the optimizer is
     // free to invent is worse. So the language refuses it here, at the count,
-    // which is the token the reader has to change.
-    const TypeId promoted = promote(types_, left);
-    // A deferred literal has no width until its context gives it one, and a bare
-    // integer defaults to `i32` -- the same answer it would get anywhere else.
-    const TypeId widthType = types_.get(promoted).kind == TypeKind::Int ? promoted : kTypeI32;
-    const std::uint16_t width = types_.get(widthType).bits;
-    if (rightInfo.hasIntValue) {
-      const support::ConstInt count = rightInfo.value;
-      if (count.negative()) {
-        error(rhs, SemaErrorCode::ShiftCountOutOfRange, "this shift count is negative");
-        info.hasIntValue = false;
-        info.isConstant = false;
-        return promoted;
-      }
-      if (count.bits >= width) {
-        error(rhs, SemaErrorCode::ShiftCountOutOfRange,
-              "this shift count (" + std::to_string(count.bits) +
-                  ") is not less than the width of `" + types_.spelling(widthType) + "` (" +
-                  std::to_string(width) + ")");
-        info.hasIntValue = false;
-        info.isConstant = false;
-        return promoted;
-      }
+    // which is the token the reader has to change. `x <<= n` asks the same
+    // question through the same function.
+    if (!checkShiftCount(rhs, opType)) {
+      info.hasIntValue = false;
+      info.isConstant = false;
+      recordOperationOperand(expr, 0, lhs, opType);
+      recordOperationOperand(expr, 1, rhs, opType);
+      return opType;
     }
     if (leftInfo.hasIntValue && rightInfo.hasIntValue) {
       const std::optional<support::ConstInt> shifted =
@@ -610,7 +609,9 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
         info.hasIntValue = true;
       }
     }
-    return promoted;
+    recordOperationOperand(expr, 0, lhs, opType);
+    recordOperationOperand(expr, 1, rhs, opType);
+    return opType;
   }
 
   const TypeId result = usualArithmetic(types_, left, right);
@@ -620,6 +621,11 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
               "` and `" + types_.spelling(right) + "`");
     return kTypeError;
   }
+  // The operands are computed at the common type -- `u8 + u8` is an `add i32` --
+  // and each one's conversion to it is recorded, so the lowering never derives
+  // the promotion rule a second time.
+  recordOperationOperand(expr, 0, lhs, result);
+  recordOperationOperand(expr, 1, rhs, result);
   if (!foldBinary(op, kind, leftInfo, rightInfo, info)) {
     return kTypeError;
   }
@@ -677,6 +683,12 @@ TypeId Checker::checkConditional(ast::AstId expr, TypeId expected, ExprInfo& inf
     return kTypeError;
   }
 
+  // Both arms are materialised at the arms' common type. The condition is
+  // operand 0 and does not convert: it is already a `bool`, which is the whole
+  // rule `sema.md` states.
+  recordOperationOperand(expr, 1, thenExpr, result);
+  recordOperationOperand(expr, 2, elseExpr, result);
+
   const ExprInfo& conditionInfo = out_.typed.infoOf(condition);
   const ExprInfo& thenInfo = out_.typed.infoOf(thenExpr);
   const ExprInfo& elseInfo = out_.typed.infoOf(elseExpr);
@@ -701,7 +713,14 @@ TypeId Checker::checkAssign(ast::AstId expr, ExprInfo& info) {
   const ast::AstId rhs = operands[1];
 
   const TypeId target = checkExpr(lhs, kInvalidType);
-  const TypeId value = checkExpr(rhs, target);
+  // A plain `=` gives the right operand the target's type, which is the
+  // assignment conversion and is recorded as one. A compound assignment does
+  // **not**: `x += e` computes `x + e` at the *operation* type, so handing `e`
+  // the target's type would range-check `x += 300` against a `u8` and refuse an
+  // expression the language defines (the store truncates, and `-Wconversion` is
+  // where that is reported).
+  const bool compound = kind != kTokEqual;
+  const TypeId value = compound ? checkExpr(rhs, kInvalidType) : checkOperand(expr, 1, rhs, target);
   if (types_.isError(target) || types_.isError(value)) {
     return kTypeError;
   }
@@ -710,7 +729,7 @@ TypeId Checker::checkAssign(ast::AstId expr, ExprInfo& info) {
     return target;
   }
 
-  if (kind != kTokEqual) {
+  if (compound) {
     // `x op= y` needs the same operand types the binary operator does, and then
     // the result converts back to `x`'s type.
     if (!types_.isArithmetic(target) || !types_.isArithmetic(value)) {
@@ -718,20 +737,41 @@ TypeId Checker::checkAssign(ast::AstId expr, ExprInfo& info) {
             "this compound assignment needs arithmetic operands");
       return kTypeError;
     }
+    const bool shift = kind == kTokLessLessEqual || kind == kTokGreaterGreaterEqual;
     const bool integerOnly = kind == kTokPercentEqual || kind == kTokAmpEqual ||
-                             kind == kTokPipeEqual || kind == kTokCaretEqual ||
-                             kind == kTokLessLessEqual || kind == kTokGreaterGreaterEqual;
-    if (integerOnly && (!types_.isInteger(target) || !types_.isInteger(value))) {
+                             kind == kTokPipeEqual || kind == kTokCaretEqual || shift;
+    if (integerOnly && (!isIntegerOperand(types_, target) || !isIntegerOperand(types_, value))) {
       error(expr, SemaErrorCode::InvalidOperands,
             "this compound assignment needs integer operands");
       return kTypeError;
     }
+    // The type the operation happens at. It is not the assignment's type, and it
+    // is nowhere else in the tree: `x <<= 9` on a `u16` is defined at `i32`,
+    // which is why the count `9` is legal -- and a lowering that read the
+    // `AssignExpr`'s own type would emit an out-of-range shift, a poison value
+    // rather than a crash. `info.opType` is therefore the fact the IR reads for
+    // both the operation and the conversion of its result back into the target.
+    const TypeId opType = operationType(types_, shift, target, value);
+    if (types_.isError(opType)) {
+      error(expr, SemaErrorCode::InvalidOperands,
+            "this compound assignment cannot combine `" + types_.spelling(target) + "` and `" +
+                types_.spelling(value) + "`");
+      return kTypeError;
+    }
+    if (shift) {
+      (void)checkShiftCount(rhs, opType);
+    }
+    info.opType = opType;
+    recordOperationOperand(expr, 0, lhs, opType);
+    recordOperationOperand(expr, 1, rhs, opType);
   }
 
   checkAssignable(value, target, rhs, SemaErrorCode::InvalidAssignment,
-                  kind == kTokEqual ? " in this assignment" : " in this compound assignment");
+                  compound ? " in this compound assignment" : " in this assignment");
   // The value of an assignment is not a place, and never a constant.
-  (void)info;
+  info.isLvalue = false;
+  info.isConstant = false;
+  info.hasIntValue = false;
   return target;
 }
 
@@ -774,15 +814,25 @@ TypeId Checker::checkCall(ast::AstId expr, ExprInfo& info) {
     message += ", but " + std::to_string(args.size()) + " were given";
     error(expr, SemaErrorCode::ArgumentCount, std::move(message));
     // The arguments are still checked: a wrong count must not hide a wrong
-    // argument.
+    // argument. The conversions of the ones that have a parameter are recorded
+    // even so; the extra ones have nowhere to land and are typed for their own
+    // diagnostics' sake.
     for (std::size_t i = 0; i < args.size(); ++i) {
-      (void)checkExpr(args[i], i < params.size() ? params[i] : kInvalidType);
+      if (i < params.size()) {
+        (void)checkOperand(expr, static_cast<std::uint8_t>(i + 1), args[i], params[i]);
+      } else {
+        (void)checkExpr(args[i], kInvalidType);
+      }
     }
     return types_.get(calleeType).returnType;
   }
 
+  // The callee is operand 0, so an argument's operand index is its position plus
+  // one: the conversion of argument `i` to parameter `i` is the pair the callee's
+  // own parameter list would have to be read again to recover.
   for (std::size_t i = 0; i < args.size(); ++i) {
-    const TypeId argumentType = checkExpr(args[i], params[i]);
+    const TypeId argumentType =
+        checkOperand(expr, static_cast<std::uint8_t>(i + 1), args[i], params[i]);
     checkAssignable(argumentType, params[i], args[i], SemaErrorCode::InvalidAssignment,
                     " as this argument");
   }

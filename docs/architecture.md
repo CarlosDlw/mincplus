@@ -651,6 +651,15 @@ warnings inside them are dropped at the report step while errors are not.
   the IR builder, a lint, and the language server all ask the same question
   without re-checking the unit or risking a different verdict.
 
+  It also **publishes what the IR may not recompute**: every implicit conversion,
+  as a pair of types keyed on the node that applies it, and the operation type of
+  a compound assignment — the fact the tree cannot show, since `x <<= 9` on a
+  `u16` is typed `u16` and *operates* at `i32`. A conversion recovered from a pair
+  of types a stage later is a second copy of `convert.h`; a conversion asked for
+  and answered is not. It is shipped together with the guarantee the table needs
+  — no node of the artifact carries a deferred literal type, because such a type
+  has no width and therefore no LLVM type at all.
+
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which
   error, and the decisions the language had to make with it. `mincc check` is
@@ -660,10 +669,11 @@ warnings inside them are dropped at the report step while errors are not.
   is the pipeline's own: everything up to and including `sema` stays LLVM-free,
   and a test greps the tree so the rule fails in CI rather than in review. The
   stage *decides nothing*: it materialises what `sema` recorded, and a decision
-  it cannot read is a failure rather than a guess — which is why the design
-  record asks for one change to `sema`'s output before the first line of it is
-  written (the operation type of a compound assignment, without which `u16 <<= 9`
-  lowers to an out-of-range shift). Design record:
+  it cannot read is a failure rather than a guess. The change the design record
+  asked of `sema` — the coercion record and the operation type of a compound
+  assignment, without which `u16 <<= 9` lowers to an out-of-range shift — is
+  **shipped**, so the lowering starts from a contract instead of waiting for one.
+  Design record:
   [`architectures/ir.md`](architectures/ir.md) — the LLVM decision, the coercion
   record, the runtime contract `sema`'s integer table imposes and the scan that
   enforces it, and the five mechanical rules that make a future node kind, type

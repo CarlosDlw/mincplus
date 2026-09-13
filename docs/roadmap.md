@@ -322,9 +322,21 @@ which also records the reversal.
       core extracted to `support` (`support/consteval`) so `#if` and sema cannot
       disagree about integer arithmetic — the preprocessor's evaluator now
       calls it too
+- [x] **The artifact publishes what the lowering may not re-derive**
+      (`src/sema/coerce.cc`): every implicit conversion recorded as a pair keyed
+      on the consumer that applies it (`TypedFile::coercions()`, and
+      `--ast` prints the table), and the operation type of a compound assignment
+      (`ExprInfo::opType`, printed as `[op=i32]`) — the fact the tree cannot
+      show, since `x <<= 9` on a `u16` is typed `u16` and operates at `i32`
+- [x] **No deferred literal type leaves the stage**: decided at the seam where
+      the context is known, then swept down the tree so an operand the context
+      reaches through an operation is decided too (`1 + 2.0` in an `f64` binding
+      is two `f64`s). A literal the reached context cannot hold is an error
+      however deep the reach (`let y: u8 = 300 / 3` is refused at the `300`),
+      with a negation read as a negation (`-128` in an `i8` is legal)
 - [x] `mincc check`: the stage's command, with `--ast` printing the typed tree
-      and `--types` the type table, `--target` the ABI, and `-Wconversion` the
-      narrowing lint
+      and the conversions it recorded, `--types` the type table, `--target` the
+      ABI, and `-Wconversion` the narrowing lint
 - [x] The example corpus type-checks clean, as a test and through
       `make examples`
 
@@ -372,12 +384,16 @@ at all, and neither of them is something this project would do better than LLVM.
 The design record is [`architectures/ir.md`](architectures/ir.md).
 
 - [x] Design record: [`docs/architectures/ir.md`](architectures/ir.md)
-- [ ] **`sema`: publish what the lowering is not allowed to re-derive** — every
-      implicit conversion as an explicit record (the operand, the pair, the
-      consuming node) and the *operation type* of a compound assignment. The
-      second is the blocker: `u16 <<= 9` is defined at `i32`, the tree names only
-      `u16`, and a lowering that reads the tree's type emits an out-of-range
-      shift — a poison value, not a crash. This lands before any IR code
+- [x] **`sema`: publish what the lowering is not allowed to re-derive** — every
+      implicit conversion as an explicit record keyed on its consumer
+      (`TypedFile::coercions()`, `src/sema/coerce.cc`) and the *operation type*
+      of a compound assignment (`ExprInfo::opType`). `u16 <<= 9` is defined at
+      `i32` while the tree names only `u16`, so this was the blocker: a lowering
+      reading the tree's type would emit an out-of-range shift — a poison value,
+      not a crash. Shipped with the guarantee the record needs, that **no node
+      of the artifact carries a deferred literal type** (decided at the seam,
+      then swept down the tree), and with the enumeration test over every pair
+      `convertible` permits
 - [ ] Lowering of the typed tree: functions, parameters, calls, `if`/`else`,
       `while`, `for`, `break`/`continue`, and the operators `sema` typed
 - [ ] The runtime contract `sema`'s integer table imposes, honoured rather than

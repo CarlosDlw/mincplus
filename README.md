@@ -183,11 +183,28 @@ $ echo $?
 ```
 
 `--ast` prints the same tree `resolve --ast` does, plus the type each node was
-given, so the two dumps differ by exactly what this stage added; `--target
-windows-x64` reads the C spellings against LLP64 (where `long` is 32 bits), and
-`-Wconversion` reports the implicit narrowing that C allows silently. The design
-— the type model, the conversions, and which stage owns which error — is in
-[`docs/architectures/sema.md`](docs/architectures/sema.md).
+given, so the two dumps differ by exactly what this stage added; it also prints
+the **conversions** it recorded and the **operation type** of a compound
+assignment (`[op=i32]`), because those are the two facts the IR cannot
+guarantee to re-derive; `--target windows-x64` reads the C spellings against
+LLP64 (where `long` is 32 bits), and `-Wconversion` reports the implicit
+narrowing that C allows silently.
+
+```console
+$ mincc check --ast examples/003_types.mx | sed -n '1p;7,9p'
+# examples/003_types.mx: typed AST
+# coercions 11
+  428:0  430  u64 -> i32
+  430:1  482  u8 -> u64
+```
+
+Each line reads `consumer:operand  value-node  from -> to`, so
+`428:0 430 u64 -> i32` is "node 428 converts its operand 0 (node 430, a `u64`)
+to `i32`" — and the committed lowering materialises that pair instead of
+deciding it again.
+
+The design — the type model, the conversions, and which stage owns which error —
+is in [`docs/architectures/sema.md`](docs/architectures/sema.md).
 
 ## Language features
 
@@ -589,7 +606,11 @@ which is where the algorithm that depends on them lives.
   it searches a scope — and produces the typed AST the IR needs: every
   expression with a type, the type store interned, C's conversions implemented
   once, and a failed expression typed as a poison rather than as a missing
-  value. The typing is produced by a compilation-wide `Context` that owns the
+  value. It also **publishes the two facts the IR must not recompute**: the
+  conversions it applied, as a table keyed on the consuming node, and the
+  operation type of a compound assignment — and it guarantees that no node it
+  hands on still has an undecided literal type, because such a type has no
+  width. The typing is produced by a compilation-wide `Context` that owns the
   type store and answers the same question for the same revision with the same
   artifact, so the IR builder, a lint and the language server can all ask again
   for free. `mincc check` is its view. Design record, including the decisions

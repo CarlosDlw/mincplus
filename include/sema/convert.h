@@ -37,6 +37,18 @@ namespace minc::sema {
 // reported it, and this must not report a second time.
 [[nodiscard]] TypeId usualArithmetic(TypeStore& types, TypeId left, TypeId right);
 
+// The type an operator's operands are converted to before it runs, which is also
+// the type an integer result is computed in.
+//
+// For a shift it is the **promoted left operand** and the count is promoted on
+// its own (C 6.5.7 promotes each operand separately); for every other operator
+// it is the common type. It is one function rather than two call sites doing it,
+// because `x << n` and `x <<= n` have to agree about the width -- and they did
+// not: the compound form accepted `x <<= 40` on an `i8`, which is an
+// out-of-range shift at the promoted width, and therefore a poison value in the
+// backend rather than a diagnostic here.
+[[nodiscard]] TypeId operationType(TypeStore& types, bool shift, TypeId left, TypeId right);
+
 // Whether the assignment conversion applies: initializer, assignment, argument,
 // `return`. Anything arithmetic converts to anything arithmetic, silently --
 // including the narrowing, which is what makes C code compile and why the

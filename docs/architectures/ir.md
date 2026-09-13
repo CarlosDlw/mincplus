@@ -19,12 +19,14 @@ installed and probed here is **22.1.8**, and the facts below that depend on the
 build configuration were read out of this machine's `LLVMConfig.cmake`, not
 assumed.
 
-**Status: planned, and blocked on one change to `sema`.** Nothing in `src/ir`
-exists. § *The fourth fact nobody recorded* is the blocker: the typed tree does
-not, today, say at which type a compound assignment's operation happens, and the
-difference is not cosmetic — it is the difference between a shift instruction and
-a poison value. That section is the first work item, and it is a change to
-`sema`'s output rather than a change to the lowering.
+**Status: planned; the front-end half has landed.** Nothing in `src/ir` exists
+yet. The one change this document asked of an earlier stage — § *The fourth fact
+nobody recorded*, plus the coercion record and the deferred-literal sweep it
+depends on — is **implemented and published by `sema`** (`sema.md`,
+*What the artifact publishes*): `TypedFile::coercions()`, `ExprInfo::opType`, and
+the guarantee that no node in the artifact carries a deferred literal type.
+What remains is the lowering itself, and it can be built against that contract
+rather than waiting for it.
 
 ## Why LLVM, and what that decides
 
@@ -158,23 +160,39 @@ an earlier stage:
 
 ```
 struct Coercion {
+  ast::AstId consumer;     // the node applying the conversion
+  std::uint8_t operand;    // which operand of it, source order, tokens excluded
   ast::AstId node;         // the expression whose value is converted
-  std::uint8_t operand;    // which operand of the consuming node, when it is one
   TypeId from, to;         // the pair the rule was applied to
 };
 ```
 
-with two producers, both of them `sema`, both of them already visiting the
-site:
+`consumer` is the key, and the distinction from keying it on the value is not
+cosmetic: a consumer is where the conversion is *applied*, and an expression has
+one consumer only while the tree stays a tree. `node` is kept beside it so the
+pair can be checked against the tree — `from` must equal `typeOf(node)` — and so
+a consumer the walk removed (a folded `?:` arm) is visible rather than implied.
+The list is sorted by `(consumer, operand)` once, at the end, and indexed per
+consumer, so the lowering asks *"what does this consumer do with operand `i`"*
+and pays a lookup rather than a scan. `TypedFile::coercionAt(consumer, operand)`
+is that question, and `coercionsOf(consumer)` is the whole list for a node.
+
+The record has two producers, both of them `sema`, both of them already visiting
+the site:
 
 - **Every implicit conversion** recorded where the conversion applies:
-  initializer, assignment, `return`, argument, `?:` arms, binary operands to the
-  common type, and the store half of a compound assignment. `from` is the
-  operand's own type and `to` is where the value lands, so the lowering has a
-  pair and no rule.
+  initializer, assignment, `return`, argument, `?:` arms, binary and shift
+  operands to the common type, the operand of a promotion (`-`, `+`, `~`), and the
+  store half of a compound assignment. `from` is the operand's own type and `to`
+is where the value lands, so the lowering has a pair and no rule. A conversion
+  that changes nothing (`from == to`) is **not** recorded — the lowering reads
+  "no entry" as "no conversion" — and a pair the language refuses (`bool`, `str`)
+is not either, because the checker reports it instead.
 - **The operation type of a compound assignment**, which is a property of the
-  `AssignExpr` itself and belongs beside `ExprInfo` rather than in the list
-  above. One `TypeId` per `op=` node.
+  `AssignExpr` itself and lives in `ExprInfo::opType` rather than in the list
+  above. One `TypeId` per `op=` node, and the store's conversion of the result
+  back into the target is *implied* by it: `opType != typeOf(expr)` is exactly
+  the `trunc` the lowering must insert before the store.
 
 Why a record rather than a shared function call: a shared `promote` would be one
 implementation of the rule, which satisfies the letter of this project's
@@ -197,6 +215,15 @@ between "derivable with care" and "recorded" is the difference between a rule
 this stage can get wrong and one it cannot, and because the pairs that stop being
 derivable arrive with the features, one at a time, each with its own pull
 request.
+
+One more thing the record needed, and it is why the two changes shipped together:
+a conversion's ends must be **types the IR can name**, so no operand may still be
+a deferred literal when the record is built. `sema` decides them — at the seam,
+where the context is known, and then in a sweep down the unit's tree for whatever
+a seam did not reach (`1 + 2.0` inside an `f64` binding is two `f64`s, not an
+`i32` and an `f64`). Section § *The coercion record* is therefore inseparable from
+"the artifact holds no deferred type", which is a property `sema`'s example test
+asserts over every node of every example.
 
 The migration is small and mechanical because `sema` already has the rule in one
 function and calls it at every seam. The test that keeps it honest is in §
@@ -736,6 +763,8 @@ other stages' artifacts are.
 | 16 | No golden IR files; behaviour is the contract | IR text changes with LLVM, the target and comments; a regenerated golden file has stopped testing |
 | 17 | An unsupported construct is a *named refusal*, never a guess | `ir-unsupported-*` is a feature not yet built; `ir-internal` is a bug in this compiler — opposite fixes, so never the same message |
 | 18 | Debug metadata is built only under `-g`, and a broken line table is stripped rather than fatal | Metadata is a cost in the module and in every pass; and refusing to compile a correct program because its scope chain is malformed trades a breakpoint for a build |
+| 19 | No deferred literal type survives `sema`; a sweep decides whatever a seam did not | A deferred type has no width, so it has no LLVM type at all. A sweep rather than a per-seam promise, so a path nobody has written yet cannot break the property |
+| 20 | A constant is materialised at its type's width, and the language defines that width's arithmetic to wrap | Truncating a folded constant to its type is the defined semantics, not a lossy shortcut; it is what makes `ConstantInt::get` safe to call with the operand's stored value |
 
 ## Non-goals
 

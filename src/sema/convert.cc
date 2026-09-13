@@ -55,6 +55,13 @@ TypeId promote(TypeStore& types, TypeId type) {
   }
 }
 
+TypeId operationType(TypeStore& types, bool shift, TypeId left, TypeId right) {
+  // A shift's result is its left operand's promoted type and its count is
+  // promoted independently, so `x >> n` and `x >>= n` cannot disagree about the
+  // width the instruction is performed at.
+  return shift ? promote(types, left) : usualArithmetic(types, left, right);
+}
+
 TypeId usualArithmetic(TypeStore& types, TypeId left, TypeId right) {
   if (types.isError(left) || types.isError(right)) {
     return kTypeError;

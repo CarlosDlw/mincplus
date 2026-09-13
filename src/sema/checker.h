@@ -216,6 +216,66 @@ private:
   [[nodiscard]] TypeId checkAssign(ast::AstId expr, ExprInfo& info);
   [[nodiscard]] TypeId checkCall(ast::AstId expr, ExprInfo& info);
 
+  // --- conversions, recorded --------------------------------------------------
+  //
+  // Every consumer of a value goes through `checkOperand`, which checks the
+  // operand *and* records the conversion the consumer will apply. It is the
+  // choke point on purpose: a consumer that passed an expected type to
+  // `checkExpr` and did not record would produce a tree the lowering converts the
+  // wrong way, or not at all, and there would be nothing to notice it by. For an
+  // operator whose operands convert to a type only known once they are all
+  // checked (`a + b` needs the *common* type first), the operator calls
+  // `recordOperationOperand` itself.
+  [[nodiscard]] TypeId checkOperand(ast::AstId consumer, std::uint8_t operand, ast::AstId child,
+                                    TypeId expected);
+  // The operation type of `a op b` is derived from both operands, so the
+  // operator computes it and then records each operand's conversion to it. One
+  // function rather than two `recordConversion` calls, because the `decideAt`
+  // that turns a deferred operand into a typed one is load-bearing: skipping it
+  // records an untyped `from` or no conversion at all.
+  void recordOperationOperand(ast::AstId consumer, std::uint8_t operand, ast::AstId node,
+                              TypeId opType);
+  void recordConversion(ast::AstId consumer, std::uint8_t operand, ast::AstId node, TypeId from,
+                        TypeId to);
+  // Give a deferred literal the type something decided for it. A deferred type
+  // has no width, so it has no LLVM mapping, and no consumer can convert a value
+  // of one: deciding it here is what keeps `1` in `let x: i64 = 1;` from reaching
+  // the IR as `<integer literal>`.
+  //
+  // `decided` is a *hint*: an `i8` context cannot decide a `1.0` literal, so an
+  // incompatible hint falls back to the language's default (`i32`/`f64`) and the
+  // consumer records the conversion instead. That fallback is what makes the
+  // answer total, whatever a future consumer passes.
+  [[nodiscard]] TypeId decideAt(ast::AstId node, TypeId decided);
+  // Decides whatever is still deferred, walking down from the unit's root. Every
+  // node with a concrete type is what its operands take after -- a `BinaryExpr`
+  // publishes its operation type, a `let` publishes its binding's type -- so
+  // `1 + 2.0` in a `f64` binding becomes two `f64`s and not `i32`+`f64`. Whatever
+  // is left when no parent had an answer is decided at the language's default.
+  // Runs once, after the walk, so the artifact never holds a deferred type: it is
+  // the property the IR depends on, and a backstop is what makes it true of paths
+  // nobody has written yet.
+  void decideDeferredTypes();
+  // `decidedValid` is "the type being pushed down was accepted by the node it
+  // came from": a node whose own type is the poison (an expression already
+  // refused) pushes *no* type, so a literal inside it is defaulted rather than
+  // reported a second time. `negated` is the parity of unary minus between the
+  // node and the context, because `-128` in an `i8` is legal while `128` is not
+  // and the two are the same literal.
+  void decideSubtree(ast::AstId node, TypeId decided, bool decidedValid, bool negated);
+  // Does a deferred node's own value fit the type it was decided at? Reports and
+  // answers false when it does not, which is the README's rule -- "a literal
+  // that does not fit the type its context gives it is an error, not a silent
+  // truncation" -- applied to the leaves the context reached indirectly. Without
+  // it `let y: u8 = 300 / 3;` would divide the *truncated* `44` and store `14`
+  // while the folded value says `100`.
+  [[nodiscard]] bool fitsDecided(ast::AstId node, TypeId type, bool negated);
+  // The count of a shift has a range, and it is the width of the value moved and
+  // not the count's own range: C leaves a negative or out-of-range count
+  // undefined and the backend inherits a poison value. Asked by both places a
+  // shift can be written, so the two cannot disagree.
+  [[nodiscard]] bool checkShiftCount(ast::AstId countExpr, TypeId opType);
+
   // Folding for the operators that have a folded value. False when a constant
   // division or remainder by zero was reported: that is a diagnostic here for
   // the same reason the preprocessor diagnoses it in a `#if`, rather than an

@@ -467,6 +467,16 @@ SemaOutput Checker::run() {
   for (const FunctionInfo& info : out_.typed.functionTable) {
     checkFunction(info);
   }
+  // The artifact leaves this stage with no deferred type anywhere in it. It is
+  // the property the IR is built on -- a deferred type has no width and no LLVM
+  // mapping -- and it is a *sweep* rather than a per-seam promise so that a path
+  // nobody has written yet cannot break it. The per-seam decisions came first and
+  // are what make the sweep a no-op for everything already handled.
+  decideDeferredTypes();
+  // The coercion list is sorted and indexed last, once, over the final table:
+  // `from` has to be the operand's *final* type, and the per-node index is what
+  // makes the lowering's lookup a constant-time question.
+  out_.typed.buildCoercionIndex(file_.nodeCount());
   return std::move(out_);
 }
 
@@ -859,7 +869,10 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
     }
     TypeId initType = kInvalidType;
     if (init.valid()) {
-      initType = checkExpr(init, declared);
+      // The initializer's conversion to the binding's type is recorded here:
+      // `let x: i64 = a + b;` is an `i32` value stored into an `i64`, and that
+      // pair is the `sext` the lowering materialises.
+      initType = checkOperand(stmt, 0, init, declared);
     }
 
     TypeId binding = kTypeError;
@@ -910,7 +923,7 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
         (void)checkExpr(expr, kInvalidType);
         return;
       }
-      const TypeId type = checkExpr(expr, currentReturn_);
+      const TypeId type = checkOperand(stmt, 0, expr, currentReturn_);
       checkAssignable(type, currentReturn_, expr, SemaErrorCode::ReturnMismatch,
                       " as the return value of a function returning `" +
                           types_.spelling(currentReturn_) + "`");

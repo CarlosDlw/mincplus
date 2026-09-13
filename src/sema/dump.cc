@@ -42,7 +42,7 @@ namespace {
 // the node where a conversion happened that the value was known. Deliberately
 // not printed for a node that is not an expression: a declaration's "lvalue"
 // would be a lie.
-[[nodiscard]] std::string infoText(const ExprInfo& info) {
+[[nodiscard]] std::string infoText(const ExprInfo& info, const TypeStore& types) {
   std::string out;
   if (info.isLvalue) {
     out += " [lvalue]";
@@ -52,6 +52,12 @@ namespace {
   }
   if (info.hasIntValue) {
     out += " =" + valueText(info.value);
+  }
+  if (info.opType.valid() && types.known(info.opType)) {
+    // The type a compound assignment operates at when it is not the assignment's
+    // own type. Printed because it is the one fact the tree cannot show: the
+    // node's type is the store's, and `x <<= 9` on a `u16` works at `i32`.
+    out += " [op=" + types.spelling(info.opType) + "]";
   }
   return out;
 }
@@ -102,6 +108,16 @@ std::string dumpTypedFile(const ast::LoweredFile& file, const TypedFile& typed,
     return out;
   }
 
+  // The conversions, before the tree: they are a short list that says what the
+  // tree will do between an operand and its consumer, and a reader looking for
+  // "where does a conversion happen" should not have to read every node for it.
+  out += "# coercions " + std::to_string(typed.coercions().size()) + "\n";
+  for (const Coercion& coercion : typed.coercions()) {
+    out += "  " + std::to_string(coercion.consumer.index) + ":" + std::to_string(coercion.operand) +
+           "  " + std::to_string(coercion.node.index) + "  " + types.spelling(coercion.from) +
+           " -> " + types.spelling(coercion.to) + "\n";
+  }
+
   out += "# typed " + std::to_string(file.nodeCount()) + " nodes\n";
 
   // An explicit stack for the same reason `ast::dumpAst` uses one: a deep tree
@@ -136,7 +152,7 @@ std::string dumpTypedFile(const ast::LoweredFile& file, const TypedFile& typed,
     if (type.valid()) {
       out += "  : ";
       out += types.spelling(type);
-      out += infoText(typed.infoOf(frame.id));
+      out += infoText(typed.infoOf(frame.id), types);
     }
 
     out += "  ";

@@ -111,10 +111,26 @@ TEST(ExamplesSemaTest, EveryExampleTypeChecksWithoutErrors) {
     // summary line.
     EXPECT_EQ(checked.errors.size(), 0u) << name;
 
-    // And the artifact the next stage consumes is complete for every expression.
+    // And the artifact the next stage consumes is complete for every expression
+    // *and mappable*: a deferred literal has no width, so it would reach the IR
+    // as a type it cannot name. The sweep in `sema` is what makes this true of
+    // every path, and this is the test that holds it.
     for (std::uint32_t i = 0; i < lowered.file.nodeCount(); ++i) {
-      EXPECT_TRUE(checked.typed.typeOf(ast::AstId{i}).valid())
-          << name << ": node " << i << " has no type";
+      const sema::TypeId type = checked.typed.typeOf(ast::AstId{i});
+      EXPECT_TRUE(type.valid()) << name << ": node " << i << " has no type";
+      EXPECT_FALSE(types.isDeferred(type))
+          << name << ": node " << i << " is still a deferred literal";
+    }
+
+    // Every recorded conversion is a pair of real types, and `from` is the
+    // operand's own final type -- the invariant the lowering relies on when it
+    // reads an operand and looks up what to do with it.
+    for (const sema::Coercion& coercion : checked.typed.coercions()) {
+      EXPECT_EQ(coercion.from, checked.typed.typeOf(coercion.node))
+          << name << ": coercion from `" << types.spelling(coercion.from)
+          << "` disagrees with node " << coercion.node.index;
+      EXPECT_FALSE(types.isDeferred(coercion.to)) << name << ": a coercion targets a deferred type";
+      EXPECT_TRUE(types.known(coercion.to)) << name << ": a coercion targets an unknown type";
     }
   }
 }

@@ -17,6 +17,7 @@ minc_add_library(minc_sema
     target.cc
     typespec.cc
     convert.cc
+    coerce.cc
     check_stmt.cc
     check_expr.cc
     check_flow.cc

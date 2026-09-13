@@ -212,6 +212,10 @@ struct TypedFile {
   std::vector<TypeId> typeTable;          // one per node, indexed by AstId
   std::vector<ExprInfo> exprFacts;        // lvalue / constant, indexed by AstId
   std::vector<FunctionInfo> functionTable; // per FnDecl: TypeId, return type
+  // The conversions, in `(consumer, operand)` order, plus a per-consumer index.
+  std::span<const Coercion> coercions() const;
+  std::span<const Coercion> coercionsOf(ast::AstId consumer) const;
+  const Coercion* coercionAt(ast::AstId consumer, std::uint8_t operand) const;
 };
 
 struct ExprInfo {
@@ -219,6 +223,7 @@ struct ExprInfo {
   bool isConstant;        // every operand was a literal or a constant
   bool hasIntValue;       // ... and the value is an integer
   ConstInt value;         // the folded value when hasIntValue
+  TypeId opType;          // `op=` only: the type the operation happens at
 };
 ```
 
@@ -237,6 +242,56 @@ reason for the shape:
   keep holding one stage higher.
 - **`--ast` is a dump of `typeTable`,** not a second tree, so the printed form
   cannot drift from the checked form.
+
+### What the artifact publishes
+
+The IR cannot re-derive two things without holding a second copy of this
+stage's rules, and both are therefore part of the artifact (`ir.md`, *The
+coercion record*):
+
+- **Every implicit conversion, as a pair of types, keyed on the consumer that
+  applies it.** `coercionAt(consumer, operand)` answers "what does this node do
+  with this operand", and `from` is always the operand's own final type, so the
+  lowering is a *materialiser*: it reads a pair and emits `sext`/`zext`/
+  `trunc`/`sitofp`/`fptosi`, with no rule of its own. A conversion that changes
+  nothing is not recorded — "no entry" means "no conversion" — and neither is a
+  pair the language refuses.
+- **The operation type of a compound assignment** (`ExprInfo::opType`). It is
+  the one fact the tree cannot show: `x <<= 9` on a `u16` is typed `u16` and
+  *operates* at `i32`, and a lowering that read the node's type would emit an
+  out-of-range shift. The conversion of the result back into the target is
+  implied by `opType != typeOf(expr)`.
+
+... and one guarantee the record depends on, which is a property of the whole
+table and not of any one entry:
+
+> **No node in the artifact carries a deferred literal type.** A deferred type
+> has no width, so it has no LLVM type at all; an operand left undecided is not a
+> missing conversion but a wrong instruction.
+
+Deciding happens twice, and the two are complementary rather than redundant. The
+**seams** decide where the context is known — that is what makes `let x: u8 = 255;`
+a `u8` with no conversion, and what `adaptTo` already did. Then a **sweep** walks
+the unit's tree once, after the check, and decides whatever a seam did not reach:
+a node with a concrete type is what its operands take after, so `1 + 2.0` in an
+`f64` binding is two `f64`s and not an `i32` beside an `f64`. Anything the sweep
+reaches with no context at all is decided at the language's default. The sweep is
+what makes the guarantee true of paths nobody has written yet, and the examples
+test asserts it over every node of every example.
+
+Two consequences of "the context reaches the operands" are worth naming, because
+they are where a reader could expect the opposite:
+
+- **A literal the context cannot hold is an error, however deep the context
+  reaches.** `let y: u8 = 300 / 3;` is refused at the `300`
+  (`sema-literal-out-of-range`) rather than dividing the *truncated* `44` and
+  storing `14` while the folded value says `100`. The rule is the README's — a
+  literal that does not fit the type its context gives it is an error — applied
+  to the operands the context reaches indirectly.
+- **A negation is the exception, and it is not a special case in the rule but in
+  the reading:** `-128` in an `i8` is representable where `128` is not, and both
+  are the same literal, so the check reads the value through the parity of the
+  unary minus between it and the context.
 
 ### `Context`, the compilation's checker
 
@@ -274,11 +329,19 @@ quoted, and where this language's own type set changes the answer.
   - `1 + 2.0` is `f64`, because one operand is a real `Float` and the deferred
     `IntLiteral` adopts it.
   - A deferred type that never meets a context is defaulted at the end of the
-    initializer / argument / return expression: `i32`, `f64`.
+    initializer / argument / return expression: `i32`, `f64`. The decision is
+    made at the seam *and* swept down the tree afterwards, so a literal the
+    context reaches indirectly is decided too, and no deferred type is left in
+    the artifact at all (*What the artifact publishes*).
   - **The value must fit the type it ends up with.** `let x: u8 = 256;` is one
     diagnostic at the literal (`sema-literal-out-of-range`), not a silent
     truncation. This is a deliberate divergence from C, where the constant is
-    narrowed and the reader never learns.
+    narrowed and the reader never learns. The same rule applies to the operands
+    the context reaches through an operation: `let y: u8 = 300 / 3;` is refused
+    at the `300`, because the alternative is emitting a division of the
+    truncated value whose result no longer matches the constant the checker
+    folded. A negation is read as the negation (`-128` in an `i8` is legal, and
+    `128` in an `i8` is not).
 - **No suffixes.** The lexer has none (`u`, `L`, `f` are not part of a literal
   token), so a literal never *demands* a type; context or the default decides.
 
@@ -341,7 +404,7 @@ exists to remove.
 | `++`, `--` (prefix and postfix) | operand is a *modifiable* lvalue and arithmetic | `sema-incdec-not-lvalue` / `sema-assign-to-const` |
 | `* / %` | both arithmetic; `%` requires integers (C requires it too) | `sema-invalid-operands` |
 | `+ -` | both arithmetic (pointer arithmetic lands with pointers) | `sema-invalid-operands` |
-| `<< >>` | both integers after promotion; count is not itself an error (C leaves an out-of-range shift undefined — that stays a runtime property, documented as such) | `sema-invalid-operands` |
+| `<< >>` | both integers after promotion; a **constant** count at or past the width of the promoted left operand (or negative) is an error, because the alternative is a poison value in LLVM — see *Integer arithmetic at the edges* | `sema-invalid-operands` / `sema-shift-count-out-of-range` |
 | `& \| ^` | both integers | `sema-invalid-operands` |
 | `< <= > >=` | both arithmetic, same conversion; result `bool` | `sema-invalid-operands` |
 | `== !=` | both arithmetic, or both `str`, or both `bool`; result `bool` | `sema-invalid-operands` |
@@ -660,6 +723,9 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 | 19 | Is the evaluation order of operands and arguments specified? | **Yes — strict left to right**, with `&&`/`\|\|`/`?:` evaluating only the side they take | Leaving it unspecified (C) makes the same source mean two programs, which is incompatible with the "same input, same output" the stage contract is built on |
 | 20 | How does `str` become an LLVM value, with no pointer type in the language? | **Opaque `ptr`** — every supported LLVM uses opaque pointers, so a literal is a private global and no pointer syntax has to be invented | A typed pointer would force a pointer *type* into the surface before the language has decided its pointer syntax |
 | 21 | At which type does a compound assignment compute? | **The common type of the target and the operand** (`promote` then `usualArithmetic`), with the result converted back to the target's type, and that operation type is **published** as part of the typed AST | C 6.5.16.2. Without it `u16 <<= 9` has no width anybody stated, so the lowering's only options are to re-derive the rule or to guess — and a guess here is an out-of-range shift |
+| 22 | Does a later stage recover a conversion from the two types it sees? | **No — every conversion is recorded as a pair, keyed on the consumer that applies it** (*What the artifact publishes*) | A shared `promote()` is one implementation of the rule, but the lowering still holds arithmetic-conversion logic, and a context-dependent conversion (an implicit receiver, a `str`-to-`slice` change) is not recoverable from a pair of types at all |
+| 23 | May a deferred literal type survive to the next stage? | **No — decided at the seam, then swept down the tree**; the examples test asserts it over every node | A deferred type has no width and therefore no LLVM mapping, so an operand left undecided is a wrong instruction, not a missing one; and the record's two ends have to be types the IR can name |
+| 24 | What decides the operands the context reaches through an operation? | **The same context, walked down from each node with a concrete type** — `1 + 2.0` in an `f64` binding is two `f64`s | The alternative (each operator typing its operands independently) makes the operation's type and its operands' disagree, and LLVM rejects `add f64` with an `i32` operand; the *checker* would have folded a value the emitted code never computes |
 
 ## Non-goals
 
@@ -686,6 +752,9 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 | Types are identities | spelling-variant test: `int` and `i32` produce one `TypeId`; `i32`/`u32`/`i64` are distinct |
 | Conversions match C | `convert_test.cc`: one case per rule — promotion of every small type, equal-rank unsigned winning, a wider signed winning, a float winning from either side, and the two deliberate departures (`bool`/`str`) |
 | Deferred literals default | `1`, `1.5` as whole initializers are `i32`, `f64`; `let x: u8 = 255` is `u8`; `let x: u8 = 256` is one error; a value past 64 bits is accepted only where the context can hold it |
+| Deferred literals are decided everywhere, including through an operation | `coerce_test.cc`: no node of a checked unit is left deferred; `1 + 2.0` in an `f64` binding is two `f64`s; `1 + 2` in a `u8` binding is `add i8` over two `u8`s; `let y: u8 = 300 / 3` is one `sema-literal-out-of-range` at the `300`, and `-128` in an `i8` is accepted |
+| The conversion record is complete and consistent | `coerce_test.cc`: one case per consumer kind (initializer, assignment, `return`, argument, `?:` arm, binary and shift operand, promotion, compound assignment); every entry's `from` equals `typeOf(node)` and neither end is deferred or poisoned; an equal pair is not recorded; and **enumeration** over every ordered pair `convertible` permits produces exactly the enumerated set, in one run |
+| The operation type of every `op=` is published | `coerce_test.cc`: `u16 <<= 9` has `opType` `i32` while the node's type is `u16`; the target records the `u16 -> i32` pair; `<<= 31` on a `u8` is legal and `<<= 40` is one `sema-shift-count-out-of-range` |
 | No cascades | an unknown type in a signature produces one error however many calls sit on top of it; a name resolution already reported adds nothing here; a parse error adds nothing here; `let x: void = 1;` is one diagnostic, not two |
 | The boundary with `validate` holds | a `let` with no type and no initializer and a `const` with no value are `ast-missing-type` / `ast-const-without-value`, and `sema` has no code for either |
 | The tree is untouched | *by construction*: the checker holds `const ast::LoweredFile&` and the artifact is a separate array, so there is no mutating path to test — and `resolve --ast` output still matches after checking |
