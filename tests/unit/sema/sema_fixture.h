@@ -223,6 +223,24 @@ public:
     return {};
   }
 
+  // --- accesses --------------------------------------------------------------
+
+  // The access record, as text pairs `place -> provenance`. The place is the
+  // node's own spelling, which for `*p` is `*p` and for `p[i]` is `p[i]`; the
+  // list is in the checker's walk order (source order).
+  [[nodiscard]] std::vector<std::string> accessRecords() const {
+    std::vector<std::string> out;
+    for (const sema::AccessObligation& access : typed().accesses()) {
+      out.emplace_back(std::string(lowered().spellingOf(access.place)) + " " +
+                       std::string(sema::toString(access.provenance)) + " " +
+                       store_.spelling(access.type));
+    }
+    return out;
+  }
+  [[nodiscard]] std::size_t accessCount() const {
+    return typed().accesses().size();
+  }
+
   [[nodiscard]] std::string dump() const {
     return sema::dumpTypedFile(lowered(), typed(), store_);
   }

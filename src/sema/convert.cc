@@ -144,6 +144,25 @@ bool convertible(const TypeStore& types, TypeId from, TypeId to) {
   if (fromKind == TypeKind::Void || toKind == TypeKind::Void) {
     return false;
   }
+  // Pointers convert to pointers of the *same* pointee, and to and from `*void`.
+  //
+  // `*void` is the untyped pointer, and both directions are implicit because
+  // that is the only way a value that names no type can be used at all: an
+  // allocator returns one, a `null` is one, and a cast does not exist yet.
+  // Everything else needs an explicit reinterpretation, which the language does
+  // not have (`memory.md`: memory has no effective type, so punning is *defined*,
+  // but it is never *implicit* -- C requires the cast for the same reason).
+  //
+  // A pointer is not an integer, and no arm below reaches one: neither direction
+  // is a conversion here. The two operations that exist for it are named in the
+  // model (`expose`, `with_exposed_provenance`) and are not in the grammar yet.
+  if (fromKind == TypeKind::Pointer || toKind == TypeKind::Pointer) {
+    if (fromKind != TypeKind::Pointer || toKind != TypeKind::Pointer) {
+      return false;
+    }
+    return types.get(from).pointee == types.get(to).pointee || types.isVoidPointer(from) ||
+           types.isVoidPointer(to);
+  }
   // `bool` and `str` are not arithmetic, so they convert only to themselves.
   // C would promote a `bool` to `int` here; that promotion is what makes
   // `flag + 1` compile, and it is the footgun this language does not keep.

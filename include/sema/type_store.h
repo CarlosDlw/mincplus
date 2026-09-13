@@ -64,6 +64,14 @@ public:
   [[nodiscard]] TypeId signedInt(std::uint16_t bits);
   [[nodiscard]] TypeId unsignedInt(std::uint16_t bits);
   [[nodiscard]] TypeId floatOf(std::uint16_t bits);
+  // A pointer to `pointee`. Interned, so `*i32` is one id whatever spelled it,
+  // which is what makes two `*i32` parameters the same type at a call site.
+  //
+  // `pointee` may be `void`, and that is not a defect: `*void` is the untyped
+  // pointer of the model (`memory.md`), the only pointer type that converts to
+  // and from another pointer type implicitly, and never one that may be
+  // dereferenced or stepped.
+  [[nodiscard]] TypeId pointerTo(TypeId pointee);
   // The parameters are copied into the store; the caller's span need not
   // outlive the call.
   [[nodiscard]] TypeId function(TypeId returnType, std::span<const TypeId> params);
@@ -103,10 +111,20 @@ public:
   // accept. Deliberately excludes `bool` and `str`, which C would promote and
   // this language does not (README, *Conversions and literal typing*).
   [[nodiscard]] bool isArithmetic(TypeId id) const;
-  // Arithmetic, `bool` or `str`: the types that can be stored and passed.
+  // Arithmetic, `bool`, `str` or a pointer: the types that can be stored and
+  // passed.
   [[nodiscard]] bool isScalar(TypeId id) const;
   [[nodiscard]] bool isVoid(TypeId id) const;
   [[nodiscard]] bool isError(TypeId id) const;
+  // A pointer to anything, `*void` included.
+  [[nodiscard]] bool isPointer(TypeId id) const;
+  // `*void`: the type that converts to and from any other pointer type, and the
+  // one that may not be dereferenced or stepped (`memory.md`, *Access*).
+  [[nodiscard]] bool isVoidPointer(TypeId id) const;
+  // What a pointer points at, or `kInvalidType` for anything else. The answer is
+  // also what an access through the pointer will be typed as -- its size and its
+  // alignment -- so a caller never reaches into the `Type` for it.
+  [[nodiscard]] TypeId pointeeOf(TypeId id) const;
 
   // --- rendering and layout --------------------------------------------------
 

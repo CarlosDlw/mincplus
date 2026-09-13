@@ -54,6 +54,11 @@ namespace minc::sema {
 // including the narrowing, which is what makes C code compile and why the
 // diagnosis for it is the `-Wconversion` lint rather than an error. `bool`
 // converts only to `bool`, `str` only to `str`, and the poison to everything.
+//
+// Pointers convert to pointers of the **same pointee**, and to and from `*void`
+// -- the untyped pointer, and the only one that crosses. `i32` to `*i32` is not
+// a conversion in either direction: a pointer is not an integer, and the two
+// operations that join them are named and counted (`memory.md`, *Provenance*).
 [[nodiscard]] bool convertible(const TypeStore& types, TypeId from, TypeId to);
 
 // True when the conversion may lose information: a float to an integer, a wider

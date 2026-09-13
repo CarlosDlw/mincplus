@@ -143,6 +143,13 @@ TypeId TypeStore::floatOf(std::uint16_t bits) {
   return intern(type);
 }
 
+TypeId TypeStore::pointerTo(TypeId pointee) {
+  Type type;
+  type.kind = TypeKind::Pointer;
+  type.pointee = pointee;
+  return intern(type);
+}
+
 TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params) {
   Type type;
   type.kind = TypeKind::Function;
@@ -237,7 +244,24 @@ bool TypeStore::isScalar(TypeId id) const {
     return false;
   }
   const TypeKind kind = get(id).kind;
-  return isArithmetic(id) || kind == TypeKind::Bool || kind == TypeKind::Str;
+  return isArithmetic(id) || kind == TypeKind::Bool || kind == TypeKind::Str ||
+         kind == TypeKind::Pointer;
+}
+bool TypeStore::isPointer(TypeId id) const {
+  return known(id) && get(id).kind == TypeKind::Pointer;
+}
+bool TypeStore::isVoidPointer(TypeId id) const {
+  if (!known(id)) {
+    return false;
+  }
+  const Type& type = get(id);
+  return type.kind == TypeKind::Pointer && type.pointee == kTypeVoid;
+}
+TypeId TypeStore::pointeeOf(TypeId id) const {
+  if (!isPointer(id)) {
+    return kInvalidType;
+  }
+  return get(id).pointee;
 }
 bool TypeStore::isVoid(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Void;
@@ -276,7 +300,10 @@ std::string TypeStore::spelling(TypeId id) const {
   case TypeKind::Float:
     return "f" + std::to_string(type.bits);
   case TypeKind::Pointer:
-    return spelling(type.pointee) + "*";
+    // **Prefix**, which is the one spelling the grammar accepts. The canonical
+    // name of a type is what a reader can write back, and `i32*` is refused by
+    // name -- see `parser.md`'s type-position rule and `memory.md`, *The surface*.
+    return "*" + spelling(type.pointee);
   case TypeKind::Array:
     return spelling(type.pointee) + "[]";
   case TypeKind::Function: {
@@ -311,13 +338,16 @@ std::size_t TypeStore::sizeOf(TypeId id) const {
     // to the ABI's 16-byte slot. Anything narrower is its own width.
     return type.bits <= 64 ? type.bits / 8U : 16;
   case TypeKind::Str:
+  case TypeKind::Pointer:
+    // `*void` included: a pointer to `void` is a pointer, and its size is the
+    // pointer's. It is `void` that has no object representation, not a pointer
+    // to one.
     return target_.pointerBits / 8U;
   case TypeKind::Error:
   case TypeKind::Void:
   case TypeKind::Function:
   case TypeKind::IntLiteral:
   case TypeKind::FloatLiteral:
-  case TypeKind::Pointer:
   case TypeKind::Array:
     return 0;
   }
@@ -338,6 +368,7 @@ std::size_t TypeStore::alignOf(TypeId id) const {
   case TypeKind::Float:
     return sizeOf(id);
   case TypeKind::Str:
+  case TypeKind::Pointer:
     return target_.pointerBits / 8U;
   default:
     return 0;

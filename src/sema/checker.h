@@ -35,6 +35,7 @@
 #include "sema/sema_error.h"
 #include "sema/type_store.h"
 #include "sema/typed_ast.h"
+#include "sema/typespec.h"
 #include "support/intern/interner.h"
 
 // The operator tokens the checker names, spelled once. Internal to this module,
@@ -177,10 +178,31 @@ private:
   // the loop it belongs to, which a stack decides without a second scan.
   std::vector<BreakStates> breakStack_;
 
+  // --- access, recorded ------------------------------------------------------
+  //
+  // `memory.md`'s access rule, written down where the tree can answer it. The
+  // lowering reads the record instead of re-deriving it, on the same principle
+  // the conversion record follows: a rule recomputed a stage later is a second
+  // copy of the rule, and the two copies are what disagree.
+
+  // The obligation belonging to a place that reaches memory through a pointer.
+  // `place` is the `*p` or the `p[i]` itself, so the binding between the record
+  // and the node the lowering stands on is the identity and not a search.
+  void recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance);
+
+  // Where the pointer an expression produces comes from, as far as this stage can
+  // **prove**. `Object` only for the address of an object this unit named, moved
+  // by arithmetic since; `Foreign` for everything the compiler cannot name.
+  //
+  // Sound and incomplete on purpose: the incomplete half costs an assumption the
+  // optimizer could have made, and the wrong half would cost a correct program
+  // its meaning.
+  [[nodiscard]] ProvenanceKind provenanceOf(ast::AstId expr) const;
+
   // --- types -----------------------------------------------------------------
 
-  // The words of a `Type` node, in source order.
-  [[nodiscard]] std::vector<std::string_view> typeWords(ast::AstId typeNode) const;
+  // The parts of a `Type` node, in source order: its `*` tokens and its words.
+  [[nodiscard]] std::vector<TypePart> typeParts(ast::AstId typeNode) const;
   [[nodiscard]] TypeId resolveTypeNode(ast::AstId typeNode);
   // The type a binding has when nothing constrained it: `i32` / `f64` for a
   // deferred literal, the type itself otherwise.
@@ -211,7 +233,29 @@ private:
   [[nodiscard]] TypeId checkPath(ast::AstId expr, ExprInfo& info);
   [[nodiscard]] TypeId checkPrefix(ast::AstId expr, ExprInfo& info);
   [[nodiscard]] TypeId checkPostfix(ast::AstId expr, ExprInfo& info);
+  // `&e`: the address of a place. Refused for anything that has no address, and
+  // it is *not* an access -- taking an address reads nothing, which is why the
+  // definite-assignment pass walks its operand as a place and not as a value.
+  [[nodiscard]] TypeId checkAddressOf(ast::AstId expr, ExprInfo& info);
+  // `*p`: a place of the pointee's type. This is where an access is recorded,
+  // because this is the node the lowering stands on when it loads or stores.
+  [[nodiscard]] TypeId checkDeref(ast::AstId expr, ExprInfo& info);
+  // `a[i]`, which the language defines as `*(a + i)`.
+  [[nodiscard]] TypeId checkIndex(ast::AstId expr, ExprInfo& info);
   [[nodiscard]] TypeId checkBinary(ast::AstId expr, ExprInfo& info);
+  // `++p` / `--p` / `p++` / `p--` on a *pointer*: one element step, which is
+  // `p + 1` / `p - 1` with the same scaling and the same void rule. `nullopt`
+  // when the operand is not a pointer, so exactly one of the two rules owns the
+  // operator and neither can silently claim it.
+  [[nodiscard]] std::optional<TypeId> checkPointerStep(ast::AstId expr, TypeId type);
+  // The pointer arms of `+`, `-` and the comparisons. `nullopt` when neither
+  // operand is a pointer, which is how the arithmetic path below stays free of
+  // pointer cases and the pointer path free of arithmetic ones: exactly one of
+  // the two can claim an operator, and `-Wswitch`-shaped exhaustiveness is not
+  // needed for a question that is a single predicate.
+  [[nodiscard]] std::optional<TypeId> checkPointerBinary(ast::AstId expr, Tag kind, ast::AstId lhs,
+                                                         ast::AstId rhs, TypeId left, TypeId right,
+                                                         ExprInfo& info);
   [[nodiscard]] TypeId checkConditional(ast::AstId expr, TypeId expected, ExprInfo& info);
   [[nodiscard]] TypeId checkAssign(ast::AstId expr, ExprInfo& info);
   [[nodiscard]] TypeId checkCall(ast::AstId expr, ExprInfo& info);

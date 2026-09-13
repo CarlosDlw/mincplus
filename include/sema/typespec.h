@@ -40,8 +40,29 @@ struct TypeSpecResult {
 // Reads the words of a type run, in source order. An empty run is an error
 // rather than a guess: a missing type is the parser's finding, and a default
 // here would hide it.
+//
+// This is the *base* reader: the words of a type, with no pointer prefix. It
+// stays public because it is the whole of the C-specifier grammar and a caller
+// that has only words (a test, a future `#if` type query) should not have to
+// build a `TypePart` array to ask about one.
 [[nodiscard]] TypeSpecResult readTypeSpec(std::span<const std::string_view> words,
                                           TypeStore& types);
+
+// One element of a type position, in source order: a `*`, or a word.
+//
+// A type position is `* * ... * <words>` and nothing else, because that is what
+// the grammar accepts (`parser.md`): the `*` is *before* what it points to, so a
+// pointer is a prefix over the same run of words every other type is.
+struct TypePart {
+  bool isStar = false;
+  // Empty for a `*`.
+  std::string_view word;
+};
+
+// The whole type position. A `*` after the words is refused by name -- the one
+// spelling the language has is `*T`, and a reader who wrote `i32*` has one
+// character to move, which is exactly what the message says.
+[[nodiscard]] TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types);
 
 // Every spelling the reader accepts, for a "did you mean ...?" suggestion.
 // Names only, not the valid *combinations*: a suggestion is about one word.

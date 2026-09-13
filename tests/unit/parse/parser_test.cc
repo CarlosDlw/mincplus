@@ -143,6 +143,67 @@ TEST(ParserTest, MultiWordTypeNamesAreOneType) {
   EXPECT_NE(typeRegion.find("\"int\""), std::string::npos) << typeRegion;
 }
 
+TEST(ParserTest, APointerTypeIsPartOfTheTypeRun) {
+  const ParseFixture fixture(fnBody("let p: *i32 = null;"));
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  const std::string tree = fixture.dump(/*showTrivia=*/false);
+  const std::size_t type = tree.find("Type@");
+  ASSERT_NE(type, std::string::npos);
+  const std::size_t end = tree.find("Equal@", type);
+  ASSERT_NE(end, std::string::npos);
+  const std::string typeRegion = tree.substr(type, end - type);
+  // The `*` belongs to the Type node, not to the initializer: the annotation is
+  // `*i32`, and the parser does not decide whether the word after it is a type
+  // or an expression -- that is `sema`'s -- so it collects the run whole.
+  EXPECT_NE(typeRegion.find("\"*\""), std::string::npos) << typeRegion;
+  EXPECT_NE(typeRegion.find("\"i32\""), std::string::npos) << typeRegion;
+}
+
+TEST(ParserTest, AStarIsATypeInAnAnnotationAndMultiplicationInAnInitializer) {
+  // There is no ambiguity to resolve, and this pins both readings at once: a
+  // complete expression precedes the infix `*`, an annotation never does.
+  const ParseFixture fixture(fnBody("let q: i32 = a * b; let p: *i32 = &a;"));
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  const std::string tree = fixture.dump(/*showTrivia=*/false);
+  const std::size_t multiply = tree.find("BinaryExpr");
+  ASSERT_NE(multiply, std::string::npos);
+  // The annotation's star is inside a Type node, not a BinaryExpr.
+  const std::size_t pointerType = tree.find("Type@", multiply);
+  ASSERT_NE(pointerType, std::string::npos);
+  const std::size_t annotationEnd = tree.find("Equal@", pointerType);
+  ASSERT_NE(annotationEnd, std::string::npos);
+  EXPECT_NE(tree.substr(pointerType, annotationEnd - pointerType).find("\"*\""), std::string::npos);
+}
+
+TEST(ParserTest, AddressOfAndDerefArePrefixExpressions) {
+  const ParseFixture fixture(fnBody("let y: i32 = *p;"));
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  EXPECT_NE(fixture.dump(/*showTrivia=*/false).find("PrefixExpr"), std::string::npos);
+
+  const ParseFixture address(fnBody("let a: *i32 = &x;"));
+  ASSERT_EQ(address.errorCount(), 0u) << address.errorMessages();
+  EXPECT_NE(address.dump(/*showTrivia=*/false).find("PrefixExpr"), std::string::npos);
+}
+
+TEST(ParserTest, IndexIsAnIndexExpressionAndKeepsItsBrackets) {
+  const ParseFixture fixture(fnBody("let y: i32 = p[0];"));
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  const std::string tree = fixture.dump(/*showTrivia=*/false);
+  EXPECT_NE(tree.find("IndexExpr"), std::string::npos);
+  EXPECT_NE(tree.find("\"[\""), std::string::npos) << tree;
+  EXPECT_NE(tree.find("\"]\""), std::string::npos) << tree;
+  // Lossless like every other shape: a formatter could rewrite it.
+  EXPECT_EQ(fixture.reconstruct(), fixture.source());
+}
+
+TEST(ParserTest, TheWholePointerSurfaceIsLossless) {
+  const ParseFixture fixture(
+      fnBody("let x: i32 = 1; let p: *i32 = &x; *p = x; let y: i32 = p[1]; return y;"));
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  EXPECT_TRUE(fixture.tree().validate());
+  EXPECT_EQ(fixture.reconstruct(), fixture.source());
+}
+
 TEST(ParserTest, MissingSemicolonIsOneErrorAndStillLossless) {
   const ParseFixture fixture(fnBody("let x = 1"));
   EXPECT_EQ(fixture.errorCount(), 1u) << fixture.errorMessages();

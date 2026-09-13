@@ -118,6 +118,17 @@ CompletedMarker Parser::parsePostfix() {
       parseArgList();
       expect(lex::TokenKind::RParen);
       expr = call.complete(SyntaxKind::CallExpr);
+    } else if (at(lex::TokenKind::LBracket)) {
+      // `a[i]`. Bracketed rather than a `PostfixExpr` because the index is a
+      // full expression of its own, not the single operand an operator token
+      // implies -- and because the brackets have to stay in the tree: `a[i]` and
+      // `a i` are not the same program, and a dump that could not tell them
+      // apart would not be a dump of the source.
+      Marker index = expr.precede();
+      bump(); // `[`
+      parseExpr();
+      expect(lex::TokenKind::RBracket);
+      expr = index.complete(SyntaxKind::IndexExpr);
     } else if (at(lex::TokenKind::PlusPlus) || at(lex::TokenKind::MinusMinus)) {
       Marker postfix = expr.precede();
       bump();

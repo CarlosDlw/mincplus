@@ -78,8 +78,14 @@ inline constexpr std::size_t kBinaryOpCount = sizeof(kBinaryOps) / sizeof(kBinar
   }
 }
 
-// Prefix operators that sit just below postfix in precedence. Pointer
-// operators (`*`, `&`) are deliberately absent until their syntax is decided.
+// Prefix operators that sit just below postfix in precedence.
+//
+// `*` and `&` are here in both roles at once, which needs no disambiguation:
+// `a * b` is the infix operator because a complete expression precedes it, and
+// `*p` is the prefix one because nothing does. That is the whole of the rule,
+// and it is why a grammar with no declarator syntax has no ambiguity to resolve
+// here -- C's famous `a * b;` question is about *declarations*, and this grammar
+// spells a binding `name: type`.
 [[nodiscard]] inline bool isPrefixOperator(lex::TokenKind kind) {
   switch (kind) {
   case lex::TokenKind::Minus:
@@ -88,6 +94,9 @@ inline constexpr std::size_t kBinaryOpCount = sizeof(kBinaryOps) / sizeof(kBinar
   case lex::TokenKind::Tilde:
   case lex::TokenKind::PlusPlus:
   case lex::TokenKind::MinusMinus:
+  // Dereference, and the address of a place.
+  case lex::TokenKind::Star:
+  case lex::TokenKind::Amp:
     return true;
   default:
     return false;

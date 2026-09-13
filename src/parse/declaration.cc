@@ -103,25 +103,40 @@ void Parser::parseParam() {
   param.complete(SyntaxKind::Param);
 }
 
+// How many tokens a type run has, from the current position. A run is `*` and
+// identifier tokens and nothing else, which is the same shape everything below
+// reads and the same shape a `Type` node holds.
+//
+// The `*` is deliberately *not* given a meaning here. A pointer type is a
+// sema question -- the parser does not know which words are type names and
+// this stage is not allowed to know -- so the run is collected whole and the
+// rules about where a `*` may sit live in `sema/typespec.cc`, which is the only
+// place that can say "a pointer is written `*T`" and mean it.
+[[nodiscard]] static std::uint32_t typeRunLength(const Parser& parser) {
+  std::uint32_t tokens = 0;
+  while (parser.nth(tokens) == lex::TokenKind::Star ||
+         parser.nth(tokens) == lex::TokenKind::Identifier) {
+    ++tokens;
+  }
+  return tokens;
+}
+
 void Parser::parseTypeAndName() {
-  // The type and the name are both identifier runs, and the only token that
-  // separates them from the rest of the declaration is `(`. So the last
-  // identifier before `(` is the name and everything before it is the type.
+  // The type and the name are both part of one run of `*` and identifiers, and
+  // the only token that separates them from the rest of the declaration is `(`.
+  // So the last identifier before `(` is the name and everything before it --
+  // stars included -- is the type.
+  const std::uint32_t tokens = typeRunLength(*this);
   std::uint32_t words = 0;
-  while (nth(words) == lex::TokenKind::Identifier) {
-    ++words;
+  std::uint32_t lastWord = 0;
+  for (std::uint32_t i = 0; i < tokens; ++i) {
+    if (nth(i) == lex::TokenKind::Identifier) {
+      ++words;
+      lastWord = i + 1; // one past the last identifier
+    }
   }
 
-  if (words == 0) {
-    error("expected a return type and a function name", ParseErrorCode::ExpectedName);
-    Marker type = start();
-    type.complete(SyntaxKind::Type);
-    Marker name = start();
-    name.complete(SyntaxKind::Name);
-    return;
-  }
-
-  if (words == 1) {
+  if (words == 1 && lastWord <= 1) {
     // `fn name()` -- a name with no return type. Report the type, not the name,
     // because the name is the part that is definitely there.
     error("expected a return type before the function name", ParseErrorCode::ExpectedType);
@@ -133,8 +148,25 @@ void Parser::parseTypeAndName() {
     return;
   }
 
+  if (words == 0) {
+    // Either nothing at all, or stars and no name (`fn *()`). Both are one
+    // mistake: there is no function name. The stars still belong to a `Type`
+    // node, because every byte of the source has to live somewhere and a
+    // silently dropped `*` is how a tree stops being lossless.
+    error(tokens == 0 ? "expected a return type and a function name" : "expected a function name",
+          ParseErrorCode::ExpectedName);
+    Marker type = start();
+    while (!atEnd() && at(lex::TokenKind::Star)) {
+      bump();
+    }
+    type.complete(SyntaxKind::Type);
+    Marker name = start();
+    name.complete(SyntaxKind::Name);
+    return;
+  }
+
   Marker type = start();
-  for (std::uint32_t i = 0; i + 1 < words; ++i) {
+  for (std::uint32_t i = 0; i + 1 < lastWord; ++i) {
     bump();
   }
   type.complete(SyntaxKind::Type);
@@ -146,14 +178,14 @@ void Parser::parseTypeAndName() {
 
 void Parser::parseType() {
   Marker type = start();
-  if (!at(lex::TokenKind::Identifier)) {
+  if (typeRunLength(*this) == 0) {
     error("expected a type", ParseErrorCode::ExpectedType);
     type.complete(SyntaxKind::Type);
     return;
   }
   // In an annotation (`x: T`) there is no trailing name to separate, so the
-  // whole identifier run is the type.
-  while (at(lex::TokenKind::Identifier)) {
+  // whole run is the type.
+  while (at(lex::TokenKind::Identifier) || at(lex::TokenKind::Star)) {
     bump();
   }
   type.complete(SyntaxKind::Type);

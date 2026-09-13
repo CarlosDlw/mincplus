@@ -369,31 +369,35 @@ hidden escape hatch.
 The rules underneath it -- what an object is, what a pointer carries, what
 aliasing may be assumed, alignment, lifetime, and what counts as a violation
 rather than as undefined behavior -- are decided in
-[`docs/architectures/memory.md`](docs/architectures/memory.md), which is
-therefore the record that must be settled **before the first `*` is lowered**.
-Everything below is what lands on top of that model.
+[`docs/architectures/memory.md`](docs/architectures/memory.md), and **stage one
+of that model is implemented**: `*T`, `&x`, `*p`, `p[i]`, the stepping, the
+comparison, `null` and `*void`, with the per-access provenance record `sema`
+publishes for the lowering to read. Everything below is what lands on top of
+that model.
 
 **Pointer types**
 
-- [ ] Pointers to any object type, at any depth (`**T`, `***T`)
+- [x] Pointers to any object type, at any depth (`**T`, `***T`)
 - [ ] Function pointers, including calling through them
-- [ ] `void*` (untyped) and pointers to incomplete/opaque types
+- [x] `void*` (untyped) as `*void`; pointers to incomplete/opaque types still to
+      come
 - [ ] Qualifiers on the pointee, if `const`/`volatile` land `[?]`
-- [ ] Pointer syntax: C-style `*T` or a `.mx` spelling `[?]`
+- [x] Pointer syntax: `*T` in type position, a positional prefix constructor that
+      cannot collide with multiplication
 
 **Addressing and access**
 
-- [ ] Address-of `&` and dereference `*`
+- [x] Address-of `&` and dereference `*`
 - [ ] Member access through a pointer
 - [ ] Array-to-pointer decay, `&a[0]`
-- [ ] Raw loads and stores, including type punning through a pointer
+- [x] Raw loads and stores through a pointer; type punning still to come
 
 **Arithmetic and comparison**
 
-- [ ] `p + n`, `p - n`, `p1 - p2`, `++p` / `--p`, `p[i]`
-- [ ] Element-based scaling by `sizeof(*p)`, not byte stepping
-- [ ] Pointer comparison and ordering
-- [ ] `isize` as the pointer-difference type
+- [x] `p + n`, `p - n`, `p1 - p2`, `++p` / `--p`, `p[i]`
+- [x] Element-based scaling by `sizeof(*p)`, not byte stepping
+- [x] Pointer comparison and ordering
+- [x] `isize` as the pointer-difference type
 
 **Conversions and casts**
 
@@ -409,14 +413,18 @@ Everything below is what lands on top of that model.
 - [ ] `restrict` / noalias annotation `[?]`
 - [ ] Volatile accesses for memory-mapped I/O `[?]`
 - [ ] Aligned vs unaligned access guarantees `[?]`
-- [ ] The pointer provenance/aliasing rules the optimizer may assume `[?]`
+- [x] The pointer provenance/aliasing rules the optimizer may assume — decided,
+      and published per access by `sema` as `Object` or `Foreign`; the `src/ir`
+      scan that enforces the closed list lands with the lowering
 
 **Safety model**
 
-- [ ] Raw pointers are unchecked and need no keyword — plain C semantics `[?]`
-- [ ] Null dereference: undefined behavior like C, or a debug-build trap `[?]`
+- [x] Raw pointers are unchecked and need no keyword — no borrow checker, but
+      every access carries a written obligation (an access is **defined** where
+      it stays inside the object; it is the obligation that is the programmer's)
+- [ ] Null dereference: a checked-build trap rather than undefined behavior
 - [ ] Optional non-null pointer type `[?]`
-- [ ] Bounds are the programmer's responsibility: `*T` carries no length
+- [x] Bounds are the programmer's responsibility: `*T` carries no length
 
 ### Declarations and modules
 

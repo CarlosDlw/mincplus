@@ -98,8 +98,8 @@ rule for a check: a rule lands when its syntax does, never as a placeholder.
 | `File` | the unit; checks the file-scope items in order |
 | `Error` | skipped (`inError`); never a second diagnostic |
 | `FnDecl` | the function's type (`ret`, `params`), then the body against `ret` |
-| `ParamList` | empty today; a non-empty one is already an `Error` region the parser reported |
-| `Param` | reserved, never produced by the grammar |
+| `ParamList` | the parameters, each a binding `name: type`, checked in order |
+| `Param` | the parameter's type; a `void` parameter is refused (there is no value to pass) |
 | `Block` | checks its statements in source order |
 | `LetStmt` | the binding's type: the annotation, or the initializer's type defaulted |
 | `ConstStmt` | the same, plus "this name may not be assigned"; `const` with no initializer is `validate`'s |
@@ -111,8 +111,9 @@ rule for a check: a rule lands when its syntax does, never as a placeholder.
 | `LiteralExpr` | `char`, `str`, `bool` from the token; integer/float are *deferred* (see *Literals*) |
 | `PathExpr` | the denoted declaration's type; `true`/`false` are predefined `bool` constants |
 | `ParenExpr` | the inner expression's type; still an lvalue when the inner is one |
-| `PrefixExpr` | `-` `+` `!` `~` `++` `--` |
-| `PostfixExpr` | `++` `--`; requires a *modifiable* lvalue |
+| `PrefixExpr` | `-` `+` `!` `~` `++` `--`, plus `&` (the address of a **modifiable** lvalue) and `*` (a place of the pointee's type, which is one access) |
+| `PostfixExpr` | `++` `--`; requires a *modifiable* lvalue — a pointer is *stepped*, an arithmetic value incremented, and the scaling belongs to the type |
+| `IndexExpr` | `p[i]`: `p` is a pointer, `i` an integer converted at the pointer width; the result is a place of the pointee, and one access |
 | `BinaryExpr` | the 18 operators of the parser's table, by class (arithmetic, shift, bitwise, comparison, logical, `,` absent until it parses) |
 | `ConditionalExpr` | `?:` — condition `bool`, arms unify, result is an lvalue only if both arms are |
 | `AssignExpr` | the 11 forms; the left side must be a modifiable lvalue, the right side converts to it |
@@ -120,12 +121,14 @@ rule for a check: a rule lands when its syntax does, never as a placeholder.
 | `ArgList` | the arguments, checked in order |
 | `MacroCall`, `TokenTree`, `Attribute` | reserved: the grammar does not produce them. Sema must not crash if one appears — it reports nothing and yields `Error` |
 
-Two things the grammar deliberately does **not** have, and that sema therefore
-does not check: `*`/`&` (the parser's prefix set excludes them — `token_class.h`
-says so — so there is no pointer expression to type), and parameters (a
-non-empty `ParamList` is already an error). Pointers and parameters are the next
-two increments; the type model below reserves their place without pretending to
-implement them.
+Sema types the pointer forms the grammar produces -- `*T` at any depth, `&x`,
+`*p`, `p[i]`, the stepping, the comparison, `null` and `*void` -- and publishes
+one `AccessObligation` per dereference for the lowering to read. Two things the
+grammar still does **not** produce, and that sema therefore does not check:
+aggregates (arrays, `struct`, and the decay that comes with them) and the
+operations that join a pointer and an integer (`expose` /
+`with_exposed_provenance`, `memory.md`'s stage three). The type model below
+reserves their place without pretending to implement them.
 
 ## Type representation
 
@@ -245,9 +248,10 @@ reason for the shape:
 
 ### What the artifact publishes
 
-The IR cannot re-derive two things without holding a second copy of this
-stage's rules, and both are therefore part of the artifact (`ir.md`, *The
-coercion record*):
+The IR cannot re-derive three things without holding a second copy of this
+stage's rules, and all three are therefore part of the artifact (`ir.md`, *The
+coercion record*, and `memory.md`, *The record the lowering is not allowed to
+re-derive*):
 
 - **Every implicit conversion, as a pair of types, keyed on the consumer that
   applies it.** `coercionAt(consumer, operand)` answers "what does this node do
@@ -261,6 +265,16 @@ coercion record*):
   *operates* at `i32`, and a lowering that read the node's type would emit an
   out-of-range shift. The conversion of the result back into the target is
   implied by `opType != typeOf(expr)`.
+- **Every access through a pointer** (`TypedFile::accesses()`, written by
+  `src/sema/access.cc`). One `AccessObligation` per dereference — `*p` and
+  `p[i]` — carrying what is accessed (its type is the access's width and
+  alignment) and the `ProvenanceKind` the compiler could *prove*: `Object` for
+  the address of an object this unit named and moved by arithmetic since,
+  `Foreign` for everything it cannot name. The proof is syntactic and therefore
+  sound and incomplete on purpose, and the direction it errs in is the only safe
+  one. `accessAt(node)` is the question, keyed on the node the lowering stands
+  on; a refused dereference is not recorded, because a tree with a `poison`
+  access is never lowered.
 
 ... and one guarantee the record depends on, which is a property of the whole
 table and not of any one entry:
@@ -403,7 +417,7 @@ exists to remove.
 | `!` | operand `bool`; result `bool` | `sema-condition-not-bool` |
 | `++`, `--` (prefix and postfix) | operand is a *modifiable* lvalue and arithmetic | `sema-incdec-not-lvalue` / `sema-assign-to-const` |
 | `* / %` | both arithmetic; `%` requires integers (C requires it too) | `sema-invalid-operands` |
-| `+ -` | both arithmetic (pointer arithmetic lands with pointers) | `sema-invalid-operands` |
+| `+ -` | both arithmetic, **or** a pointer and an integer (scaled by the pointee, index materialised at the pointer width), **or** two pointers to one type for `-` (result `isize`) | `sema-invalid-operands` / `sema-pointer-mismatch` / `sema-pointer-void-arithmetic` |
 | `<< >>` | both integers after promotion; a **constant** count at or past the width of the promoted left operand (or negative) is an error, because the alternative is a poison value in LLVM — see *Integer arithmetic at the edges* | `sema-invalid-operands` / `sema-shift-count-out-of-range` |
 | `& \| ^` | both integers | `sema-invalid-operands` |
 | `< <= > >=` | both arithmetic, same conversion; result `bool` | `sema-invalid-operands` |
@@ -601,7 +615,7 @@ The rules that carry over verbatim from the stages below:
 - **Budgets are always on**, checked before the allocation, and the deep-input
   test runs under ASan/UBSan. Sema recurses only within the depth the parser
   already bounded (asserted at entry, as lowering does), and the type store has
-  a depth bound of its own so a type built by later pointer/array syntax cannot
+  a depth bound of its own so a type built by later array/aggregate syntax cannot
   make a comparison or a dump recurse without limit.
 - **Errors are values with a span and a stable code**; the message is written
   once, in the checker, next to the rule that produced it.
@@ -730,12 +744,14 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 
 ## Non-goals
 
-- **Pointers, arrays, structs, `enum`, function pointers, casts.** The syntax
-  does not exist yet; the type model reserves their kinds and nothing pretends
-  to check them. `*` and `&` are absent from the prefix set on purpose.
-- **Parameters.** The parser reports a non-empty `ParamList`; sema skips the
-  `Error` region. When parameters land, `sema-argument-type` joins the table and
-  the `Function` type already has the shape for it.
+- **Arrays, structs, `enum`, function pointers, casts.** The syntax does not
+  exist yet; the type model reserves their kinds and nothing pretends to check
+  them.
+- **The checked layer of the memory model.** `&T` / `&mut T` / `slice<T>`,
+  `restrict`, `volatile`, `unaligned`, and the `expose` /
+  `with_exposed_provenance` pair are stage two and three of `memory.md`; the
+  access record already has the slots they will fill (`AccessKind`,
+  `ProvenanceKind`).
 - **Generic inference.** No Hindley–Milner: one pass, one direction, and the
   only inference is the deferred literal and the initializer's type. A type
   flowing *backwards* from a later use is out of scope by construction.

@@ -77,6 +77,37 @@ enum class SemaErrorCode : std::uint8_t {
   // assignment reaching the read. Never a warning -- an unwritten object has no
   // value to read -- and never a guess: the analysis names the paths it proved.
   UseBeforeAssignment,
+  // `*x` where `x` is not a pointer.
+  DerefNotPointer,
+  // `*p` or `p[i]` where the pointee is `void`: `void` has no size, so there is
+  // nothing there to access. Distinct from `DerefNotPointer` because the pointer
+  // is fine and it is the *type* that has to be named.
+  PointerVoidAccess,
+  // `p + n`, `n + p` or `p - q` where the pointee is `void`: stepping a pointer
+  // scales by the pointee's size, and `void` has none.
+  PointerVoidArithmetic,
+  // `&e` where `e` has no address (an arithmetic value, a literal, a call).
+  AddressOfNonLvalue,
+  // `&c` where `c` is a `const` binding. `memory.md` states the operator takes
+  // the address of a **modifiable** lvalue: a pointer to a `const` binding would
+  // be a way to write it, and `const` protects the name. Distinct from
+  // `AddressOfNonLvalue` because the operand *is* a place -- what is missing is
+  // permission, and the fix is different (drop the `const`, or copy the value).
+  AddressOfConst,
+  // `p[i]` with an index that is not an integer.
+  IndexNotInteger,
+  // Two pointer types that do not meet: a comparison of `*i32` with `*u8`, a
+  // subtraction of unrelated pointees, a `?:` with no common pointer type, or an
+  // initializer/argument of one pointee type where the other is required. The
+  // last group is why the message states the rule rather than the mismatch:
+  // `*void` is the only crossing point that is implicit, and the rest is a
+  // reinterpretation the source has to write (`memory.md`, *The surface*).
+  PointerMismatch,
+  // A pointer and an integer on one side of a conversion. The language has no
+  // implicit conversion between them in either direction: the two named
+  // operations that join them are not in the grammar yet, and until they are the
+  // refusal is the whole rule (`memory.md`, *Provenance*).
+  PointerInteger,
   // The type budget was reached. A hazard bound, not a language rule.
   LimitTypes,
   // A statement after a `return` in the same block (warning).

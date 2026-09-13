@@ -1,0 +1,73 @@
+// Raw pointers -- stage one of the memory model
+// (see `docs/architectures/memory.md`).
+//
+// A `*T` is an address, not an owner. The language has no borrow checker and no
+// lifetime in the type, so the obligation is the programmer's: the pointer must
+// name an object that is still alive, and the access must stay inside it. What
+// the compiler does promise is that nothing is undefined *by accident* -- no
+// aliasing rule to trip over, no `char*` special case, and no integer that is
+// secretly an address. The checked build is what reports a violation at the
+// access, by name.
+//
+// The whole surface is four shapes, and each has one meaning:
+//   `*T`  a pointer to a `T`            `&x`  the address of a modifiable place
+//   `*p`  the place `p` names           `p[i]`  the i-th `T` from `p`
+
+// A pointer *parameter*: the callee receives a copy of the address, so the
+// pointee is shared and the pointer itself is not.
+fn void bump(p: *i32)
+{
+  *p = *p + 1;
+}
+
+fn i32 grow(p: *i32, amount: i32)
+{
+  *p += amount;
+  return *p;
+}
+
+// `*void` is the untyped pointer. It converts to and from every pointer type,
+// and it is the one pointer that cannot be dereferenced or stepped -- `void`
+// has no size, so there is no load and no stride.
+fn bool isNull(p: *void)
+{
+  return p == null;
+}
+
+fn i32 main()
+{
+  let value: i32 = 41;
+
+  // `&value` names the place; `*p` is that place again, so a store through it
+  // writes `value` and a read through it reads `value`.
+  let p: *i32 = &value;
+  *p = *p + 1;
+
+  bump(p);
+
+  // The index form is the definition, not a second operation: `p[i]` is
+  // `*(p + i)`, so the index scales by the pointee's size and moves within the
+  // object the pointer was derived from.
+  let first: i32 = p[0];
+
+  // Stepping a pointer keeps it a pointer, in both directions.
+  let moved: *i32 = p + 1;
+  moved -= 1;
+  let back: bool = moved == p;
+
+  // Comparison reads the address, and two pointers to one object are equal.
+  let same: bool = p == &value;
+
+  // `null` is the empty pointer: a `*void` that converts to any pointer type.
+  // There is no integer zero that means an address, and `p == 0` is refused.
+  let empty: *i32 = null;
+  let erased: *void = p;
+  let typedAgain: *i32 = erased;
+
+  if isNull(typedAgain) || p == empty
+  {
+    return 0;
+  }
+
+  return grow(&value, first) + value + (back ? 1 : 0) + (same ? 1 : 0);
+}

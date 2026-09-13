@@ -40,7 +40,8 @@ type-checked, which is what section 4 is about.
       lowering/name-resolution design in
       [`architectures/resolve.md`](architectures/resolve.md), the type-checking
       design in [`architectures/sema.md`](architectures/sema.md), and the
-      memory model in [`architectures/memory.md`](architectures/memory.md)
+      memory model in [`architectures/memory.md`](architectures/memory.md) —
+      whose stage-one surface (raw pointers) is now implemented
 - [x] `Session` — per-compilation state container with per-file revisions, so
       editor edits keep a stable `FileId` while the contents change
 
@@ -288,7 +289,8 @@ the language decisions this stage had to make — `void`, conditions requiring
 
 **Shipped**, for every form the grammar produces today. What is left in this
 section is the type and analysis work the *syntax* does not exist for yet
-(pointers, arrays, aggregates, casts). The flow analyses are here and not in the
+(arrays, aggregates, casts, and the checked layer of the memory model). The
+flow analyses are here and not in the
 IR, and that is a decision and not a convenience: definite assignment,
 reachability and `break`/`continue` context are all answered exactly by the
 *shape* of this grammar, so deferring them would have meant a later stage
@@ -346,10 +348,19 @@ which also records the reversal.
       are done (`i8`..`i128`, `u8`..`u128`, `f32`/`f64`/`f80`, `bool`, `char`,
       `str`, `void`, `int`/`long`/`long long int`/… per target ABI, with `char`
       fixed unsigned rather than inheriting C's sign)
-- [ ] Pointer semantics: element-scaled arithmetic, casts, byte-aliasing rules,
-      and the provenance model the optimizer may rely on — **decided** in
-      [`architectures/memory.md`](architectures/memory.md), which lands with the
-      access record before the first `*` is lowered
+- [x] **Raw pointers** (stage one of
+      [`architectures/memory.md`](architectures/memory.md)): `*T` at any depth,
+      `&x` on a **modifiable** lvalue, `*p` and `p[i]` as places, element-scaled
+      `p + n` / `p - n` / `p1 - p2` / `++p` / `--p` / `p += n`, comparison and
+      ordering, `null` as the empty `*void`, and `*void` as the untyped pointer
+      that converts to every other one. `sema` publishes one
+      `AccessObligation` per dereference (`Object` or `Foreign` provenance) for
+      the lowering to materialise rather than re-derive
+- [ ] The rest of the memory model: int ↔ ptr as named operations (`expose` /
+      `with_exposed_provenance`), casts, `restrict`, `volatile`/`unaligned`
+      accesses, the `slice<T>` / `&T` / `&mut T` layer, and the checked-build
+      traps — the model is **decided**; what is left is the syntax it needs and
+      the `src/ir` that enforces it
 - [x] Control-flow typing: `if`/`while`/`for` conditions must be `bool`, and
       `break`/`continue` outside a loop are `sema-break-outside-loop` /
       `sema-continue-outside-loop`. `terminates()` handles the branch and loop

@@ -151,7 +151,7 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
     }
     // A parenthesised expression keeps its value category: `(x) = 1` is legal
     // for the same reason `x = 1` is, which is C's rule and the one every
-    // reader expects.
+    // reader expects. `(*p) = 1` and `(&x)` follow from the same sentence.
     type = checkExpr(operands.front(), expected);
     info = out_.typed.infoOf(operands.front());
     break;
@@ -161,6 +161,9 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
     break;
   case ast::NodeKind::PostfixExpr:
     type = checkPostfix(expr, info);
+    break;
+  case ast::NodeKind::IndexExpr:
+    type = checkIndex(expr, info);
     break;
   case ast::NodeKind::BinaryExpr:
     type = checkBinary(expr, info);
@@ -265,7 +268,10 @@ TypeId Checker::checkPath(ast::AstId expr, ExprInfo& info) {
     return kTypeError;
   }
   const bool isFunction = types_.get(type).kind == TypeKind::Function;
-  info.isLvalue = !isFunction && !types_.isError(type);
+  // A predefined name is a *value*: `true`, `false` and `null` denote no storage,
+  // so `&null` is not an address and `null = p` is not a store. Asking the def
+  // rather than the kind keeps that true for the next predefined name too.
+  info.isLvalue = !isFunction && !declaration->predefined && !types_.isError(type);
   if (isConstDef(*def) || declaration->predefined) {
     info.isConstant = true;
     if (def->index < defHasConstValue_.size() && defHasConstValue_[def->index]) {
@@ -308,6 +314,15 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
   const Tag kind = tagOf(kindOf(op));
   const ast::AstId operand = operands.front();
 
+  // The two pointer operators come first because they are the two that *produce*
+  // and *consume* a place, and everything below is about values.
+  if (kind == kTokAmp) {
+    return checkAddressOf(expr, info);
+  }
+  if (kind == kTokStar) {
+    return checkDeref(expr, info);
+  }
+
   if (kind == kTokBang) {
     const TypeId inner = checkExpr(operand, kInvalidType);
     if (types_.isError(inner)) {
@@ -335,6 +350,11 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
     if (!checkModifiable(operand, inner, expr, SemaErrorCode::IncDecNotLvalue,
                          " and be incremented")) {
       return inner;
+    }
+    // A pointer is stepped, an arithmetic value is incremented, and the two are
+    // the same operator with the scaling belonging to the type.
+    if (const std::optional<TypeId> stepped = checkPointerStep(expr, inner)) {
+      return *stepped;
     }
     if (!types_.isArithmetic(inner)) {
       error(expr, SemaErrorCode::InvalidOperands,
@@ -417,6 +437,9 @@ TypeId Checker::checkPostfix(ast::AstId expr, ExprInfo& info) {
                        " and be incremented")) {
     return inner;
   }
+  if (const std::optional<TypeId> stepped = checkPointerStep(expr, inner)) {
+    return *stepped;
+  }
   if (!types_.isArithmetic(inner)) {
     error(expr, SemaErrorCode::InvalidOperands,
           "`" + std::string(tagOf(kindOf(op)) == kTokPlusPlus ? "++" : "--") +
@@ -427,6 +450,257 @@ TypeId Checker::checkPostfix(ast::AstId expr, ExprInfo& info) {
   // declaration is.
   (void)info;
   return inner;
+}
+
+// --- pointers ----------------------------------------------------------------
+
+TypeId Checker::checkAddressOf(ast::AstId expr, ExprInfo& info) {
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  if (operands.empty()) {
+    return kTypeError;
+  }
+  const ast::AstId operand = operands.front();
+  const TypeId inner = checkExpr(operand, kInvalidType);
+  if (types_.isError(inner)) {
+    return kTypeError;
+  }
+  // `&` needs a *place*: an object that lives somewhere. `&(a + b)` has no
+  // address, and neither has a literal or a call's result. C refuses all three,
+  // and the reason is the model's: a pointer's provenance has to name an
+  // allocation, so there has to *be* one (`memory.md`, *Provenance*).
+  if (!out_.typed.infoOf(operand).isLvalue) {
+    error(operand, SemaErrorCode::AddressOfNonLvalue,
+          "`&` needs a place to take the address of; this expression is a value and has no "
+          "address");
+    return kTypeError;
+  }
+  // ... and a place that may be **written**, which is the second half of
+  // `memory.md`'s rule (`&x` takes "the address of a modifiable lvalue"). A
+  // pointer to a `const` binding would be a way to write it, and `const` is the
+  // promise that the name cannot be written -- so the two cannot both hold. This
+  // is *not* the same refusal as `&(a + b)`: the operand is a place, and what is
+  // missing is permission.
+  if (const std::optional<resolve::DefId> def = defOfPlace(operand);
+      def.has_value() && isConstDef(*def)) {
+    const std::string name = nameOf(operand);
+    error(expr, SemaErrorCode::AddressOfConst,
+          (name == "this expression" ? std::string("this expression") : "`" + name + "`") +
+              " is a `const`, so its address cannot be taken: a pointer to it would be a way "
+              "to write it");
+    return kTypeError;
+  }
+  // Nothing is recorded for the operand: taking an address *reads nothing*, which
+  // is why this is not an access and why the definite-assignment pass walks the
+  // operand as a place. `&x` on an unassigned `x` is legal; reading `x` is not.
+  const TypeId pointer = types_.pointerTo(inner);
+  if (!pointer.valid()) {
+    reportLimit(expr);
+    return kTypeError;
+  }
+  (void)info;
+  return pointer;
+}
+
+TypeId Checker::checkDeref(ast::AstId expr, ExprInfo& info) {
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  if (operands.empty()) {
+    return kTypeError;
+  }
+  const ast::AstId operand = operands.front();
+  const TypeId inner = checkExpr(operand, kInvalidType);
+  if (types_.isError(inner)) {
+    return kTypeError;
+  }
+  if (!types_.isPointer(inner)) {
+    error(operand, SemaErrorCode::DerefNotPointer,
+          "`*` needs a pointer operand; `" + types_.spelling(inner) + "` is not one");
+    return kTypeError;
+  }
+  const TypeId pointee = types_.pointeeOf(inner);
+  // A pointer to `void` is a pointer, and that is all it is: `void` has no size,
+  // so there is nothing to load and nothing to align. `*i32` and `*void` differ
+  // in exactly this -- the second one is an address to be converted, never one to
+  // be used (`memory.md`, *Access*).
+  if (types_.isVoid(pointee)) {
+    error(expr, SemaErrorCode::PointerVoidAccess,
+          "`*void` cannot be dereferenced: `void` has no size, so there is nothing to access");
+    return kTypeError;
+  }
+  // The result is a place: `*p = v` and `(*p)++` are stores through a pointer,
+  // and they are checked by the same modifiable-lvalue rules a name is.
+  info.isLvalue = true;
+  info.isConstant = false;
+  info.hasIntValue = false;
+  recordAccess(expr, pointee, provenanceOf(operand));
+  return pointee;
+}
+
+TypeId Checker::checkIndex(ast::AstId expr, ExprInfo& info) {
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  if (operands.size() < 2) {
+    return kTypeError;
+  }
+  const ast::AstId base = operands[0];
+  const ast::AstId index = operands[1];
+  const TypeId baseType = checkExpr(base, kInvalidType);
+  const TypeId indexType = checkExpr(index, kInvalidType);
+  if (types_.isError(baseType) || types_.isError(indexType)) {
+    return kTypeError;
+  }
+  if (!types_.isPointer(baseType)) {
+    // C also accepts `i[p]`, because for C it is `*(i + p)` and addition is
+    // commutative. It is a curiosity of C's definition and not of the operation,
+    // and this language says so instead of accepting it: the reader who wrote it
+    // meant `p[i]` with the operands the other way round.
+    error(base, SemaErrorCode::DerefNotPointer,
+          "`[]` needs a pointer on the left and an integer index; `" + types_.spelling(baseType) +
+              "` is not a pointer");
+    return kTypeError;
+  }
+  if (!isIntegerOperand(types_, indexType)) {
+    error(index, SemaErrorCode::IndexNotInteger,
+          "`[]` needs an integer index; `" + types_.spelling(indexType) + "` is not one");
+    return kTypeError;
+  }
+  // The index is materialised at the **pointer index width**, which is what the
+  // model's arithmetic is defined in and what the backend's `getelementptr`
+  // index is. Recording the conversion here is the same rule the arithmetic
+  // operators follow: a `u8` index is zero-extended, an `i8` one sign-extended,
+  // and the lowering is told which rather than deriving it.
+  (void)checkOperand(expr, 1, index, types_.signedInt(types_.target().pointerBits));
+
+  const TypeId pointee = types_.pointeeOf(baseType);
+  if (types_.isVoid(pointee)) {
+    error(expr, SemaErrorCode::PointerVoidAccess,
+          "`*void` cannot be indexed: `void` has no size, so there is nothing to access");
+    return kTypeError;
+  }
+  info.isLvalue = true;
+  info.isConstant = false;
+  info.hasIntValue = false;
+  recordAccess(expr, pointee, provenanceOf(base));
+  return pointee;
+}
+
+std::optional<TypeId> Checker::checkPointerStep(ast::AstId expr, TypeId type) {
+  if (!types_.isPointer(type)) {
+    return std::nullopt;
+  }
+  if (types_.isVoidPointer(type)) {
+    error(expr, SemaErrorCode::PointerVoidArithmetic,
+          "`*void` cannot be stepped: `void` has no size, so there is no stride");
+    return kTypeError;
+  }
+  // The value is the pointer either way -- before the step for a postfix form,
+  // after it for a prefix one -- because a pointer step moves *within* an object
+  // and cannot leave the type behind. No conversion and no access is recorded: a
+  // step is arithmetic on the pointer, not a load or a store through it.
+  return type;
+}
+
+std::optional<TypeId> Checker::checkPointerBinary(ast::AstId expr, Tag kind, ast::AstId lhs,
+                                                  ast::AstId rhs, TypeId left, TypeId right,
+                                                  ExprInfo& info) {
+  const bool leftPointer = types_.isPointer(left);
+  const bool rightPointer = types_.isPointer(right);
+  if (!leftPointer && !rightPointer) {
+    return std::nullopt;
+  }
+  (void)info;
+  const TypeId isize = types_.signedInt(types_.target().pointerBits);
+
+  const auto message = [&types = types_](TypeId a, TypeId b) {
+    return "`" + types.spelling(a) + "` and `" + types.spelling(b) + "`";
+  };
+
+  // Comparison. Two pointers of the same pointee -- or either of them `*void` --
+  // are compared by address, which the model defines for any two pointers, live
+  // or not. A pointer and a non-pointer are not comparable: C's `p == 0` is the
+  // spelling of the empty pointer, and this language has `null` for that.
+  if (isComparison(kind)) {
+    if (!leftPointer || !rightPointer) {
+      error(expr, SemaErrorCode::PointerMismatch,
+            message(left, right) +
+                " cannot be compared: a pointer is compared with a pointer (use `null` for the "
+                "empty one)");
+      return kTypeError;
+    }
+    if (!convertible(types_, left, right) && !convertible(types_, right, left)) {
+      error(expr, SemaErrorCode::PointerMismatch,
+            message(left, right) +
+                " cannot be compared: a pointer comparison needs one pointee type");
+      return kTypeError;
+    }
+    // One common type for the pair, so a `*void` operand is materialised at the
+    // pointer it is compared with. The conversion is a no-op in the IR -- both
+    // map to one `ptr` -- and it is recorded anyway, because the record says
+    // what the consumer *applies*, and a lowering that decided by itself which
+    // operand needed which type would be re-deriving the rule.
+    const TypeId common = types_.isVoidPointer(left) ? right : left;
+    if (left != common) {
+      recordOperationOperand(expr, 0, lhs, common);
+    }
+    if (right != common) {
+      recordOperationOperand(expr, 1, rhs, common);
+    }
+    return kTypeBool;
+  }
+
+  const bool plus = kind == kTokPlus;
+  const bool minus = kind == kTokMinus;
+  if (!plus && !minus) {
+    // `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>`: a pointer is not an arithmetic
+    // value, and the message the arithmetic path gives is the right one. Returning
+    // `nullopt` hands the operator back to it rather than duplicating its rules.
+    return std::nullopt;
+  }
+
+  if (leftPointer && rightPointer) {
+    if (!minus) {
+      error(expr, SemaErrorCode::PointerMismatch,
+            "two pointers cannot be added; " + message(left, right) + " has no meaning");
+      return kTypeError;
+    }
+    // `p - q`: the element count between them, at the pointer difference type.
+    // The model defines it only when both are derived from one allocation -- the
+    // checked build is what finds the other case -- and the type is `isize`
+    // either way.
+    if (!convertible(types_, left, right) && !convertible(types_, right, left)) {
+      error(expr, SemaErrorCode::PointerMismatch,
+            "`-` needs two pointers to the same type; got " + message(left, right));
+      return kTypeError;
+    }
+    if (types_.isVoidPointer(left) || types_.isVoidPointer(right)) {
+      error(expr, SemaErrorCode::PointerVoidArithmetic,
+            "`*void` cannot be stepped: `void` has no size, so there is no element to count");
+      return kTypeError;
+    }
+    return isize;
+  }
+
+  const ast::AstId indexSide = leftPointer ? rhs : lhs;
+  const TypeId pointerType = leftPointer ? left : right;
+  const TypeId indexType = leftPointer ? right : left;
+  if (!isIntegerOperand(types_, indexType)) {
+    error(indexSide, SemaErrorCode::InvalidOperands,
+          std::string("`") + opText(kind) + "` with a pointer needs an integer offset; `" +
+              types_.spelling(indexType) + "` is not one");
+    return kTypeError;
+  }
+  if (types_.isVoidPointer(pointerType)) {
+    error(expr, SemaErrorCode::PointerVoidArithmetic,
+          std::string("`") + opText(kind) +
+              "` cannot step a `*void`: `void` has no size, so there is no stride");
+    return kTypeError;
+  }
+  // Scaling is the pointee's, and the arithmetic is in the pointer index width,
+  // so the offset is converted to it -- the same conversion `p[i]` records, for
+  // the same reason: `p + n` and `p[n]` are one operation and must not disagree.
+  // The pointer operand keeps its type: `p + 1` is a pointer, not an integer.
+  // The operand index is the source order of the two operands, which is what the
+  // record is keyed on: for `n + p` the offset is operand 0, for `p + n` it is 1.
+  (void)checkOperand(expr, static_cast<std::uint8_t>(leftPointer ? 1 : 0), indexSide, isize);
+  return pointerType;
 }
 
 bool Checker::foldBinary(ast::AstId opToken, Tag op, const ExprInfo& left, const ExprInfo& right,
@@ -523,6 +797,14 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
       info.hasIntValue = true;
     }
     return kTypeBool;
+  }
+
+  // Pointer operands before arithmetic ones: exactly one of the two can claim
+  // the operator, and a pointer handed to `usualArithmetic` would be an error
+  // with a message about arithmetic rather than one about pointers.
+  if (const std::optional<TypeId> pointerResult =
+          checkPointerBinary(expr, kind, lhs, rhs, left, right, info)) {
+    return *pointerResult;
   }
 
   if (isComparison(kind)) {
@@ -675,6 +957,13 @@ TypeId Checker::checkConditional(ast::AstId expr, TypeId expected, ExprInfo& inf
     result = thenType;
   } else if (types_.isArithmetic(thenType) && types_.isArithmetic(elseType)) {
     result = usualArithmetic(types_, thenType, elseType);
+  } else if (types_.isPointer(thenType) && types_.isPointer(elseType) &&
+             (convertible(types_, thenType, elseType) || convertible(types_, elseType, thenType))) {
+    // `c ? &x : null`. The arm that names a type wins, so the result is usable
+    // where a pointer to that type is wanted -- C's rule for `void*`, and the
+    // only reading that does not make the expression's type depend on the branch
+    // taken. The other arm's conversion is recorded below like any other.
+    result = types_.isVoidPointer(thenType) ? elseType : thenType;
   }
   if (!result.valid() || types_.isError(result)) {
     error(expr, SemaErrorCode::InvalidOperands,
@@ -730,6 +1019,42 @@ TypeId Checker::checkAssign(ast::AstId expr, ExprInfo& info) {
   }
 
   if (compound) {
+    // A pointer step: `p += n` is `p = p + n`, with the same stride and the same
+    // index conversion `p + n` records. It is handled here rather than falling
+    // through, because the tail's assignment check would ask whether an integer
+    // converts to the pointer's type -- which is the refusal `memory.md` is built
+    // on, and which a step does not make (`p + n` is a pointer, and *that* is what
+    // is stored).
+    if (types_.isPointer(target)) {
+      const bool step = kind == kTokPlusEqual || kind == kTokMinusEqual;
+      if (!step) {
+        error(expr, SemaErrorCode::InvalidOperands,
+              "a pointer can only be stepped with `+=` or `-=`; `" + std::string(opText(kind)) +
+                  "` is not one of them");
+        return kTypeError;
+      }
+      if (types_.isVoidPointer(target)) {
+        error(expr, SemaErrorCode::PointerVoidArithmetic,
+              "`*void` cannot be stepped: `void` has no size, so there is no stride");
+        return kTypeError;
+      }
+      if (!isIntegerOperand(types_, value)) {
+        error(rhs, SemaErrorCode::InvalidOperands,
+              std::string("`") + opText(kind) + "` needs an integer offset; `" +
+                  types_.spelling(value) + "` is not one");
+        return kTypeError;
+      }
+      const TypeId isize = types_.signedInt(types_.target().pointerBits);
+      (void)checkOperand(expr, 1, rhs, isize);
+      // The operation happens at the pointer's own type -- the stride comes from
+      // the pointee and the store is a pointer store -- so `opType` names the
+      // pointer, and the offset's conversion to the index width is the record.
+      info.opType = target;
+      info.isLvalue = false;
+      info.isConstant = false;
+      info.hasIntValue = false;
+      return target;
+    }
     // `x op= y` needs the same operand types the binary operator does, and then
     // the result converts back to `x`'s type.
     if (!types_.isArithmetic(target) || !types_.isArithmetic(value)) {

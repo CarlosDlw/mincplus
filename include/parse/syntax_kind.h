@@ -77,12 +77,21 @@ enum class SyntaxKind : std::uint16_t {
   LiteralExpr,
   PathExpr,
   ParenExpr,
+  // `&x` and `*p` are `PrefixExpr`, like `-x`: an operator token and one
+  // operand. A pointer is not a second kind of expression, only a second thing
+  // the same shape can mean, which is what keeps this list from growing per
+  // feature.
   PrefixExpr,
   PostfixExpr,
   BinaryExpr,
   ConditionalExpr,
   AssignExpr,
   CallExpr,
+  // `a[i]`. Not a `PostfixExpr`: that node is an operator token and the
+  // expression it applies to, while an index has three parts (the base, the
+  // index, and the brackets that delimit it) and the index is a full
+  // expression of its own. Children are `base`, `[`, `index`, `]`.
+  IndexExpr,
   ArgList,
 
   // Reserved: names are fixed now, the syntax that produces them is not.

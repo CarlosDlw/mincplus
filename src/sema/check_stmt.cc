@@ -80,10 +80,20 @@ Checker::Checker(const ast::LoweredFile& file, const resolve::DefMap& defs,
   }
 
   // The language's predefined names. `resolve` bound them; their *types* are
-  // this stage's to decide, and they are `bool`.
+  // this stage's to decide.
   for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
     const resolve::Def& def = defs_.defs[i];
     if (!def.predefined) {
+      continue;
+    }
+    // `null` is `*void`, and that is not a shortcut: `*void` is the one pointer
+    // type that converts to every other one, so `null` is usable wherever a
+    // pointer is wanted without a nullable-pointer type, a special literal type
+    // or a rule that makes an integer zero a pointer. It is the same shape the
+    // model gives the untyped pointer for `malloc` (`memory.md`, *The surface*).
+    if (symbols_.lookup(def.name) == "null") {
+      defTypes_[i] = types_.pointerTo(kTypeVoid);
+      defIsConst_[i] = true;
       continue;
     }
     defTypes_[i] = kTypeBool;
@@ -311,17 +321,27 @@ std::string Checker::nameOf(ast::AstId expr) const {
 
 // --- types -------------------------------------------------------------------
 
-std::vector<std::string_view> Checker::typeWords(ast::AstId typeNode) const {
-  std::vector<std::string_view> words;
+std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
+  std::vector<TypePart> parts;
   if (!typeNode.valid()) {
-    return words;
+    return parts;
   }
   for (const ast::AstId child : file_.childrenOf(typeNode)) {
+    // A word first, and before the token test below: an `Identifier` *is* a token
+    // (leaves and interior nodes share one tag space), so asking "is it a token"
+    // first would throw every word away.
     if (file_.at(child).is(kIdentifierNode)) {
-      words.push_back(file_.spellingOf(child));
+      parts.push_back(TypePart{/*isStar=*/false, file_.spellingOf(child)});
+      continue;
+    }
+    // Only `*` and the words are part of a type. Anything else the builder left
+    // inside the type node is not, and the grammar accepted nothing else here
+    // either -- so it is skipped rather than guessed at.
+    if (file_.at(child).isToken() && tagOf(kindOf(child)) == kTokStar) {
+      parts.push_back(TypePart{/*isStar=*/true, {}});
     }
   }
-  return words;
+  return parts;
 }
 
 std::string Checker::suggestTypeName(std::string_view word) const {
@@ -352,8 +372,8 @@ TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
   if (!typeNode.valid() || inError(typeNode)) {
     return kTypeError;
   }
-  const std::vector<std::string_view> words = typeWords(typeNode);
-  const TypeSpecResult spec = readTypeSpec(words, types_);
+  const std::vector<TypePart> parts = typeParts(typeNode);
+  const TypeSpecResult spec = readType(parts, types_);
   if (!spec.ok) {
     if (spec.unknownWord.empty()) {
       error(typeNode, SemaErrorCode::MalformedType, spec.message);
@@ -450,6 +470,33 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
     error(at, code,
           "`" + types_.spelling(from) + "` does not convert to `bool`; write `" +
               std::string(what) + " != 0`");
+    return;
+  }
+  // A pointer and a non-pointer, in either direction. The message is its own
+  // because this is the model's central refusal rather than a type mismatch:
+  // `memory.md` states that a pointer is not an integer, that neither conversion
+  // is implicit, and that the two operations which do join them are named and
+  // counted. Until they are in the grammar, the refusal is the whole rule.
+  if (types_.isPointer(from) != types_.isPointer(to)) {
+    error(at, SemaErrorCode::PointerInteger,
+          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) +
+              "`: a pointer is not an integer, and the language has no implicit conversion "
+              "between the two" +
+              std::string(what));
+    return;
+  }
+  // Two pointer types that do not meet: the same refusal `p == q` makes, so the
+  // same code and the same rule. `memory.md` *defines* the reinterpretation --
+  // memory has no effective type, so punning is not undefined -- but it is never
+  // implicit. The one crossing point that is implicit is `*void`, and anything
+  // else would make the type of a store depend on a silent reinterpretation
+  // rather than on one the source wrote.
+  if (types_.isPointer(from) && types_.isPointer(to)) {
+    error(at, SemaErrorCode::PointerMismatch,
+          "`" + types_.spelling(from) + "` cannot be used as `" + types_.spelling(to) +
+              "`: pointers convert implicitly only to the same pointee type, or through "
+              "`*void`" +
+              std::string(what));
     return;
   }
   error(at, code,

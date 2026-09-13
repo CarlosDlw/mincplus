@@ -15,7 +15,7 @@ namespace {
 // compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' code tables.
-constexpr std::array<SemaErrorCodeInfo, 25> kSemaErrorCodeInfos{{
+constexpr std::array<SemaErrorCodeInfo, 33> kSemaErrorCodeInfos{{
     {SemaErrorCode::UnknownType, "sema-unknown-type", false},
     {SemaErrorCode::MalformedType, "sema-malformed-type", false},
     {SemaErrorCode::TypeNotValue, "sema-type-not-value", false},
@@ -38,6 +38,14 @@ constexpr std::array<SemaErrorCodeInfo, 25> kSemaErrorCodeInfos{{
     {SemaErrorCode::ConstantOutOfRange, "sema-constant-out-of-range", false},
     {SemaErrorCode::ShiftCountOutOfRange, "sema-shift-count-out-of-range", false},
     {SemaErrorCode::UseBeforeAssignment, "sema-use-before-assignment", false},
+    {SemaErrorCode::DerefNotPointer, "sema-deref-not-pointer", false},
+    {SemaErrorCode::PointerVoidAccess, "sema-pointer-void-access", false},
+    {SemaErrorCode::PointerVoidArithmetic, "sema-pointer-void-arithmetic", false},
+    {SemaErrorCode::AddressOfNonLvalue, "sema-address-of-non-lvalue", false},
+    {SemaErrorCode::AddressOfConst, "sema-address-of-const", false},
+    {SemaErrorCode::IndexNotInteger, "sema-index-not-integer", false},
+    {SemaErrorCode::PointerMismatch, "sema-pointer-mismatch", false},
+    {SemaErrorCode::PointerInteger, "sema-pointer-integer", false},
     {SemaErrorCode::LimitTypes, "sema-limit-types", false},
     {SemaErrorCode::UnreachableCode, "sema-unreachable-code", true},
     {SemaErrorCode::ImplicitConversion, "sema-implicit-conversion", true},

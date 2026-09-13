@@ -1,9 +1,13 @@
 # The memory model
 
-**Status:** proposed, and **blocking `src/ir`**. Nothing that takes the address of
-an object may be lowered before this document is settled, because every question
-below is a question the *optimizer* asks. A wrong answer there is not a
-diagnostic; it is a program that runs differently at `-O2` than at `-O0`.
+**Status:** settled, and **stage one implemented**. The surface below (`*T`,
+`&x`, `*p`, `p[i]`, the stepping, the comparison, `null`, `*void`) type-checks,
+and the per-access record `sema` publishes (`src/sema/access.cc`) is what the
+lowering will materialise instead of re-deriving. Still **blocking `src/ir`** for
+the rest: nothing that takes the address of an object may be *lowered* until the
+emitted shape obeys the assumptions list at the end of this document, because
+every question below is a question the *optimizer* asks. A wrong answer there is
+not a diagnostic; it is a program that runs differently at `-O2` than at `-O0`.
 
 This is the seventh design record, and it sits *under* the two next to it.
 [`sema.md`](sema.md) decides what arithmetic means, this decides what **memory**
@@ -623,7 +627,7 @@ pointer are marked.
 | `include/sema/type_store.h` | `internPointer`, plus `sizeOf`/`alignOf` for pointer and array; the struct/array layout table | One place owns sizes and alignments; the pointer width already exists (it is what `str` uses) |
 | `src/sema/check_expr.cc` | `&`, `*`, `[]`, and the lvalue/modifiable-lvalue rules they extend | The lvalue machinery is already there (`const` assignment, `++`/`--`, parens) |
 | `src/sema/check_flow.cc` | the initialization half of the access rule, for objects whose address is taken | It is already the pass that owns "is this byte written" |
-| **`src/sema/coerce.cc`** (the record) | **`TypedFile::accesses()` — an `AccessObligation` per dereference** | **Blocking.** The lowering may not re-derive an alignment or a provenance fact, exactly as it may not re-derive a conversion |
+| **`src/sema/access.cc`** (the record) | **`TypedFile::accesses()` — an `AccessObligation` per dereference, with `accessAt(node)`** | **Blocking.** The lowering may not re-derive an alignment or a provenance fact, exactly as it may not re-derive a conversion |
 | `src/ir/values.h` | `Place` gains producers: `&`, `*`, indexing, field projection | `ir.md` already specifies the table over producers as the mechanism, so a new producer is a line |
 | `src/ir/expr.cc` | the accesses themselves, from the record | It materialises decisions, it does not make them |
 | `src/ir/runtime.cc` | the checked-build access guards (null, alignment, bounds, liveness) and `expose`/`with_exposed_provenance` | `ir.md` already designates it as the home of the operations the hardware does not define |
@@ -648,12 +652,27 @@ So `sema` publishes, per access node:
 
 ```
 struct AccessObligation {
-  ast::AstId node;       // the dereference / index / assignment it belongs to
+  ast::AstId place;      // the `*p` or the `p[i]` the lowering is standing on
   TypeId type;           // what is accessed, which is the size and the alignment
   AccessKind kind;       // ordinary | unaligned | volatile
-  ProvenanceKind provenance; // derived | exposed | with_exposed
+  ProvenanceKind provenance; // object | foreign
 };
 ```
+
+Two of those fields are deliberately narrower than the model allows, because
+the stage can only answer what the grammar lets it see, and a value no input can
+produce is a value no test can pin:
+
+- **`kind` is `ordinary` alone** until `unaligned` and `volatile` have syntax to
+  ask for them; the enumeration grows with the keyword, and the two consumers
+  (`src/ir`'s aligned and volatile access shapes) arrive with it.
+- **`provenance` is `object | foreign`**, which is the *proof* the syntactic rule
+  can carry: `object` for the address of an object this unit named and moved by
+  arithmetic since, `foreign` for everything the compiler cannot name. The
+  `derived | exposed | with_exposed` split belongs to the operations that join a
+  pointer and an integer (`expose`, `with_exposed_provenance`), which are stage
+  three; when they land, `foreign` refines into `exposed` and `with_exposed` and
+  nothing else in the record moves.
 
 and `TypedFile::accesses()` is the question. The lowering's converse rule is the
 project's oldest one: **a missing obligation is a refusal, not a guess** —

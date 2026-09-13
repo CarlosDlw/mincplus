@@ -403,6 +403,15 @@ void Checker::flowExpression(ast::AstId expr) {
       return;
     }
     const Tag kind = tagOf(kindOf(tokenOf(expr)));
+    // `&x` reads nothing -- it names a place -- so its operand is walked as a
+    // place and an unassigned `x` is not a read here. `memory.md` says taking an
+    // address accesses no bytes, and the read that is a violation is the one
+    // through the pointer, which the checked build traps because no static pass
+    // can follow the address. This is the same split `*p = v` makes below.
+    if (kind == kTokAmp) {
+      flowStoreTarget(operands.front());
+      return;
+    }
     // `++x` reads and writes; `-x`, `!x` and `~x` only read, and the read is the
     // same check.
     flowExpression(operands.front());

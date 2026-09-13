@@ -207,11 +207,17 @@ private:
 
   // The language's own names, bound in the file scope before anything is read
   // -- Go's universe block, and the reason `true` is not an unknown name. The
-  // lexer deliberately leaves `true`/`false` as identifiers (they are values of
-  // `bool`, not grammar), so resolving them is exactly this stage's job.
+  // lexer deliberately leaves `true`/`false`/`null` as identifiers (they are
+  // values, not grammar), so resolving them is exactly this stage's job, and the
+  // *types* they have are `sema`'s to decide -- `true` and `false` are `bool`,
+  // and `null` is the untyped pointer (`memory.md`, *The surface*).
+  //
+  // They are ordinary defs in the file scope, so a `let null = 1;` shadows one
+  // exactly as any other binding would, and `-Wshadow` says so. That is the
+  // same rule every name follows and needs no exception here.
   void installPredefined() {
     const support::Span nowhere(file_.file(), 0, 0);
-    for (const std::string_view spelling : {"true", "false"}) {
+    for (const std::string_view spelling : {"true", "false", "null"}) {
       const support::SymId name = symbols_.intern(spelling);
       if (name == support::kInvalidSym) {
         continue; // the interner is full; nothing can be added anyway

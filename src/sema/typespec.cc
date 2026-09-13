@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace minc::sema {
 namespace {
@@ -134,6 +135,50 @@ std::span<const std::string_view> typeNames() {
     return all;
   }();
   return names;
+}
+
+TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types) {
+  std::vector<std::string_view> words;
+  words.reserve(parts.size());
+  std::size_t stars = 0;
+  std::size_t i = 0;
+  for (; i < parts.size(); ++i) {
+    if (!parts[i].isStar) {
+      break;
+    }
+    ++stars;
+  }
+  for (; i < parts.size(); ++i) {
+    if (parts[i].isStar) {
+      // A `*` between words or after them: `i32*` and `*i32*` are the two
+      // shapes, and both are one mistake with one fix. Refused here rather than
+      // left to produce "`*` is not a type" about a token the parser already
+      // accepted as part of the type, because the reader's intent is not in
+      // doubt -- only the side of the type the `*` belongs on.
+      return fail("a pointer type is written `*T`, with the `*` before the type it points to");
+    }
+    words.push_back(parts[i].word);
+  }
+
+  // Not `const`: the failure path returns it, and a const local would force a
+  // copy where the move is the point (`performance-no-automatic-move`).
+  TypeSpecResult base = readTypeSpec(words, types);
+  if (!base.ok) {
+    return base;
+  }
+  // Applied inside out: `**i32` is a pointer to a pointer to `i32`, and the
+  // innermost `*` is the one nearest the words.
+  TypeId result = base.type;
+  for (std::size_t n = 0; n < stars; ++n) {
+    result = types.pointerTo(result);
+    if (!result.valid()) {
+      // The type budget, reported by the caller through the same check the base
+      // reader relies on: `ok` with an invalid id means "understood, but the
+      // store refused to intern it", and the caller owns that diagnostic.
+      return ok(kInvalidType);
+    }
+  }
+  return ok(result);
 }
 
 TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& types) {

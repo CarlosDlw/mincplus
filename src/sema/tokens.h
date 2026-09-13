@@ -83,6 +83,10 @@ inline constexpr Tag kTokGreaterEqual = tagOf(lex::TokenKind::GreaterEqual);
 
 // Assignment.
 inline constexpr Tag kTokEqual = tagOf(lex::TokenKind::Equal);
+// The two compound operators that are also a *step* when their left side is a
+// pointer: `p += n` and `p -= n`.
+inline constexpr Tag kTokPlusEqual = tagOf(lex::TokenKind::PlusEqual);
+inline constexpr Tag kTokMinusEqual = tagOf(lex::TokenKind::MinusEqual);
 inline constexpr Tag kTokPercentEqual = tagOf(lex::TokenKind::PercentEqual);
 inline constexpr Tag kTokAmpEqual = tagOf(lex::TokenKind::AmpEqual);
 inline constexpr Tag kTokPipeEqual = tagOf(lex::TokenKind::PipeEqual);

@@ -42,6 +42,20 @@ namespace {
 // the node where a conversion happened that the value was known. Deliberately
 // not printed for a node that is not an expression: a declaration's "lvalue"
 // would be a lie.
+// One access, in the short form a reader scans for. `object` and `foreign` are
+// the whole answer the record gives about what the optimizer may assume, so they
+// are printed as words rather than as numbers.
+[[nodiscard]] std::string accessText(const AccessObligation& access, const TypeStore& types) {
+  std::string out = " [access ";
+  out += std::string(toString(access.kind));
+  out += ' ';
+  out += std::string(toString(access.provenance));
+  out += ' ';
+  out += types.spelling(access.type);
+  out += ']';
+  return out;
+}
+
 [[nodiscard]] std::string infoText(const ExprInfo& info, const TypeStore& types) {
   std::string out;
   if (info.isLvalue) {
@@ -117,6 +131,17 @@ std::string dumpTypedFile(const ast::LoweredFile& file, const TypedFile& typed,
            " -> " + types.spelling(coercion.to) + "\n";
   }
 
+  // The accesses, before the tree, for the same reason the conversions are: it
+  // is the short list that says what memory the tree touches through a pointer,
+  // and a reader looking for "what may be assumed here" should not have to read
+  // every node for it.
+  out += "# accesses " + std::to_string(typed.accesses().size()) + "\n";
+  for (const AccessObligation& access : typed.accesses()) {
+    out += "  " + std::to_string(access.place.index) + "  " + std::string(toString(access.kind)) +
+           "  " + std::string(toString(access.provenance)) + "  " + types.spelling(access.type) +
+           "\n";
+  }
+
   out += "# typed " + std::to_string(file.nodeCount()) + " nodes\n";
 
   // An explicit stack for the same reason `ast::dumpAst` uses one: a deep tree
@@ -152,6 +177,9 @@ std::string dumpTypedFile(const ast::LoweredFile& file, const TypedFile& typed,
       out += "  : ";
       out += types.spelling(type);
       out += infoText(typed.infoOf(frame.id), types);
+    }
+    if (const AccessObligation* access = typed.accessAt(frame.id)) {
+      out += accessText(*access, types);
     }
 
     out += "  ";

@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include "ast/node.h"
@@ -88,6 +89,84 @@ struct Coercion {
   TypeId to = kInvalidType;
 };
 
+// --- the access record -------------------------------------------------------
+//
+// `memory.md` states one obligation per access -- inside a live object, at the
+// alignment the type states, over bytes that were written -- and one *assumption*
+// the optimizer is allowed to make about the pointer it goes through. This is
+// where the stage that has the tree writes that answer down, so the lowering
+// reads it instead of re-deriving it: the same rule the coercion record follows,
+// for the same reason.
+//
+// It is written by the checker at the node that *denotes* the access (`*p`, and
+// `p[i]`), which is the node the lowering is standing on when it emits the load
+// or the store.
+
+// Which obligations apply, and which of them the source has relaxed.
+//
+// One enumerator today, and deliberately: the two the model names -- an access
+// whose alignment is not required (`unaligned`) and one performed exactly as
+// written (`volatile`) -- arrive with the syntax that asks for them, and this
+// table grows with it. A kind no input can produce is a kind no test can pin,
+// which is the same rule `SemaErrorCode` states for its own list.
+enum class AccessKind : std::uint8_t {
+  // The access carries the whole rule: it is aligned as its type requires, and
+  // it is performed once, in order, with the value its type says.
+  Ordinary,
+};
+
+// Where the pointer's permission comes from, as far as this stage can *prove*.
+//
+// "Prove" is the operative word, and the two answers are the two ends of it. The
+// rule is syntactic and therefore sound and incomplete on purpose: it recognises
+// the address of an object this unit named, moved only by arithmetic since, and
+// it says `Foreign` for everything else -- a parameter, a value read from memory,
+// a value returned by a call. Being incomplete costs the optimizer an assumption
+// it could have had; being wrong would cost a correct program its meaning, and
+// only one of those is recoverable.
+enum class ProvenanceKind : std::uint8_t {
+  // `&x`, or arithmetic over it: the pointer's provenance is `x`'s allocation,
+  // and nothing else can be reached through it.
+  Object,
+  // Anything the compiler cannot name. The conservative answer, and the one that
+  // assumes nothing.
+  Foreign,
+};
+
+// One access. `type` is what is accessed -- the access's size and alignment are
+// its -- and the lowering reads those from the store rather than from the
+// pointer's own type.
+struct AccessObligation {
+  // The place-expression the access goes through: a `*p` or a `p[i]`.
+  ast::AstId place;
+  // The type being accessed. Its size is the access's width and its alignment is
+  // the access's alignment, so a lowering that reads them re-derives nothing.
+  TypeId type = kInvalidType;
+  AccessKind kind = AccessKind::Ordinary;
+  ProvenanceKind provenance = ProvenanceKind::Foreign;
+};
+
+// The stable name of an access kind, in one table with the enumeration so a kind
+// added without a row is caught by a test (`allAccessKinds`).
+struct AccessKindInfo {
+  AccessKind kind;
+  const char* name;
+};
+
+[[nodiscard]] std::span<const AccessKindInfo> accessKindInfos();
+// Every access kind, derived from the table above.
+[[nodiscard]] std::span<const AccessKind> allAccessKinds();
+[[nodiscard]] std::string_view toString(AccessKind kind);
+
+struct ProvenanceKindInfo {
+  ProvenanceKind kind;
+  const char* name;
+};
+
+[[nodiscard]] std::span<const ProvenanceKindInfo> provenanceKindInfos();
+[[nodiscard]] std::span<const ProvenanceKind> allProvenanceKinds();
+[[nodiscard]] std::string_view toString(ProvenanceKind kind);
+
 // A *modifiable* lvalue is an lvalue whose declaration is not a `const`. The two
 // questions are separate on purpose: `const c = 1; c = 2;` must be one specific
 // diagnostic ("`c` is a `const`") and not "this is not a place a value can be
@@ -151,6 +230,29 @@ struct TypedFile {
   // Between `buildCoercionIndex()` calls this is a plain list.
   [[nodiscard]] std::span<const Coercion> coercions() const {
     return coercions_;
+  }
+
+  // The accesses through a pointer, in the order they were recorded. Between
+  // `buildAccessIndex()` calls this is a plain list.
+  [[nodiscard]] std::span<const AccessObligation> accesses() const {
+    return accesses_;
+  }
+
+  // The access obligation belonging to `place`, or nullptr when that node
+  // denotes no access through a pointer. A scan of a list that has one entry per
+  // dereference in the unit, and the caller asks it once per dereference it
+  // lowers, so the cost is paid once per node either way.
+  [[nodiscard]] const AccessObligation* accessAt(ast::AstId place) const {
+    for (const AccessObligation& access : accesses_) {
+      if (access.place == place) {
+        return &access;
+      }
+    }
+    return nullptr;
+  }
+
+  void addAccess(const AccessObligation& access) {
+    accesses_.push_back(access);
   }
 
   // The conversions `consumer` applies, in operand order. Empty for a node that
@@ -217,6 +319,10 @@ private:
   // leave the index describing a list that no longer exists.
   std::vector<Coercion> coercions_;
   std::vector<std::uint32_t> coercionFirst_;
+  // The accesses. Appended in the checker's walk order, which is source order,
+  // because that is the order the walk has -- so the list is deterministic
+  // without a sort, and a dump of it reads left to right like the source.
+  std::vector<AccessObligation> accesses_;
 };
 
 } // namespace minc::sema

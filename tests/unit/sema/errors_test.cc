@@ -430,6 +430,20 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       {"fn i32 main() { const m = 2147483647; return m + 1; }\n", false},
       {"fn i32 main() { return 1 << 32; }\n", false},
       {"fn i32 main() { let x: i32; return x; }\n", false},
+      // The pointer codes. Each input is the shortest program that reaches one,
+      // and each is here rather than in `pointer_test.cc` for the same reason as
+      // every other row: this is the list that proves the *table* has no entry
+      // nobody can reach.
+      {"fn i32 main() { let x: i32 = 1; return *x; }\n", false},             // deref-not-pointer
+      {"fn i32 main() { return *null; }\n", false},                          // void access
+      {"fn i32 main() { let p: *void = null; p += 1; return 0; }\n", false}, // void step
+      {"fn i32 main() { let x: i32 = 1; let p = &(x + 1); return 0; }\n", false},
+      {"fn i32 main() { const c: i32 = 1; let p: *i32 = &c; return 0; }\n", false},
+      {"fn i32 main() { const c: i32 = 1; let p: *i32 = &(c); return 0; }\n", false},
+      {"fn i32 main() { let p: *i32 = null; let i: f64 = 1.0; return p[i]; }\n", false},
+      {"fn i32 main() { let x: i32 = 1; let p: *i32 = &x; let b: bool = p == 1; return 0; }\n",
+       false},
+      {"fn i32 main() { let x: i32 = 1; let p: *i32 = x; return 0; }\n", false},
   };
 
   for (const Case& one : cases) {
