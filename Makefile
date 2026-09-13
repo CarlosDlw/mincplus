@@ -44,7 +44,7 @@ help:
 	@echo "  make format        Rewrite sources with clang-format"
 	@echo "  make format-check  Verify formatting (CI's format job)"
 	@echo "  make tidy          Run clang-tidy over src/ (CI's tidy job)"
-	@echo "  make examples      lex + pp + parse every file in examples/"
+	@echo "  make examples      lex + pp + parse + resolve every file in examples/"
 	@echo ""
 	@echo "  make clean         Remove build/$(BUILD)"
 	@echo "  make distclean     Remove every build directory"
@@ -119,11 +119,13 @@ examples: build
 	  echo "== $$file"; \
 	  $(BIN) lex "$$file" > /dev/null; \
 	  $(BIN) parse --no-trivia "$$file" > /dev/null; \
+	  $(BIN) resolve "$$file" > /dev/null; \
 	done; \
 	for file in examples/pp/*.mx; do \
 	  echo "== $$file"; \
 	  $(BIN) pp -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	  $(BIN) parse -I $(INCLUDE_DIR) "$$file" > /dev/null; \
+	  $(BIN) resolve -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	done; \
 	echo "examples ok"
 

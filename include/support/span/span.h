@@ -18,6 +18,12 @@ struct Span {
   constexpr Span() = default;
   constexpr Span(FileId f, std::uint32_t b, std::uint32_t e) : file(f), begin(b), end(e) {}
 
+  // Structural equality. Spans are compared constantly -- an item tree asks
+  // "is this signature the one I cached?", a name reference asks "is this the
+  // name I resolved?" -- and one definition keeps every caller from spelling
+  // the three fields out and getting one of them wrong.
+  friend constexpr bool operator==(const Span&, const Span&) = default;
+
   // One-byte span at `offset`, saturating at the uint32 ceiling instead of
   // wrapping to 0 (which would silently produce a span at the file start).
   static constexpr Span at(FileId f, std::uint32_t offset) {

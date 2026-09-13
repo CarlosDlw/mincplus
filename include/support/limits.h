@@ -105,6 +105,47 @@ inline constexpr std::size_t kMaxIncludesPerUnit = 65536;
 // kMaxExpansionDepth because it is a presentation choice, not a safety one.
 inline constexpr std::size_t kMaxMacroBacktrace = 8;
 
+// --- lowering and name resolution -------------------------------------------
+//
+// Same rule as the preprocessor's bounds: every one of these bounds a *hazard*
+// (untrusted input deciding how much memory a stage allocates), it is always on,
+// and it is checked when the entry is created -- before the allocation -- so
+// hitting it costs a diagnostic and not a kill.
+
+// Nodes one translation unit may lower to. Above the largest realistic file by
+// orders of magnitude: a 64 MiB source that is nothing but `a + b + c` lines
+// stays under a million nodes.
+inline constexpr std::size_t kMaxAstNodesPerUnit = std::size_t{8} << 20;
+
+// Declarations (functions, parameters, variables, constants) one unit may have.
+// Also the size of every scope table, which is why it is not larger.
+inline constexpr std::size_t kMaxDefsPerUnit = std::size_t{1} << 20;
+
+// Scopes one unit may open: the file, one per function, one per block.
+inline constexpr std::size_t kMaxScopesPerUnit = std::size_t{1} << 20;
+
+// How far the scope-chain walk will follow before answering NotFound. Bounds
+// the *lookup* rather than the *tree*: the scope parents are a tree, so a long
+// chain means deep nesting, and a lookup that walked forever would be a hang
+// rather than a diagnostic. The parser already bounds the nesting this can
+// mirror, so hitting it means something built the scope chain outside the
+// parser.
+inline constexpr std::size_t kMaxScopeDepth = kMaxNestingDepth + 16;
+
+// Name uses one unit may contain. Four times the def bound because a use is
+// cheaper than a declaration and an expression-heavy file has many.
+inline constexpr std::size_t kMaxNameRefsPerUnit = std::size_t{4} << 20;
+
+// Names the typo search will score for one failing lookup. This one is not
+// about memory: it is the cost an editor pays on every keystroke, so it is small
+// enough to be invisible and large enough to find the real candidate.
+inline constexpr std::size_t kMaxSuggestionCandidates = 64;
+
+// Longest edit distance that still counts as a suggestion. Two edits covers a
+// transposition, a doubled letter and a missing letter; three would start
+// suggesting names the reader did not mean.
+inline constexpr std::uint32_t kMaxSuggestionDistance = 2;
+
 // Largest single block the Arena will ask the allocator for. A runaway size --
 // a SIZE_MAX from bad arithmetic, a corrupted length field -- must never reach
 // operator new: what it does with an absurd request is implementation-defined

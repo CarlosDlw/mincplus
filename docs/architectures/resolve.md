@@ -454,20 +454,20 @@ make Linux and Windows disagree about which name a program means.
 | File | Owns |
 | --- | --- |
 | `ast/node.h` | `NodeKind`, `Node`, `AstId` — the lowered representation |
-| `ast/ast.h` | `LoweredFile`: nodes, children, bodies, and the walk helpers |
-| `ast/item_tree.h` · `item_tree.cc` | The file-scope summary, its hash, and its equality |
+| `ast/ast.h` | `LoweredFile` (nodes, children, bodies), `Item` / `ItemTree`, and the walk helpers |
 | `ast/lower.h` · `lower.cc` | Green tree → `LoweredFile`, mechanically |
-| `ast/validate.h` · `validate.cc` | The context checks, and nothing else |
+| `ast/validate.h` · `validate.cc` | The structural checks, and nothing else |
 | `ast/ast_error.h` · `ast_error.cc` | `AstErrorCode` + its one table |
-| `ast/dump.h` · `dump.cc` | The textual form of the lowered AST (for tests and `--ast`) |
-| `resolve/def.h` | `DefId`, `Def`, `DefKind`, `Namespace`, `Linkage` |
-| `resolve/scope.h` · `scopes.cc` | `ScopeId`, `Scope`, the name tables and their index |
-| `resolve/map.h` | `DefMap`: the unit's scopes and defs, keyed by file revision |
-| `resolve/collect.cc` | Item trees → defs → the file scope |
-| `resolve/body.cc` · `lookup.cc` | The body walk, the scope chain, `NameRef`s |
+| `ast/dump.h` · `dump.cc` | The textual form of the lowered AST and the item tree (for tests and `--ast`) |
+| `resolve/def.h` · `def.cc` | `DefId`, `Def`, `DefKind`, `Namespace`, `Linkage` |
+| `resolve/scope.h` | `ScopeId`, `Scope`, the name tables and their index |
+| `resolve/map.h` | `DefMap`: the unit's scopes, defs and references |
+| `resolve/resolve.h` · `resolve.cc` | Both phases: collect the file-scope items, then resolve the bodies |
+| `resolve/lookup.cc` | The scope chain, the name tables, and `NameRef`s |
 | `resolve/suggestions.cc` | The bounded typo search |
 | `resolve/source_to_def.cc` | Syntax node → def, and offset → def: the IDE primitive |
 | `resolve/store.h` · `store.cc` | The `(FileId, revision)` cache and its invalidation |
+| `resolve/dump.h` · `dump.cc` | The scopes/defs/refs views `mincc resolve` prints |
 | `resolve/resolve_error.h` · `resolve_error.cc` | `ResolveErrorCode` + its one table |
 | `resolve/resolve_report.h` · `resolve_report.cc` | Both tables → `DiagBag`. The only target here that links `minc_diag` |
 | `driver/resolve_command.h` · `resolve_command.cc` | The command line, and only the command line |
@@ -480,22 +480,28 @@ the only code that prints or decides an exit code.
 
 ```
 $ mincc resolve --refs examples/002_variables.mx
-== examples/002_variables.mx  (scopes 3, defs 5, refs 7, 0 errors, 0 warnings)
+# examples/002_variables.mx  (scopes 2, defs 5, refs 1, 0 error(s), 0 warning(s))
 
   scopes
-    #0  file      0..98
-    #1  function  10..98   fn main
-    #2  block     14..96
+    #0  file  22..98  (root)
+    #1  function  36..97  parent #0
 
   defs
-    #0  file#0     ordinary  fn      main   d0   examples/002_variables.mx:2:4
-    #1  fn#1       ordinary  param   n      d1   examples/002_variables.mx:2:11
-    #2  block#2    ordinary  let     total  d2   examples/002_variables.mx:4:7
+    #0  file#0  ordinary  const  true  refs 0  [predefined]
+    #1  file#0  ordinary  const  false  refs 0  [predefined]
+    #2  file#0  ordinary  fn  main  refs 0  examples/002_variables.mx:2:8
+    #3  function#1  ordinary  let  x  refs 1  examples/002_variables.mx:4:7
+    #4  function#1  ordinary  let  y  refs 0  examples/002_variables.mx:5:7
 
   refs
-    examples/002_variables.mx:5:10  total  -> defs#2
-    examples/002_variables.mx:5:18  n      -> defs#1
+    examples/002_variables.mx:6:10  x  -> defs#3
 ```
+
+The file scope and the function scope are the two here: a function's parameters
+and its body's outermost block share one scope, so a body does not open a third
+just to hold its locals. `true` and `false` are declarations too — the resolver
+owns "what names are visible", and these are visible without being written — so
+they are `[predefined]` defs rather than special cases in every later stage.
 
 Modes, each of which exists to exercise one thing this document claims:
 
@@ -566,24 +572,28 @@ Exit codes follow the rest of the driver: `Failure` when there are errors,
 | 25 | Reporting | `minc_ast` and `minc_resolve` link no diagnostics; `minc_resolve_report` converts both tables |
 | 26 | The IDE mapping | `source_to_def` is built here, not later: resolve the parent, then the child. Go-to-definition is this stage's output, not an add-on |
 
-## Open decisions the language owns
+## Decisions the language owns
 
-These are **semantics**, not implementation, so they belong to the language and
-are recorded in `README.md`'s checklist when decided. Each is stated with the
-recommendation this design assumes, because the algorithm above depends on it,
-and the consequence if the other answer is chosen.
+These are **semantics**, not implementation, so they belong to the language; they
+are recorded here *and* in the `README.md` language checklist (section *Scopes
+and names*), which is the user-facing copy. Each was open when this record was
+written and was decided in favour of the recommendation the algorithm above
+assumes, because that algorithm depends on it. The rejected answer is kept beside
+each one: it is the reason, and it is what a later reader needs in order to
+reopen the question knowingly rather than by accident.
 
-| # | Question | Recommendation | If the other way |
+| # | Question | Decision | If the other way |
 | --- | --- | --- | --- |
 | A | When does a file-scope name become visible? | **Order-independent** (Go's package block): a call may name a function defined further down, and recursion needs no prototype | With C's point-of-declaration, collect collapses into the body walk — but mutual recursion then needs prototypes, and the language inherits C's largest paper cut |
 | B | Does a `let` initializer see the new binding or the outer one? | **The outer one** (Rust): `let x = x + 1;` shadows and is unambiguous | With C's rule, `let x = x;` reads an uninitialized variable — a footgun this language rejects elsewhere (implicit octal, `char` signedness) |
-| C | May a `fn` be declared inside a `fn`? | **No** (C, and one code already reserved) | Nested functions add a scope and a closure question this stage would have to answer |
+| C | May a `fn` be declared inside a `fn`? | **No** (C): the grammar has no nested-function form, so there is nothing to collect and no code to spend | Nested functions add a scope and a closure question this stage would have to answer |
 | D | Is shadowing an error, a warning, or silent? | **Allowed, warned on request** (`-Wshadow`) | Silent shadowing loses the diagnosis; an error breaks ordinary block-scoped code |
 | E | Do `goto` and labels exist? | Not now; the `Label` namespace is reserved | `Label` becomes a fifth scope kind and function-wide visibility, as C has it |
 | F | Does visibility (`pub`/`private`) create a scope? | Not now; it filters lookup rather than nesting scopes | Lookup grows a visibility predicate, and a `Def` grows a visibility field |
 
 Nothing in the tables above changes if A–F are answered differently; only two
-loops and one field do.
+loops and one field do — which is why they were decided together with the code
+that depends on them rather than left to block it.
 
 ## How the claims above are checked
 

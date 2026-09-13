@@ -18,7 +18,7 @@
 namespace minc::driver {
 
 // Subcommands the driver understands. Anything else is a usage error.
-enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp };
+enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp, Resolve };
 
 // Name, argument shape, and one-line description of a subcommand. Kept in one
 // table so the parser, error messages, and help text cannot drift apart.
@@ -60,7 +60,17 @@ struct CliOptions {
   bool showDefines = false;
   bool showIncludes = false;
   bool showDeps = false;
-  // `--at [file:]line`.
+  // `--refs`/`--unresolved`: what `resolve` should print. Both at once is
+  // meaningful (every use, with the unresolved ones marked), so not one enum.
+  bool showRefs = false;
+  bool showUnresolved = false;
+  // `--ast`: print the lowered AST instead of the scope/def tables.
+  bool showAst = false;
+  // `-Wunused`, `-Wshadow`. Off by default, like every other warning here: a
+  // compiler that warns about ordinary code teaches people to ignore it.
+  bool warnUnused = false;
+  bool warnShadow = false;
+  // `--at [file:]line` for `pp`, `[file:]line:col` for `resolve`.
   std::string at;
   std::string error; // non-empty => usage error; ignore the rest
 };

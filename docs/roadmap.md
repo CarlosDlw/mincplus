@@ -210,7 +210,10 @@ resolve) and lowers the AST to HIR before type checking; Roslyn runs
 `AstGen -> ZIR` and then `Sema -> AIR`. The order is stated once, in
 [`architecture.md#the-pipeline`](architecture.md#the-pipeline).
 
-- [ ] `src/ast` — lowering the lossless green tree into a compact, arena-backed
+**Shipped.** `mincc resolve` runs the front end through this stage
+(`lex -> preprocess -> parse -> lower -> validate -> resolve`); `sema` is next.
+
+- [x] `src/ast` — lowering the lossless green tree into a compact, arena-backed
       AST. Not the same thing as the *typed view* section 3 already has: that is
       a set of accessors that makes the green tree pleasant to traverse, and it
       still carries trivia and error nodes. The green tree exists for *fidelity*
@@ -219,25 +222,45 @@ resolve) and lowers the AST to HIR before type checking; Roslyn runs
       lowered AST is a separate arena built for analysis, and every node keeps
       the `(FileId, range)` it came from so a diagnostic still lands on the
       user's bytes
-- [ ] Structural validation the parser could not do: a duplicate parameter, an
-      attribute where it has no meaning, `break` outside a loop. Cheap, and it
-      runs before the expensive passes (`rustc` calls it AST validation)
-- [ ] `src/resolve` — two phases, deliberately: **collect** every declaration
+- [x] Structural validation the parser could not do: a `let`/`const` with no
+      type and no initializer, a `const` with a type but no value (a binding that
+      can never be read), and the node budget. Each has a code and a test. It is
+      short on purpose and grows with the syntax, not ahead of it: a rule lands
+      when a real input can reach it, never as a placeholder that can never fire
+      (`rustc` calls this pass AST validation)
+- [x] `src/resolve` — two phases, deliberately: **collect** every declaration
       into its scope first, then **resolve** each use against scopes that are
       complete by then. One phase cannot work; forward reference is the point
-- [ ] Scopes and shadowing rules, with a `SymId` per name interned once, so
+- [x] Scopes and shadowing rules, with a `SymId` per name interned once, so
       identity is compared instead of spelling
-- [ ] Every identifier node records the declaration it denotes, so `sema` never
-      searches a scope again
-- [ ] Redeclaration and unknown-name errors, plus the warnings that need scopes
-      and nothing else (unused entity, shadowing)
-- [ ] Caching keyed `(FileId, revision)`, because an editor asks the same
-      question on every keystroke
-- [ ] `mincc resolve <files...>`: the scopes, and each name with the declaration
-      it resolved to
+- [x] Every name use records the declaration it denotes, so `sema` never
+      searches a scope again; an unresolved use carries a *reason*
+      (`not-found` / `wrong-namespace` / `error-region`) instead of being a hole
+- [x] Redeclaration and unknown-name errors, plus the warnings that need scopes
+      and nothing else (unused entity, shadowing), each with a stable code
+- [x] The **item tree**: signatures as written, with bodies stored beside it, so
+      an edit inside a body invalidates that body and nothing else — the
+      invariant that makes an editor cheap
+- [x] `source_to_def` — the syntax-node→def and offset→def mapping, so
+      `--at FILE:LINE:COL` is go-to-definition, built here rather than bolted on
+      later for the LSP
+- [x] Caching keyed `(FileId, revision)`, because an editor asks the same
+      question on every keystroke; reuse is asserted by a test, not assumed
+- [x] `mincc resolve <files...>`: the lowered tree (`--ast`), the scopes on
+      stdout, each name with the declaration it resolved to (`--refs`), and only
+      the unresolved uses with their reasons (`--unresolved`)
+- [x] Every budget always on and checked before the allocation (defs, scopes,
+      refs, scope depth, walk depth); the body walk is iterative, so deep input
+      is a diagnostic rather than a stack overflow
+- [x] Language decisions A–F recorded in
+      [`architectures/resolve.md`](architectures/resolve.md#decisions-the-language-owns)
+      and in the [README language checklist](../README.md#scopes-and-names):
+      order-independent file scope, the outer binding in a `let` initializer, no
+      nested `fn`, shadowing allowed and warned under `-Wshadow`, `goto`/labels
+      and visibility deferred with their name spaces reserved
 - [x] Design record: [`architectures/resolve.md`](architectures/resolve.md) --
       lowering, structural validation, two-phase resolution, the item tree and
-      the scopes, with the open questions that are the language's to answer
+      the scopes, with the decisions above
 
 ## 5. Semantic analysis — `src/sema`
 

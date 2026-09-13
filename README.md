@@ -35,21 +35,22 @@ The stage order is fixed and written down once, in
 [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline):
 `lex` and `preprocess` (phases 3 and 4 of translation), then
 `parse -> lower -> validate -> resolve -> sema -> ir -> codegen -> link`.
-The first four are shipped; **lower**, **validate** and **resolve** are next,
-in that order, and they are stages of their own rather than part of `sema` —
-a C-like grammar lets a call name a function defined further down, so name
-resolution has to finish before any body can be type-checked. Each stage takes
-one artifact and returns one, reports nothing, and leaves every error as a
-value with a code and a span; only the `*_report` libraries and the driver turn
-those into text and an exit code.
+The whole front end is shipped — through **lower**, **validate** and **resolve**,
+which are stages of their own rather than part of `sema`: a C-like grammar lets
+a call name a function defined further down, so name resolution has to finish
+before any body can be type-checked. **`sema` is next.** Each stage takes one
+artifact and returns one, reports nothing, and leaves every error as a value
+with a code and a span; only the `*_report` libraries and the driver turn those
+into text and an exit code.
 
-Three commands, three views, one pipeline — each names the stage it shows:
+Four commands, four views, one pipeline — each names the stage it shows:
 
 | Command | Shows |
 | --- | --- |
 | `mincc lex <files...>` | one file's raw tokens, no preprocessing — a directive's `#` is an ordinary `Hash` token there |
 | `mincc pp <files...>` | the token stream of the translation unit: macros expanded, includes resolved |
 | `mincc parse <files...>` | the syntax tree over that stream |
+| `mincc resolve <files...>` | the lowered tree, the scopes, and each name with the declaration it denotes |
 
 `-D name[=body]`, `-U name` and `-I dir` are front-end options, so all three
 accept them, and a `-D` is a real source file (`<command line>`) so a caret on a
@@ -114,6 +115,31 @@ parser reports every syntax error it finds (not just the first), recovers from
 it and keeps going, and the tree still covers every byte of even a malformed
 file. The design behind that is in
 [`docs/architectures/parser.md`](docs/architectures/parser.md).
+
+Lowering compacts that tree for analysis, validation checks the structural rules
+before the expensive passes, and resolution ties every name to the declaration it
+denotes — in two phases, so a name used above its declaration still has an
+answer. `mincc resolve` shows the result:
+
+```console
+$ mincc resolve examples/002_variables.mx
+# examples/002_variables.mx  (scopes 2, defs 5, refs 1, 0 error(s), 0 warning(s))
+
+  scopes
+    #0  file  22..98  (root)
+    #1  function  36..97  parent #0
+
+  defs
+    #0  file#0  ordinary  const  true  refs 0  [predefined]
+    #1  file#0  ordinary  const  false  refs 0  [predefined]
+    #2  file#0  ordinary  fn  main  refs 0  examples/002_variables.mx:2:8
+    #3  function#1  ordinary  let  x  refs 1  examples/002_variables.mx:4:7
+    #4  function#1  ordinary  let  y  refs 0  examples/002_variables.mx:5:7
+```
+
+The design behind lowering and resolution — the item tree, the scope model, the
+language decisions they depend on — is in
+[`docs/architectures/resolve.md`](docs/architectures/resolve.md).
 
 ## Language features
 
@@ -292,6 +318,30 @@ hidden escape hatch.
 - [ ] Variadic functions, including calling C variadics
 - [ ] Default arguments or named arguments `[?]`
 
+### Scopes and names
+
+How a name is tied to the declaration it means. These are *semantic* decisions,
+so they are recorded here as well as in
+[`docs/architectures/resolve.md`](docs/architectures/resolve.md#decisions-the-language-owns),
+which is where the algorithm that depends on them lives.
+
+- [x] A file-scope name is visible **independently of order** (as in Go's
+      package block, not C's point of declaration): a call may name a function
+      defined further down, and mutual recursion needs no prototype
+- [x] A `let`/`const` initializer sees the **outer** binding, not the one being
+      declared (`let x = x + 1;` shadows; `let x = x;` is the outer `x`, never
+      the uninitialized new one)
+- [x] Scopes are lexical and block-based; a block is a scope, and a function's
+      parameters form one with its body's outermost block
+- [x] Declaration-before-use is **not** required within a scope's *body*, but a
+      `let` is in scope from the statement after it, as in C
+- [x] `fn` **cannot** be declared inside a `fn` — the grammar has no nesting
+- [x] Shadowing is **allowed**; diagnosed only under `-Wshadow`
+- [x] Unused declarations are diagnosed under `-Wunused`
+- [ ] `goto` and labels — the `Label` name space is reserved, the feature is
+      not
+- [ ] Visibility (`pub`/`private`) filters lookup rather than nesting scopes
+
 ### Statements and control flow
 
 - [x] Blocks and `return`
@@ -412,17 +462,29 @@ hidden escape hatch.
   adapter that lets the parser read it, kept a separate target so the
   preprocessor never links the grammar. Design in
   [`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md).
-- `src/ast/`, `src/resolve/`, `src/sema/`, `src/ir/`, `src/backend/`,
-  `src/cinterop/` — planned, in that order and for the reasons in
+- `src/ast/` — lowering the lossless green tree into a compact, arena-backed
+  AST, plus the structural validation the parser could not do. Not the typed
+  view of section 3: that makes the green tree pleasant to traverse and still
+  carries trivia and error nodes, while this is a separate arena built for
+  analysis, where every node keeps the `(FileId, range)` it came from. Design in
+  [`docs/architectures/resolve.md`](docs/architectures/resolve.md).
+- `src/resolve/` — name resolution in two phases, deliberately: **collect**
+  every declaration into its scope first, then **resolve** each use, so a name
+  used above its declaration still has an answer. It owns the scopes, one
+  interned symbol per name, the typo suggestions, and the source→definition map
+  that go-to-definition is built on. `mincc resolve` is its view. Neither
+  `src/ast` nor `src/resolve` is a bullet inside `src/sema`, and both keep the
+  stage contract: errors are values with a code and a span, never text.
+- `src/sema/`, `src/ir/`, `src/backend/`, `src/cinterop/` — planned, in that
+  order and for the reasons in
   [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline).
-  `src/ast` lowers the green tree into a compact AST for analysis; `src/resolve`
-  builds scopes and ties every name to a declaration. Neither is a bullet inside
-  `src/sema`.
 - `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
-  `tests/unit/lex/examples_test.cc` and parsed by
-  `tests/unit/parse/examples_parse_test.cc`, so an example cannot drift into
-  syntax the lexer or the parser does not accept.
+  `tests/unit/lex/examples_test.cc`, parsed by
+  `tests/unit/parse/examples_parse_test.cc`, and carried through lowering,
+  validation and resolution by `tests/unit/driver/resolve_command_test.cc`, so
+  an example cannot drift into syntax the front end does not accept or names it
+  cannot resolve.
   - `001_main_func.mx` — the smallest program: one function and a `return`
   - `002_variables.mx` — `let` with an annotation and with inference
   - `003_types.mx` — the primitive type names and the C-compatible spellings,

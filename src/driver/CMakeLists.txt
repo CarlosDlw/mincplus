@@ -10,8 +10,9 @@ minc_add_library(minc_driver
     lex_command.cc
     parse_command.cc
     pp_command.cc
+    resolve_command.cc
   DEPS minc_support minc_lex minc_lex_report minc_syntax minc_parse_report minc_pp
-       minc_pp_report minc_pp_parse
+       minc_pp_report minc_pp_parse minc_ast minc_resolve minc_resolve_report
 )
 
 minc_add_executable(mincc SOURCES main.cc DEPS minc_driver)

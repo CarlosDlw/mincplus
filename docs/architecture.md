@@ -9,12 +9,26 @@ callers, and what it is allowed to depend on.
 ```
 mincc                      driver: argv -> exit code
   └── minc_driver          cli / help_text / error_report / input_source
-        │                  lex_command / parse_command
+        │                  lex / pp / parse / resolve commands
         ├── minc_support
         ├── minc_lex
         ├── minc_lex_report
+        ├── minc_pp_report
         ├── minc_syntax
-        └── minc_parse_report
+        ├── minc_parse_report
+        └── minc_resolve_report
+
+minc_resolve_report        AST and resolve errors -> diagnostics
+  ├── minc_resolve         scopes, defs and refs: errors as values, no DiagBag
+  │     ├── minc_ast       lowered AST + structural validation: no DiagBag
+  │     │     ├── minc_syntax
+  │     │     ├── minc_lex
+  │     │     ├── minc_intern
+  │     │     └── minc_span
+  │     ├── minc_intern
+  │     ├── minc_span
+  │     └── minc_source    to render a definition's location
+  └── minc_diag
 
 minc_parse_report          syntax errors -> diagnostics (the only reporter)
   ├── minc_parse
@@ -33,6 +47,18 @@ minc_lex_report            token flags -> diagnostics
   │     ├── minc_span
   │     └── minc_term
   └── minc_diag
+
+minc_pp_report             preprocessor errors -> diagnostics
+  ├── minc_pp              a client of the lexer: `#`, includes, macro expansion
+  │     ├── minc_lex
+  │     ├── minc_fs        file identity (device/inode, Windows file index)
+  │     └── minc_session
+  ├── minc_lex_report      lexical errors of every file the unit read
+  └── minc_diag
+
+minc_pp_parse              the adapter that lets the parser read the pp output
+  ├── minc_pp
+  └── minc_parse
 
 minc_support               INTERFACE alias over the support libraries
   ├── minc_source          trusted source text (the validation boundary)
@@ -73,6 +99,15 @@ Rules:
   diagnostics and `minc_syntax` turns the events into a tree. So a grammar
   change is testable with neither layer linked, and a change to the tree layout
   cannot reach the grammar.
+- `src/ast/` and `src/resolve/` follow the same rule: lowering and structural
+  validation are in `minc_ast`, collection and resolution in `minc_resolve`, and
+  both return error *values*. `minc_resolve` depends on `minc_ast` and never the
+  reverse, and `minc_resolve_report` is the only target on this path that links
+  `minc_diag` — so the resolver is testable with no `Session` and no terminal,
+  and can be reused by the language server without a `DiagBag` in sight.
+- `src/ast/` and `src/resolve/` have **no platform branch**: a file is named by
+  `support::FileId`, and the path identity behind it comes from `support`. Unix
+  and Windows cannot disagree about which name a program means.
 - `src/support/term` is the only module allowed to contain `#if defined(_WIN32)`
   and `<windows.h>` / `<unistd.h>`. Everything else asks it a yes/no question
   and stays platform-agnostic. `src/support/fs` (planned, for file identity and
@@ -495,9 +530,9 @@ source (.mx)
   [x] phase 4     preprocess the unit          -> preprocessed text + stream
   [x]             parse      the token stream  -> event stream + errors
   [x]             syntax     events + tokens   -> lossless green tree, typed view
-  [ ]             lower      the green tree    -> compact AST
-  [ ]             validate   the AST           -> the AST, structurally legal
-  [ ]             resolve    the AST           -> scopes + a symbol per name
+  [x]             lower      the green tree    -> compact AST
+  [x]             validate   the AST           -> the AST, structurally legal
+  [x]             resolve    the AST           -> scopes + a symbol per name
   [ ]             sema       the resolved AST  -> typed AST
   [ ]             ir         the typed AST     -> CFG (init / borrow / optimize)
   [ ]             codegen    the IR            -> object file / assembly
@@ -530,17 +565,19 @@ code. That is what makes a stage testable without a `Session`, fuzzable without
 a terminal, and reusable by the language server — which needs `resolve` and
 `sema` and never wants a process exit.
 
-The first four stages are shipped and **wired**: `mincc parse` runs the whole
-front end, so a file that begins with `#define` has a syntax tree of its
-translation unit rather than a lex error on the `#`. The three commands are the
-three views of one pipeline, and each names the other two so a reader is never
+The stages through `resolve` are shipped and **wired**: `mincc parse` runs the
+whole front end, so a file that begins with `#define` has a syntax tree of its
+translation unit rather than a lex error on the `#`, and `mincc resolve` runs
+that tree through lowering, validation and name resolution. The four commands
+are four views of one pipeline, and each names the others so a reader is never
 left guessing which one to reach for:
 
 | Command | Stage | Sees |
 | --- | --- | --- |
 | `mincc lex` | lexer | one file, raw tokens — a directive's `#` is an ordinary `Hash` token, because `#` is a punctuator of the lexical grammar and only its *meaning* is positional |
 | `mincc pp` | lexer + preprocessor | the token stream of the translation unit — macros expanded, includes resolved |
-| `mincc parse` | the whole front end | the syntax tree over the preprocessed stream |
+| `mincc parse` | lexer + preprocessor + parser | the syntax tree over the preprocessed stream |
+| `mincc resolve` | the front end through name resolution | the lowered AST, the scopes, and every name with the declaration it denotes |
 
 `-D`/`-U`/`-I`/`-isystem` belong to the *front end*, not to one command that
 prints it, so all three commands that preprocess accept them and one helper
@@ -562,20 +599,23 @@ warnings inside them are dropped at the report step while errors are not.
   the resource budgets that make it total on untrusted input, and the file
   identity rules that make `#pragma once` and include guards correct on
   case-insensitive filesystems.
-- **lower**, **validate**, **resolve**, then **sema** are next, in that order.
-  `lower` turns the green tree into a compact arena AST that still points back
-  at `(FileId, range)`, so a diagnostic lands on the user's bytes. `validate`
-  is the cheap structural pass the parser could not do (a duplicate parameter,
-  an attribute in a position that has no meaning). `resolve` builds the scopes
-  and answers what each name denotes, which is also the layer an editor asks
-  "where is this defined"; it is a module of its own (`src/resolve`) rather
-  than a bullet inside `sema`, for the reason above. `sema` then consumes a
-  *resolved* tree and is only about types, filtered by the type checklist in
-  `README.md`. The design record for the first three exists:
+- **lower** (`src/ast`) turns the green tree into a compact, arena-backed AST
+  built for analysis — every node keeping its `(FileId, range)` — and
+  **validate** is a pass of its own over that AST for the structural checks the
+  parser could not make. Then **resolve** (`src/resolve`) collects every
+  declaration into its scope, then resolves every use against scopes that are
+  complete by then; it never looks at a type. Design record:
   [`architectures/resolve.md`](architectures/resolve.md) — lowering, structural
   validation, two-phase resolution, the item tree, the scope tables, the error
-  codes, the bounds, and the open questions that are the language's to answer
-  rather than this document's.
+  codes, the bounds, and the language decisions they depend on. `mincc resolve`
+  is the command that proves them.
+- **sema** is next, and it is the first stage that consumes a tree where every
+  name already denotes a declaration, so nothing in it searches a scope. It is
+  about types and nothing else, filtered by the type checklist in `README.md`.
+  Lowering, validation and resolution are stages of their own rather than
+  bullets inside it, for the reason above; `resolve`'s source→definition map is
+  also the layer an editor asks "where is this defined", so it is built here
+  rather than bolted on when the LSP arrives.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

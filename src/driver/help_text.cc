@@ -23,6 +23,12 @@ constexpr const char* kOptionsBlock =
     "  -isystem dir     Like -I, after every -I, but a file found there is\n"
     "                   a system header: warnings in it are suppressed\n"
     "  --no-trivia      Omit whitespace and comments from dump output\n"
+    "  --refs           resolve: print every name use and its target\n"
+    "  --unresolved     resolve: print only the uses with no target, with reasons\n"
+    "  --ast            resolve: print the lowered AST and the item tree\n"
+    "  --at POS         pp: [file:]line; resolve: [file:]line:col\n"
+    "  -Wunused         warn about declarations nothing refers to\n"
+    "  -Wshadow         warn about a declaration that hides another one\n"
     "  --               Treat every following argument as a file, not an option\n";
 
 constexpr const char* kExitStatusBlock = "Exit status:\n"

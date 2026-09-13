@@ -7,7 +7,7 @@
 namespace minc::driver {
 namespace {
 
-constexpr std::array<CommandInfo, 6> kCommands{{
+constexpr std::array<CommandInfo, 7> kCommands{{
     {Command::Build, "build", "<files...>", "Compile sources and link an executable", false},
     {Command::Run, "run", "<files...>", "Build and run the resulting program", false},
     {Command::Check, "check", "<files...>", "Parse and type-check only; no code is emitted", false},
@@ -20,6 +20,12 @@ constexpr std::array<CommandInfo, 6> kCommands{{
      "Preprocess and parse each file; print its syntax tree", true},
     {Command::Pp, "pp", "[options] <files...>",
      "Preprocess each file; -D/-U/-I, --defines, --includes, --deps, --at", true},
+    // `resolve` is the first command that looks at *meaning*: it lowers the tree,
+    // resolves every name, and prints the scopes and definitions. It is also the
+    // first consumer of the two stages after the parser, and the command that
+    // proves them.
+    {Command::Resolve, "resolve", "[options] <files...>",
+     "Resolve names; scopes/defs/refs, --ast, --refs, --unresolved, --at", true},
 }};
 
 // A lone "-" and any argument not starting with '-' are positional. Doing this
@@ -49,6 +55,8 @@ const char* toString(Command command) {
     return "parse";
   case Command::Pp:
     return "pp";
+  case Command::Resolve:
+    return "resolve";
   }
   return "unknown";
 }
@@ -152,6 +160,28 @@ CliOptions parseArgs(int argc, const char* const* argv) {
         opts.showDefines = opts.showDefines || arg == "--defines";
         opts.showIncludes = opts.showIncludes || arg == "--includes";
         opts.showDeps = opts.showDeps || arg == "--deps";
+        continue;
+      }
+      if (arg == "--refs" || arg == "--unresolved" || arg == "--ast") {
+        opts.showRefs = opts.showRefs || arg == "--refs";
+        opts.showUnresolved = opts.showUnresolved || arg == "--unresolved";
+        opts.showAst = opts.showAst || arg == "--ast";
+        continue;
+      }
+      // `-Wunused` / `-Wshadow`. Written the way every C compiler writes them,
+      // and an unknown `-W` is a usage error rather than a silent no-op: a
+      // warning somebody asked for and did not get is worse than a typo caught
+      // now.
+      if (arg.size() > 2 && arg[0] == '-' && arg[1] == 'W') {
+        const std::string_view name = arg.substr(2);
+        if (name == "unused") {
+          opts.warnUnused = true;
+        } else if (name == "shadow") {
+          opts.warnShadow = true;
+        } else {
+          opts.error = "unknown warning option '" + std::string(arg) + "'";
+          return opts;
+        }
         continue;
       }
       if (arg == "--at") {

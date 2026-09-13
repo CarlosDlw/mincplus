@@ -78,10 +78,16 @@ minc_add_executable(minc_unit_tests
     parse/examples_parse_test.cc
     syntax/tree_test.cc
     syntax/store_test.cc
+    ast/lower_test.cc
+    ast/validate_test.cc
+    resolve/scope_test.cc
+    resolve/errors_test.cc
+    resolve/store_test.cc
     driver/cli_test.cc
     driver/error_report_test.cc
     driver/lex_command_test.cc
     driver/parse_command_test.cc
+    driver/resolve_command_test.cc
   DEPS
     minc_support
     minc_lex
@@ -92,6 +98,9 @@ minc_add_executable(minc_unit_tests
     minc_pp
     minc_pp_report
     minc_pp_parse
+    minc_ast
+    minc_resolve
+    minc_resolve_report
     minc_driver
     GTest::gtest_main
 )
