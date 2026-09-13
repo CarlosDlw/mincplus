@@ -285,8 +285,13 @@ the language decisions this stage had to make — `void`, conditions requiring
 
 **Shipped**, for every form the grammar produces today. What is left in this
 section is the type and analysis work the *syntax* does not exist for yet
-(pointers, arrays, aggregates, casts) plus the control-flow checks that need a
-CFG, which is why the last items of this list read the way they do.
+(pointers, arrays, aggregates, casts). The flow analyses are here and not in the
+IR, and that is a decision and not a convenience: definite assignment,
+reachability and `break`/`continue` context are all answered exactly by the
+*shape* of this grammar, so deferring them would have meant a later stage
+re-deriving a fact this one already owns — see
+[`architectures/sema.md#definite-assignment`](architectures/sema.md#definite-assignment),
+which also records the reversal.
 
 - [x] Design record: [`architectures/sema.md`](architectures/sema.md)
 - [x] The type model: an interned, hash-consed `TypeId` with structural
@@ -333,8 +338,21 @@ CFG, which is why the last items of this list read the way they do.
       `sema-continue-outside-loop`. `terminates()` handles the branch and loop
       shapes, so `fn i32 f() { if c { return 1; } else { return 2; } }` has no
       missing-return and `while true {}` without a `break` does not either
-- [ ] Control-flow checks that need a CFG: definite assignment, `goto` targets,
-      unreachable-code precision inside loops
+- [x] **Definite assignment** (`src/sema/check_flow.cc`): a `let` with no
+      initializer is not a value until an assignment reaches the read on every
+      path — `sema-use-before-assignment`, an error. The rules are JLS 16's,
+      applied to this grammar (a conditional merges by intersection, a loop is
+      analyzed from its entry state, and a loop whose condition is constantly
+      `true` is left only by its own `break`s), so it is exact rather than
+      conservative and needs no CFG. One diagnostic per binding
+- [x] **Integer edges**: a constant that does not fit its type, and a shift count
+      outside the width, are errors; division/remainder by zero is already one.
+      Signed and unsigned overflow are *defined* to wrap, and the lowering must
+      not emit `nsw`/`nuw`; the runtime contract for `/0`, `%0`, `INT_MIN / -1`
+      and an out-of-range count is a trap, not a poison value
+- [ ] Control-flow checks that still want a CFG: `goto` targets, and
+      unreachable-code precision inside loops (the per-block warning is exact
+      for the statement after a `return`, less so after a `break`)
 - [ ] Storage classes and linkage: `static`, `extern`, tentative definitions
 - [ ] Symbol table exported for the backend and C interop
 - [ ] Warning set: sign/conversion issues beyond `-Wconversion`, and the rest of

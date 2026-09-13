@@ -496,5 +496,29 @@ TEST(CheckTest, APathologicalNestingIsADiagnosticAndNotAStackOverflow) {
   }
 }
 
+// A declaration a macro wrote is a declaration like any other: it has its own
+// identity, so a use of it gets its own type. The hazard is not the spelling but
+// the *location* -- a macro that expands one argument into two names gives both
+// declarations the same written range -- and its symptom was silent: the pasted
+// name's type was never recorded, and a use of it was the poison with no
+// diagnostic at all. This is the end-to-end half of the case
+// `ScopeTest.TwoNamesFromOneMacroArgumentAreTwoDeclarations` pins below it.
+TEST(CheckTest, ANameWrittenByAPasteGetsItsOwnDeclarationAndType) {
+  SemaFixture f;
+  f.source("#define CONCAT(a, b) a ## b\n"
+           "#define PAIR(b) let b: i32 = 1; let CONCAT(b, 2): i32 = 2;\n"
+           "fn i32 f()\n"
+           "{\n"
+           "  PAIR(a)\n"
+           "  return a + a2;\n"
+           "}\n"
+           "fn i32 main() { return f(); }\n");
+  ASSERT_TRUE(f.build());
+  // The lazy arm: `firstError()` is only read when there is one.
+  EXPECT_EQ(f.errorCount(), 0u) << (f.errorCount() == 0 ? std::string() : f.firstError().message);
+  EXPECT_EQ(f.typeOfSpelling("a2"), "i32");
+  EXPECT_EQ(f.typeOfSpelling("a"), "i32");
+}
+
 } // namespace
 } // namespace minc::test

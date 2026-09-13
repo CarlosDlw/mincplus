@@ -351,23 +351,32 @@ lvalue that is **not** modifiable; assignment and `++`/`--` to it are
 
 - **`let x: T = e;`** — `e` converts to `T`. `let x = e;` — `x`'s type is `e`'s
   type after defaulting the deferred literals. `let x: T;` — legal (an
-  uninitialised binding); reading it before assignment is a *definite
-  assignment* question and therefore the IR's, not sema's — recorded as a
-  deliberate boundary rather than an oversight.
+  uninitialised binding), and reading it before an assignment reaches it is
+  `sema-use-before-assignment`: see *Definite assignment* below, which is where
+  that question is answered and where the earlier "the IR's" decision is
+  reversed and why.
 - **`const`** — identical typing; the difference is the modifiability above.
 - **`return`** — `return e;` converts `e` to the function's return type;
   `return;` is legal only in a `void` function; `return e;` in a `void`
   function is `sema-return-void-value`.
 - **Missing return** — a non-`void` function whose body can reach its end is
-  `sema-missing-return`. **The check is exact today and will not stay that way:**
-  with no `if`/loops in the grammar, the only way to fall off the end is to not
-  end with a `return`, so the rule is a look at the last statement, and it is
-  right for every program the parser accepts. When branches land it becomes a
-  reachability question and moves to the IR with the other flow analyses; this
-  is stated now so the move is a known improvement rather than a surprise.
-- **Unreachable code** — a statement after a `return` in the same block is
-  `sema-unreachable-code`, a warning today because the same thing will be a real
-  flow result later.
+  `sema-missing-return`. The question is reachability, and `terminates()`
+  answers it exactly rather than conservatively: a `return`; a block whose last
+  reachable statement terminates; an `if` whose **both** arms terminate; a loop
+  whose condition is constantly `true` and whose body has no `break` aimed at
+  it. So `fn i32 f(c: bool) { if c { return 1; } else { return 2; } }` has no
+  diagnostic and `fn i32 f() { while true { } }` has none either. Two facts are
+  load-bearing and both already exist: the conditions are folded (so "constantly
+  true" is not a guess), and a `break` belonging to *this* loop is a question the
+  statement walk answers (`hasBreakForThisLoop`). It stays here rather than
+  moving to the IR because it is not a CFG question in this language: the
+  constructs are structured, and the answer is exact, which is strictly better
+  than deferring it to a stage that would have to re-derive it.
+- **Unreachable code** — a statement after one that never completes, in the same
+  block, is `sema-unreachable-code`, a warning rather than an error: it is a
+  statement the program cannot reach, which is a smell and not a defect, and the
+  analysis is deliberately per block so the sentence says "the statement before
+  this one never completes".
 - **`main`** — a file-scope `fn` named `main` must be `fn i32 main()`:
   `sema-main-signature` otherwise. A program with no `main` is not an error
   here: sema sees one translation unit and the entry point is a program
@@ -377,6 +386,62 @@ lvalue that is **not** modifiable; assignment and `++`/`--` to it are
   type: no object may have it (`let x: void` is `sema-type-not-value`), no
   arithmetic is defined on it, a `void` expression may not be used as a value,
   and `return;` is its only meaningful statement form.
+
+## Definite assignment
+
+`let x: i32;` is the C idiom — declare, then assign in the branch that knows the
+answer — and it is the one hole through which this language could read an object
+nobody ever wrote. It is now closed here, in a pass of its own
+(`src/sema/check_flow.cc`), and reading such a binding on a path that never
+assigned it is `sema-use-before-assignment`.
+
+**This reverses decision 11 below**, which left the question to the IR, and the
+reason it reverses is what the research settled: the analysis is *not* a CFG
+question. Every language that closed this hole closed it the same way — Java
+specifies it in full (JLS 16), C# and Swift make it an error rather than a
+warning, Rust refuses to hand out a value it cannot prove was written — and all
+of them answer it from the *structure* of the language, not from a dataflow
+fixpoint. The constructs here are structured, the conditions already fold
+(telling `while true` from `while c` is not a guess), and a `break` belonging to
+which loop is a question this stage already answers. So the answer is exact, and
+leaving it to the IR would have meant a stage that has the tree anyway
+re-deriving a fact the tree already decides — and, until it did, an `undef`
+lowered as if it were a value.
+
+**The rules, per construct.** The state is the set of definitions that hold a
+value, and a conditional merges by intersection because only one side runs:
+
+| Construct | State after it |
+| --- | --- |
+| `S1; S2` | the state after `S1` is the state before `S2` |
+| `if (c) A else B` | `after(A) ∩ after(B)` |
+| `if (c) A` | the state before the `if` — the arm may not run |
+| `while (c) S` | the state before the loop: it can run zero times, so nothing the body assigns survives |
+| `while (true) S` | nothing falls out of the bottom, so the exit state is the intersection of the states at its own `break`s; with no `break`, nothing after the loop is reachable and there is nothing to prove |
+| `for (i; c; s) S` | the state after `i`; the step is checked with what the body ended in, and contributes nothing to the exit (the exit that skips the body is always possible) |
+| `a && b`, `a \|\| b` | intersection: `b` may not run |
+| `c ? a : b` | intersection: only one arm runs |
+| `x = e` | the state before, plus `x` — a store, and the target is not read |
+| `x op= e`, `x++`, `++x` | the read is checked first, then the store |
+| `f(a, b)` | the callee and then the arguments, left to right |
+
+**What it is deliberately conservative about.** A value assigned inside a loop
+body and read by the loop's *condition* on a later iteration is "not proved", and
+the code after a loop never inherits what the body assigned. A dataflow fixpoint
+would be more precise in both places and would also be a second implementation
+of control flow that could disagree with `terminates()`; the conservative side is
+the one with no false negatives, and the precision that matters — the
+`while true` plus `break` idiom — is bought exactly, not approximated.
+
+**One diagnostic per binding.** The fix is one assignment before the reads, so
+five uninitialised reads of one binding are one sentence rather than five: the
+same "one mistake, one diagnostic" rule the poison type exists to enforce.
+
+**And the IR does not have to re-check it.** A read that is not proved is an
+error, an error means the front end does not hand a typed tree to lowering, and
+so the lowering never has to decide what an uninitialised value is worth. That
+is the whole point of doing it here: the boundary the earlier decision drew was
+a promise the IR could not keep on its own.
 
 ## The type-specifier grammar
 
@@ -487,6 +552,43 @@ disagree the first time one is fixed; this is the same centralisation argument
 that made the lexer own `##`'s re-lexing, and the refactor is part of this
 stage's work rather than a later cleanup.
 
+## Integer arithmetic at the edges
+
+The language has **no undefined behaviour in integer arithmetic**, and this stage
+is where that stops being a slogan: every edge case below is either diagnosed
+here or defined with a sentence the backend must honour. The alternative — inheriting
+the backend's answer — is worse than C's UB, because LLVM's poison value does not
+merely "do something"; it lets an optimizer *change a comparison* based on it.
+The market's answers, for reference: Rust panics on overflow in debug and is
+specified to wrap in release, Zig traps by default and offers `+%` for wrapping,
+Go/Java/C# wrap, C and C++ leave signed overflow undefined.
+
+| Case | Decide, and what the IR must emit |
+| --- | --- |
+| Signed overflow at runtime (`a + b` past `MAX`) | **Wrap**, two's complement. The lowering therefore emits **no `nsw`**: promising no wrap would be a lie, and `nuw`/`nsw` are exactly the promise that turns a defined wrap into a poison value. |
+| Unsigned overflow | **Wrap**, as C defines it, for the same reason and with the same constraint (`nuw` is not a promise this language can make). |
+| A constant that does not fit its type (`2147483647 + 1`, `INT_MIN / -1`) | **Error** here (`sema-constant-out-of-range`), on both paths: the deferred literal one, where the context decides the type, and the already-typed one, where nothing downstream would re-check the result. The runtime operation wraps; a constant the compiler can see does not fit is a mistake it can point at. Rust and Zig refuse it for the same reason. |
+| `x / 0`, `x % 0` at runtime | **Traps**, deterministically. The compile-time case is `sema-division-by-zero`. LLVM's `sdiv`/`srem` by zero is poison, so the lowering must emit an explicit zero test and a trap rather than the bare instruction. |
+| `INT_MIN / -1` at runtime | **Traps**: the quotient is not representable in the type. LLVM is poison here too, so it is the same explicit test. |
+| `INT_MIN % -1` | **0**, and not a trap: the remainder is representable, and LLVM's `srem` defines it. |
+| Shift count negative, or at or past the width of the value moved | **Error** when constant (`sema-shift-count-out-of-range`), **trap** at runtime. LLVM gives poison for an out-of-range count, which is a `>>` that silently does not shift. The width is the *promoted left operand's* — `u8 << 8` is 32 bits' worth of shift, not 8 — and a deferred literal left operand uses `i32`, the language's default for a bare integer. |
+
+**Evaluation order is decided, not inherited.** The language guarantees strict
+left-to-right evaluation of operands and of argument lists, and `&&`, `||` and
+`?:` evaluate only the side they take. C leaves the order of most operators
+unspecified (and reserves the right to change it between two evaluations of the
+same expression); Java, C# and Go specify left to right, and a language whose
+result must be reproducible for the same source cannot do otherwise. The
+lowering must produce that order — and now that this is written down, it is a
+requirement rather than an accident of the tree's shape.
+
+**One forward note the lowering depends on.** `str` is a NUL-terminated string
+and therefore an *address*, but the language has no pointer type yet. It does not
+need one: every LLVM the backend supports here uses **opaque pointers**, so `str`
+maps to `ptr`, a literal becomes a private global, and no pointer syntax has to
+appear in `.mx` for the IR to have one. Nothing to decide now; recorded so the
+`ir` stage does not invent a language change it does not need.
+
 ## The command
 
 `mincc check` is the stage's view: preprocess, parse, lower, validate, resolve,
@@ -536,13 +638,17 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 | 7 | Is `bool` arithmetic? | **No** — `!`, `&&`, `\|\|`, `==`, `!=` only | C promotes `bool` to `int`; `true + true` is then a silent 2 |
 | 8 | Is `str` arithmetic, and does `==` compare contents? | **`str` is scalar, not arithmetic; `==` is pointer-shaped and therefore refused** — use a library call | C's `s1 == s2` compares addresses; keeping it would keep the bug |
 | 9 | Does `void` land now? | **Yes** — a function that returns nothing is not optional | Deferring it means every unit's functions return a value, which is not a language |
-| 10 | Is falling off the end of a value-returning function an error? | **Yes**, while it is exact (no branches in the grammar yet) | C makes it UB with a warning; minc+ rejects C's UB by default |
-| 11 | Does sema check definite assignment? | **No** — the IR's, with the other flow analyses | Doing it here without a CFG means either a false negative or a wrong error |
+| 10 | Is falling off the end of a value-returning function an error? | **Yes**, and exactly: `terminates()` follows the branches, so both arms returning is enough | C makes it UB with a warning; minc+ rejects C's UB by default, and an inexact answer here would reject working code |
+| 11 | Does sema check definite assignment? | **Yes** — a structured pass over the body, the rules JLS 16 spells out, not a CFG — see *Definite assignment* | **This row used to say no**, with the reason "without a CFG, a false negative or a wrong error". Both halves were wrong: the answer is exact for this grammar's constructs, and leaving it to the IR means an `undef` the lowering has no way to recognise |
 | 12 | One constant-arithmetic implementation or two? | **One**, in `support`, shared with `#if` | Two evaluators disagree the first time one is fixed |
 | 13 | Where does the C spelling's width come from? | **The target's ABI table**, never the host's `#ifdef`s | `${host}` widths make a cross-compile silently wrong, which is the failure mode this project is built to avoid |
 | 14 | Who owns the type budget? | **The `TypeStore`**, checked before every insert, with `SemaOptions::maxTypes` lowering it | A budget the checker owned would be enforced after the allocation, and the two could disagree about which limit was hit |
 | 15 | How does the checker name a token, given that tokens and nodes share one tag space? | **As integer tags** (`tokens.h`), so the switches on them switch on a number | A token value is not an `SyntaxKind` enumerator, so a switch on it is either a `-Wswitch` error under CI or a second enumerator per token that has to be kept in step |
 | 16 | Does a `void` binding get one diagnostic or two? | **One**, reported before the initializer is checked | `let x: void = 1;` would otherwise also report "cannot be assigned to `void`", which is the same mistake said twice |
+| 17 | What happens on signed overflow? | **It wraps**, and the lowering emits no `nsw` | `nsw` trades a defined wrap for a poison value, and LLVM's poison can change a *comparison*: silently wrong is the failure mode this project is built to avoid. Trapping by default (Zig, Swift) is the alternative and needs a checked-operator pair, which is a later `[?]` |
+| 18 | Division by zero, `INT_MIN / -1`, and an out-of-range shift count? | **Error when constant; trap at runtime**, `INT_MIN % -1` is 0 | The alternative is inheriting LLVM's poison, where `x / 0` is not a crash but a licence for the optimizer to delete the branch that guarded it |
+| 19 | Is the evaluation order of operands and arguments specified? | **Yes — strict left to right**, with `&&`/`\|\|`/`?:` evaluating only the side they take | Leaving it unspecified (C) makes the same source mean two programs, which is incompatible with the "same input, same output" the stage contract is built on |
+| 20 | How does `str` become an LLVM value, with no pointer type in the language? | **Opaque `ptr`** — every supported LLVM uses opaque pointers, so a literal is a private global and no pointer syntax has to be invented | A typed pointer would force a pointer *type* into the surface before the language has decided its pointer syntax |
 
 ## Non-goals
 

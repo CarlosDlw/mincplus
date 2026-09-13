@@ -446,6 +446,16 @@ which is where the algorithm that depends on them lives.
 - [x] Arithmetic, bitwise, comparison, and logical operators with C precedence
 - [x] Short-circuit `&&` / `||` — parsed and typed (`bool` operands, `bool`
       result); the short-circuit *evaluation* is the IR's
+- [x] **No undefined behaviour in integer arithmetic**: signed and unsigned
+      overflow wrap (two's complement), and the lowering must not emit `nsw`
+- [x] **Integer edges are diagnosed where they are constant and defined where
+      they are not**: a constant that does not fit its type, a division or
+      remainder by zero, `INT_MIN / -1`, and a shift count that is negative or
+      at or past the width are all errors at compile time and traps at runtime
+      (`INT_MIN % -1` is `0`) — never a value the optimizer may invent
+- [x] **Evaluation order is specified**: operands and argument lists evaluate
+      strictly left to right, and `&&`/`||`/`?:` evaluate only the side taken
+      (C leaves the order unspecified)
 - [x] Assignment and compound assignment, with the left side checked to be a
       modifiable place
 - [x] Conditional expression `?:`, with both branches unified to one type
@@ -500,9 +510,14 @@ which is where the algorithm that depends on them lives.
 ### Safety
 
 - [ ] Bounds-checked indexing, with an opt-out `[?]`
+- [x] **Definite assignment**: a `let` with no initializer holds no value until
+      an assignment reaches the read on *every* path, and reading it is
+      `sema-use-before-assignment` — an error, as in Java, C# and Swift, not C's
+      warning-if-you-are-lucky; the accepted side of the rule, including the
+      `while true` plus `break` idiom, is
+      `examples/008_definite_assignment.mx`
 - [ ] Overflow checks in debug builds `[?]`
 - [ ] Null safety `[?]`
-- [ ] Uninitialized-variable diagnostics
 - [ ] Type safety at C-interop boundaries `[?]`
 
 ### Tooling exposed in the language

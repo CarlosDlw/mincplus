@@ -617,8 +617,14 @@ warnings inside them are dropped at the report step while errors are not.
   codes, the bounds, and the language decisions they depend on. `mincc resolve`
   is the command that proves them.
 - **sema** (`src/sema`) is the first stage that consumes a tree where every
-  name already denotes a declaration, so nothing in it searches a scope. It is
-  about types and nothing else, filtered by the type checklist in `README.md`.
+  name already denotes a declaration, so nothing in it searches a scope. Its
+  subject is types, filtered by the type checklist in `README.md`, plus the two
+  flow questions this grammar answers exactly — reachability (`terminates`,
+  which is why a missing `return` is reported here) and definite assignment
+  (`src/sema/check_flow.cc`, which is why a read of a binding nobody assigned is
+  an error here rather than an `undef` in the IR). Those two are here and not in
+  the backend because the constructs are structured: a later stage would have to
+  re-derive what the tree shape already decides.
   Lowering, validation and resolution are stages of their own rather than
   bullets inside it, for the reason above; `resolve`'s source→definition map is
   also the layer an editor asks "where is this defined", so it is built here

@@ -572,9 +572,35 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
                 types_.spelling(left) + "` and `" + types_.spelling(right) + "`");
       return kTypeError;
     }
-    // Folded only when the count is in range: an out-of-range shift is C's
-    // undefined behaviour and the IR's to reason about, and there is no
-    // diagnostic for it here.
+    // The count has a range, and it is not the value's range: it is the width of
+    // the value being moved. C leaves a count at or past that width -- and a
+    // negative one -- undefined, and the backend inherits a poison value: a `>>`
+    // that does not shift is a silent wrong answer, and a `<<` the optimizer is
+    // free to invent is worse. So the language refuses it here, at the count,
+    // which is the token the reader has to change.
+    const TypeId promoted = promote(types_, left);
+    // A deferred literal has no width until its context gives it one, and a bare
+    // integer defaults to `i32` -- the same answer it would get anywhere else.
+    const TypeId widthType = types_.get(promoted).kind == TypeKind::Int ? promoted : kTypeI32;
+    const std::uint16_t width = types_.get(widthType).bits;
+    if (rightInfo.hasIntValue) {
+      const support::ConstInt count = rightInfo.value;
+      if (count.negative()) {
+        error(rhs, SemaErrorCode::ShiftCountOutOfRange, "this shift count is negative");
+        info.hasIntValue = false;
+        info.isConstant = false;
+        return promoted;
+      }
+      if (count.bits >= width) {
+        error(rhs, SemaErrorCode::ShiftCountOutOfRange,
+              "this shift count (" + std::to_string(count.bits) +
+                  ") is not less than the width of `" + types_.spelling(widthType) + "` (" +
+                  std::to_string(width) + ")");
+        info.hasIntValue = false;
+        info.isConstant = false;
+        return promoted;
+      }
+    }
     if (leftInfo.hasIntValue && rightInfo.hasIntValue) {
       const std::optional<support::ConstInt> shifted =
           kind == kTokLessLess ? support::shiftLeft(leftInfo.value, rightInfo.value)
@@ -584,7 +610,7 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
         info.hasIntValue = true;
       }
     }
-    return promote(types_, left);
+    return promoted;
   }
 
   const TypeId result = usualArithmetic(types_, left, right);
@@ -596,6 +622,21 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
   }
   if (!foldBinary(op, kind, leftInfo, rightInfo, info)) {
     return kTypeError;
+  }
+  // A constant that does not fit the type the operator computes in is a mistake
+  // the compiler can see, and this is the half of that rule the context cannot
+  // catch: both operands already have a real type, so nothing downstream will
+  // re-range-check the result. `INT_MIN / -1` through a `const` and `MAX + 1`
+  // through one are the shapes. The runtime operation is defined to wrap, but a
+  // constant is not a runtime operation, and a value this stage hands on but
+  // cannot represent is exactly the kind of gap the IR would inherit.
+  if (info.hasIntValue && types_.isInteger(result) && !types_.isError(result) &&
+      !fitsIn(types_, result, info.value)) {
+    error(expr, SemaErrorCode::ConstantOutOfRange,
+          "this constant expression evaluates to `" + valueText(info.value) +
+              "`, which does not fit in `" + types_.spelling(result) + "`");
+    info.hasIntValue = false;
+    info.isConstant = false;
   }
   return result;
 }

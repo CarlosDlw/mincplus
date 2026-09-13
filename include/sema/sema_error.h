@@ -65,6 +65,18 @@ enum class SemaErrorCode : std::uint8_t {
   ContinueOutsideLoop,
   // A constant division or remainder by zero.
   DivisionByZero,
+  // A constant expression whose value does not fit the type it is computed in.
+  // Distinct from `LiteralOutOfRange`, which is about one literal: here the
+  // value came out of folding, and blaming a literal the program never wrote
+  // would point the reader at the wrong token.
+  ConstantOutOfRange,
+  // A shift whose count is negative or at or past the width of the value moved.
+  // C leaves it undefined and the backend inherits a poison value.
+  ShiftCountOutOfRange,
+  // A name read on a path that never assigned it: `let x: i32;` with no
+  // assignment reaching the read. Never a warning -- an unwritten object has no
+  // value to read -- and never a guess: the analysis names the paths it proved.
+  UseBeforeAssignment,
   // The type budget was reached. A hazard bound, not a language rule.
   LimitTypes,
   // A statement after a `return` in the same block (warning).

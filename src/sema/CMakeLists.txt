@@ -19,6 +19,7 @@ minc_add_library(minc_sema
     convert.cc
     check_stmt.cc
     check_expr.cc
+    check_flow.cc
     sema_error.cc
     dump.cc
   DEPS minc_ast minc_resolve minc_intern minc_span minc_text minc_consteval

@@ -92,8 +92,9 @@ private:
   }
 
   [[nodiscard]] DefId insertDef(ScopeId scopeId, Namespace ns, support::SymId name,
-                                support::Span span, support::Span nameSpan, DefKind kind,
-                                Linkage linkage, bool inError) {
+                                support::Span span, support::Span nameSpan,
+                                support::Span nameUnitSpan, DefKind kind, Linkage linkage,
+                                bool inError) {
     if (map_.defs.size() >= options_.maxDefs) {
       if (!defsLimitReported_) {
         defsLimitReported_ = true;
@@ -108,6 +109,7 @@ private:
     Def def;
     def.span = span;
     def.nameSpan = nameSpan;
+    def.unitSpan = nameUnitSpan;
     def.name = name;
     def.kind = kind;
     def.scope = scopeId;
@@ -191,9 +193,15 @@ private:
         continue;
       }
       const Node& node = file_.at(AstId{item.node});
+      // The item tree carries the *written* spans -- they are part of the
+      // signature the editor keys on, and a unit offset is not: it shifts when
+      // anything earlier in the unit text changes. So the name's unit range is
+      // read from the tree here rather than added to `Item`.
+      const AstId nameNode = file_.childOfKind(AstId{item.node}, NodeKind::Name);
+      const support::Span nameUnit = nameNode.valid() ? file_.at(nameNode).unit : item.nameSpan;
       map_.itemDefs[i] =
           insertDef(map_.fileScope, Namespace::Ordinary, item.name, item.span, item.nameSpan,
-                    DefKind::Function, Linkage::External, node.inError);
+                    nameUnit, DefKind::Function, Linkage::External, node.inError);
     }
   }
 
@@ -209,7 +217,7 @@ private:
         continue; // the interner is full; nothing can be added anyway
       }
       const DefId id = insertDef(map_.fileScope, Namespace::Ordinary, name, nowhere, nowhere,
-                                 DefKind::Constant, Linkage::None, /*inError=*/false);
+                                 nowhere, DefKind::Constant, Linkage::None, /*inError=*/false);
       if (id.valid() && id.index < map_.defs.size()) {
         map_.defs[id.index].predefined = true;
       }
@@ -275,7 +283,7 @@ private:
         continue; // the parser already reported the missing name
       }
       (void)insertDef(functionScope, Namespace::Ordinary, name.name, param.origin, name.origin,
-                      DefKind::Parameter, Linkage::None, param.inError || name.inError);
+                      name.unit, DefKind::Parameter, Linkage::None, param.inError || name.inError);
     }
   }
 
@@ -375,8 +383,8 @@ private:
       return; // the parser reported the missing name
     }
     const DefKind kind = self.kind == NodeKind::ConstStmt ? DefKind::Constant : DefKind::Variable;
-    (void)insertDef(scope, Namespace::Ordinary, name.name, self.origin, name.origin, kind,
-                    Linkage::None, self.inError);
+    (void)insertDef(scope, Namespace::Ordinary, name.name, self.origin, name.origin, name.unit,
+                    kind, Linkage::None, self.inError);
   }
 
   void resolveName(AstId path, ScopeId scope) {

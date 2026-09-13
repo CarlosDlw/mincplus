@@ -97,8 +97,23 @@ inline constexpr ScopeId kInvalidScopeId{};
 struct Def {
   // The whole declaration, for "declared here".
   support::Span span;
-  // Just the name, for a caret and for `source_to_def`.
+  // Just the name, as it was *written*, for a caret and for `source_to_def`.
   support::Span nameSpan;
+  // The same name's range in the unit text, and the key a later stage looks a
+  // declaration node up by.
+  //
+  // A written span is not unique, and that is not a corner case: a macro that
+  // expands one argument into two names
+  //
+  //   #define PAIR(b) let b: i32; let CONCAT(b, 2): i32;
+  //
+  // gives both declarations the *same* written location -- the argument they
+  // both came from -- so a map keyed on it answers with the wrong definition,
+  // and it does so silently. That is a real bug this field exists to close: the
+  // second name's type was never recorded, and a use of it typed as the poison
+  // with no diagnostic at all. Unit offsets are one token each, so the pair is
+  // unique.
+  support::Span unitSpan;
   support::SymId name = support::kInvalidSym;
   DefKind kind = DefKind::Variable;
   ScopeId scope;

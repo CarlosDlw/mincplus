@@ -58,12 +58,25 @@ Checker::Checker(const ast::LoweredFile& file, const resolve::DefMap& defs,
     (void)inserted;
   }
 
-  // Declarations, indexed the same way, for the reverse direction: from a
-  // declaration's `Name` node to the def the resolver created for it.
+  // Declarations, indexed for the reverse direction: from a declaration's
+  // `Name` node to the def the resolver created for it.
+  //
+  // This is the indexed form of `resolve::defOfNameNode` -- the same rule, keyed
+  // on the *unit* offset instead of scanned, because this stage asks it once per
+  // declaration and the scan would be quadratic in the unit's size. The rule:
+  // the unit offset is one token each, while the written span is not, because a
+  // macro can give two names one written location (see `Def::unitSpan`). If the
+  // rule changes, both places change.
+  //
+  // A predefined name has no declaration to point at, so it is left out rather
+  // than parked at offset 0 where a real name could land.
   for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
     const resolve::Def& def = defs_.defs[i];
-    defByNameOffset_.emplace(keyOf(def.nameSpan.file, def.nameSpan.begin),
-                             resolve::DefId{def.nameSpan.file, static_cast<std::uint32_t>(i)});
+    if (def.predefined) {
+      continue;
+    }
+    defByNameOffset_.emplace(keyOf(def.unitSpan.file, def.unitSpan.begin),
+                             resolve::DefId{def.unitSpan.file, static_cast<std::uint32_t>(i)});
   }
 
   // The language's predefined names. `resolve` bound them; their *types* are
@@ -81,6 +94,12 @@ Checker::Checker(const ast::LoweredFile& file, const resolve::DefMap& defs,
           support::ConstInt::fromSigned(symbols_.lookup(def.name) == "true" ? 1 : 0);
     }
   }
+}
+
+// --- text --------------------------------------------------------------------
+
+std::string Checker::valueText(support::ConstInt value) {
+  return value.isUnsigned ? std::to_string(value.bits) : std::to_string(value.signedValue());
 }
 
 // --- artifact writes ---------------------------------------------------------
@@ -195,16 +214,19 @@ std::optional<resolve::DefId> Checker::defAtName(ast::AstId nameNode) const {
   if (!nameNode.valid()) {
     return std::nullopt;
   }
-  const support::Span span = origin(nameNode);
-  const auto found = defByNameOffset_.find(keyOf(span.file, span.begin));
+  // The unit offset first: it is one token each, so it identifies the
+  // declaration even when the preprocessor gave two names one written location.
+  const support::Span unit = file_.at(nameNode).unit;
+  const auto found = defByNameOffset_.find(keyOf(unit.file, unit.begin));
   if (found != defByNameOffset_.end()) {
     return found->second;
   }
-  // A synthetic declaration (an inserted token) has no exact start; fall back to
-  // containment, which also keeps a declaration written by a macro working.
+  // A synthetic declaration (an inserted token) may have no unit range; fall
+  // back to the written span, which is exact whenever nothing was expanded.
+  const support::Span span = origin(nameNode);
   for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
     const resolve::Def& def = defs_.defs[i];
-    if (def.nameSpan.file != span.file) {
+    if (def.predefined || def.nameSpan.file != span.file) {
       continue;
     }
     if (def.nameSpan.begin >= span.begin && def.nameSpan.end <= span.end) {
@@ -379,8 +401,21 @@ TypeId Checker::adaptTo(TypeId type, TypeId expected, ast::AstId at, const ExprI
     }
     if (types_.isInteger(expected)) {
       if (info.hasIntValue && !fitsIn(types_, expected, info.value)) {
-        error(at, SemaErrorCode::LiteralOutOfRange,
-              "this integer literal does not fit in `" + types_.spelling(expected) + "`");
+        // Two mistakes, two sentences. A literal too large for its type is one
+        // token the reader wrote; a value that came out of folding
+        // (`2147483647 + 1`) is a constant expression, and saying "this integer
+        // literal" about it would blame a token the program never wrote. Both
+        // are errors: the runtime operation is defined to wrap, but a constant
+        // the compiler can see does not fit is a mistake it can point at, and
+        // every language that defines wrapping still refuses this one.
+        if (kindOf(at) == ast::NodeKind::LiteralExpr) {
+          error(at, SemaErrorCode::LiteralOutOfRange,
+                "this integer literal does not fit in `" + types_.spelling(expected) + "`");
+        } else {
+          error(at, SemaErrorCode::ConstantOutOfRange,
+                "this constant expression evaluates to `" + valueText(info.value) +
+                    "`, which does not fit in `" + types_.spelling(expected) + "`");
+        }
         return kTypeError;
       }
       return expected;
@@ -527,6 +562,12 @@ void Checker::checkFunction(const FunctionInfo& info) {
   currentReturn_ = info.returnType;
   currentFunctionName_ = info.name;
   checkBody(info.body, info.returnType);
+
+  // Definite assignment runs over the body the walk just finished, because the
+  // one thing it needs from the walk -- the folded value of a condition, to know
+  // whether a loop can fall out of the bottom -- is only complete now. It is a
+  // separate pass and not a thread through the walk: see `check_flow.cc`.
+  checkDefiniteAssignment(info.body);
 
   if (!types_.isVoid(info.returnType) && !types_.isError(info.returnType) &&
       !terminates(info.body)) {

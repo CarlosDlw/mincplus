@@ -131,6 +131,52 @@ private:
   // they were written, so the loop nesting is tracked as the walk descends.
   std::uint32_t loopDepth_ = 0;
 
+  // --- definite assignment ---------------------------------------------------
+  //
+  // A binding with no initializer holds no value, and this is what proves it is
+  // never read that way. The analysis is a *separate pass* over the body and not
+  // a thread through the typing walk, for two reasons: an assignment is an
+  // expression, so the state has to move left to right *inside* an expression,
+  // and a name being stored into is not a name being read, which is a
+  // distinction the typing walk does not make when it types the target.
+  //
+  // The rules are the ones every production language with this check uses (JLS
+  // 16, the C# and Swift specs): the state is a set of assigned definitions, a
+  // conditional merges by *intersection* because only one side runs, a loop is
+  // analyzed with the state from before it because it can run zero times, and a
+  // loop whose condition is constantly true is left only by `break`, so its exit
+  // state is the intersection of the states at its own breaks. No fixpoint and
+  // no CFG: the shape of the language is enough, which is what keeps the answer
+  // exact in step with what the checker already knows about reachability.
+  //
+  // One slot per definition in the unit; whether a slot is meaningful is
+  // decided by the definition's kind (`Variable` and nothing else can be
+  // unassigned).
+  using AssignmentSet = std::vector<bool>;
+  using BreakStates = std::vector<AssignmentSet>;
+
+  void checkDefiniteAssignment(ast::AstId body);
+  void flowStatement(ast::AstId stmt);
+  void flowExpression(ast::AstId expr);
+  // The target of a plain assignment: a store, not a load. Reads inside it (a
+  // pointer being dereferenced, later) still count, which is why it is not
+  // simply skipped.
+  void flowStoreTarget(ast::AstId place);
+  void markAssigned(ast::AstId place);
+  void reportIfUnassigned(resolve::DefId def, ast::AstId at);
+  // The state after a loop leaves, from the state at its entry and the states at
+  // the `break`s aimed at it.
+  [[nodiscard]] AssignmentSet loopExit(const AssignmentSet& entry, const BreakStates& breaks,
+                                       ast::AstId condition);
+  AssignmentSet assigned_;
+  // Which definitions have already been reported. One mistake, one
+  // diagnostic: a binding nobody assigned and read five times is one thing to
+  // fix, and the five reads are one sentence rather than five.
+  AssignmentSet reportedUnassigned_;
+  // One per nested loop, innermost last: a `break` is recorded in the list of
+  // the loop it belongs to, which a stack decides without a second scan.
+  std::vector<BreakStates> breakStack_;
+
   // --- types -----------------------------------------------------------------
 
   // The words of a `Type` node, in source order.
@@ -200,6 +246,13 @@ private:
   // and a description otherwise, so no diagnostic says "this expression" about
   // something the reader can see is a name.
   [[nodiscard]] std::string nameOf(ast::AstId expr) const;
+
+  // A folded value as the digits the reader would have written for it. Signedness
+  // decides how the two's-complement bits are read; printing the raw bits of a
+  // negative value would put `18446744073709551615` in a message about `-1`.
+  // Here rather than in one file because two diagnostics print a value and the
+  // two spellings must not drift.
+  [[nodiscard]] static std::string valueText(support::ConstInt value);
 
   // How deep the checker will follow a tree before it stops and reports. The
   // lowered tree's depth is bounded by the parser, which asserts the same bound

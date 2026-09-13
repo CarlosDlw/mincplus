@@ -1,0 +1,129 @@
+// Definite assignment, and the integer edges.
+//
+// `let x: T;` declares a binding and gives it no value. That is the C idiom --
+// declare, then assign in the branch that knows the answer -- and it is legal
+// here, but reading `x` on a path that never assigned it is an error
+// (`sema-use-before-assignment`), not a warning and not a run-time surprise.
+// The rule is exact for this grammar's constructs, so a program that assigns on
+// every path is accepted and a program that does not is refused.
+
+// The merge of two arms: only one of them runs, so a binding is proved only when
+// *both* arms end with it assigned.
+fn i32 grade(score: i32)
+{
+  let letter: i32;
+
+  if score >= 60
+  {
+    letter = 1;
+  }
+  else
+  {
+    letter = 0;
+  }
+
+  return letter;
+}
+
+// A chain merges arm by arm, and the last arm has to count as much as the first.
+fn i32 sign(value: i32)
+{
+  let result: i32;
+
+  if value < 0
+  {
+    result = 0 - 1;
+  }
+  else if value == 0
+  {
+    result = 0;
+  }
+  else
+  {
+    result = 1;
+  }
+
+  return result;
+}
+
+// A loop may run zero times, so an assignment inside the body proves nothing
+// *after* the loop. Inside the body it is proved from that point on, which is
+// what makes the accumulation below work.
+fn i32 sumTo(n: i32)
+{
+  let total: i32 = 0;
+  let i: i32 = 0;
+
+  while i <= n
+  {
+    total = total + i;
+    i = i + 1;
+  }
+
+  return total;
+}
+
+// `while true` cannot be left by falling out of the bottom, so the only paths
+// that reach the code after it are its `break`s -- which is what makes this
+// accepted, and is the idiom the rule exists to allow.
+fn i32 firstPowerOfTwoAtLeast(limit: i32)
+{
+  let value: i32;
+  let power: i32 = 1;
+
+  while true
+  {
+    if power >= limit
+    {
+      value = power;
+      break;
+    }
+
+    power = power * 2;
+  }
+
+  return value;
+}
+
+// A store is not a read, and the right side is read before it is stored: this
+// is accepted because `count = count + 1` only ever reads a `count` that has a
+// value.
+fn i32 countDown(from: i32)
+{
+  let count: i32;
+  let steps: i32 = 0;
+
+  count = from;
+
+  while count > 0
+  {
+    count = count - 1;
+    steps += 1;
+  }
+
+  return steps;
+}
+
+// The integer edges. A *runtime* operation wraps, two's complement, and the
+// lowering may not promise otherwise -- so this is accepted, and its answer is
+// the wrapped one. The same expression written as a constant the compiler can
+// fold (`2147483647 + 1`) is an error instead, because a constant the compiler
+// can see does not fit is a mistake it can point at.
+fn i32 wrapAround()
+{
+  let biggest: i32 = 2147483647;
+  biggest += 1;
+  return biggest;
+}
+
+fn i32 main()
+{
+  let a: i32 = grade(75);
+  let b: i32 = sign(0 - 5);
+  let c: i32 = sumTo(4);
+  let d: i32 = firstPowerOfTwoAtLeast(9);
+  let e: i32 = countDown(3);
+  let f: i32 = wrapAround();
+
+  return a + b + c + d + e + f;
+}

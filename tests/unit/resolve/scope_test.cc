@@ -293,5 +293,55 @@ TEST(ScopeTest, ResolutionIsDeterministic) {
   EXPECT_EQ(first.resolveWarningCodes(), second.resolveWarningCodes());
 }
 
+// A macro that expands one argument into two names gives both declarations the
+// *same* written location -- the argument they both came from -- so a written
+// span identifies neither of them. The unit range is what tells them apart, and
+// this is the case `Def::unitSpan` exists for: without it the second name's
+// lookup answers with the first declaration, and it does so silently, because
+// both declarations are legal.
+TEST(ScopeTest, TwoNamesFromOneMacroArgumentAreTwoDeclarations) {
+  ResolveFixture f;
+  f.source("#define CONCAT(a, b) a ## b\n"
+           "#define PAIR(b) let b: i32 = 1; let CONCAT(b, 2): i32 = 2;\n"
+           "fn i32 main()\n"
+           "{\n"
+           "  PAIR(a)\n"
+           "  return a + a2;\n"
+           "}\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_TRUE(f.ppErrors().empty());
+  ASSERT_TRUE(f.parseErrors().empty());
+  ASSERT_TRUE(f.astErrorCodes().empty());
+
+  const resolve::Def* a = f.defNamed("a");
+  const resolve::Def* a2 = f.defNamed("a2");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(a2, nullptr);
+  // One written location, two declarations: exactly the pair a written-span key
+  // cannot tell apart.
+  EXPECT_EQ(a->nameSpan, a2->nameSpan);
+  // And two unit ranges, one token each, which is what does tell them apart.
+  EXPECT_NE(a->unitSpan, a2->unitSpan);
+
+  // The node lookup answers with the declaration each `Name` node belongs to,
+  // and not with the first declaration that happens to share its location.
+  std::size_t found = 0;
+  for (std::uint32_t i = 0; i < f.lowered().nodeCount(); ++i) {
+    const ast::AstId id{i};
+    if (f.lowered().at(id).kind != ast::NodeKind::Name) {
+      continue;
+    }
+    const std::optional<resolve::DefId> def = resolve::defOfNameNode(f.map(), f.lowered(), id);
+    ASSERT_TRUE(def.has_value());
+    const resolve::Def& declaration = f.map().def(*def);
+    if (declaration.name != a->name && declaration.name != a2->name) {
+      continue; // `main`, the only other declaration here
+    }
+    EXPECT_EQ(declaration.unitSpan, f.lowered().at(id).unit);
+    ++found;
+  }
+  EXPECT_EQ(found, 2u);
+}
+
 } // namespace
 } // namespace minc::test

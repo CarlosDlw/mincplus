@@ -88,6 +88,7 @@ minc_add_executable(minc_unit_tests
     sema/convert_test.cc
     sema/check_test.cc
     sema/errors_test.cc
+    sema/flow_test.cc
     sema/store_test.cc
     sema/examples_test.cc
     driver/cli_test.cc

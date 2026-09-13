@@ -262,6 +262,87 @@ TEST(ErrorsTest, ConstantDivisionByZeroIsDiagnosedHere) {
   }
 }
 
+// The shift count has a range and it is the width of the value moved, not the
+// range of the value: C leaves both of these undefined and the backend inherits
+// a poison value, which is a `>>` that does not shift.
+TEST(ErrorsTest, AShiftCountOutsideTheWidthIsRefused) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { return 1 << 32; }\n");
+    ASSERT_TRUE(f.build());
+    // Asserted before `firstError()` is read: the sentence is only safe to look
+    // at once there is one.
+    ASSERT_TRUE(f.hasError("sema-shift-count-out-of-range"));
+    EXPECT_EQ(f.errorCount(), 1u) << f.firstError().message;
+    EXPECT_NE(f.firstError().message.find("(32)"), std::string::npos);
+    EXPECT_NE(f.firstError().message.find("`i32`"), std::string::npos);
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { return 1 >> 40; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-shift-count-out-of-range"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { return 1 << (0 - 1); }\n");
+    ASSERT_TRUE(f.build());
+    ASSERT_TRUE(f.hasError("sema-shift-count-out-of-range"));
+    EXPECT_NE(f.firstError().message.find("negative"), std::string::npos);
+  }
+  {
+    // The width is the *left* operand's, so the same count is fine one type up.
+    SemaFixture f;
+    f.source("fn i64 f(a: i64) { return a << 40; }\nfn i32 main() { return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_EQ(f.errorCount(), 0u);
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { return 1 << 8; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_EQ(f.errorCount(), 0u);
+  }
+}
+
+// A constant that does not fit the type it is computed in is a mistake the
+// compiler can see. The runtime operation is defined to wrap, but a constant is
+// not a runtime operation -- and a value the stage hands on but cannot represent
+// is exactly the gap the IR would inherit.
+TEST(ErrorsTest, AConstantThatDoesNotFitItsTypeIsRefused) {
+  {
+    // Through a `const`, so the operands already have a real type and nothing
+    // downstream would re-check the result.
+    SemaFixture f;
+    f.source("fn i32 main() { const m = 2147483647; return m + 1; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-constant-out-of-range"));
+    EXPECT_NE(f.firstError().message.find("2147483648"), std::string::npos);
+  }
+  {
+    // `INT_MIN / -1`: the one quotient the type cannot hold.
+    SemaFixture f;
+    f.source("fn i32 main() { const m = (0 - 2147483647) - 1; return m / (0 - 1); }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-constant-out-of-range"));
+  }
+  {
+    // `INT_MIN % -1` is not that case: the remainder is representable, and it is
+    // what the language defines.
+    SemaFixture f;
+    f.source("fn i32 main() { const m = (0 - 2147483647) - 1; return m % (0 - 1); }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_EQ(f.errorCount(), 0u);
+  }
+  {
+    // A value that fits is not a finding, however it was computed.
+    SemaFixture f;
+    f.source("fn i32 main() { const m = 2147483647; return m - 1; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_EQ(f.errorCount(), 0u);
+  }
+}
+
 TEST(ErrorsTest, NoCascadeAroundAFailedExpression) {
   SemaFixture f;
   f.source("fn i32 main() { return unknown + unknown2 + 1; }\n");
@@ -344,6 +425,11 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       {"fn i32 f(void a) { return 0; }\n", false},        // void parameter
       {"fn i32 f(a: i32) { return a; }\nfn i32 main() { return f(); }\n", false},
       {"fn i32 f(a: i32) { return a; }\nfn i32 main() { return f(\"x\"); }\n", false},
+      // A constant expression whose value does not fit the type it is computed
+      // in, through a `const` so nothing downstream re-checks it.
+      {"fn i32 main() { const m = 2147483647; return m + 1; }\n", false},
+      {"fn i32 main() { return 1 << 32; }\n", false},
+      {"fn i32 main() { let x: i32; return x; }\n", false},
   };
 
   for (const Case& one : cases) {

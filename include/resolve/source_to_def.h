@@ -30,8 +30,13 @@ namespace minc::resolve {
 [[nodiscard]] std::optional<DefId> defAt(const DefMap& map, support::FileId file,
                                          std::uint32_t offset);
 
-// The definition a name *node* declares: the one whose name span is exactly the
-// node's written span. Used by the item map, where the node is already in hand.
+// The definition a name *node* declares. Used by the item map, where the node is
+// already in hand.
+//
+// The node's *unit* range decides when it has one, because that range is one
+// token per name and stays unique; the written span does not, and a macro that
+// expands one argument into two names gives two declarations the same one. A
+// synthetic name with no unit range falls back to the written span.
 [[nodiscard]] std::optional<DefId> defOfNameNode(const DefMap& map, const ast::LoweredFile& file,
                                                  ast::AstId nameNode);
 
