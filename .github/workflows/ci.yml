@@ -36,6 +36,20 @@ jobs:
       # pkg-config, then a pinned FetchContent download. The package installs
       # above are a speed-up, not a requirement, so a runner that cannot find
       # GTest still builds.
+      #
+      # A cold ccache is the same as no ccache, so the cache is carried between
+      # runs. The key is per-platform and per-commit, and the restore prefix
+      # means a run always starts from the most recent cache for its platform;
+      # only the process-cache is reused, never the configure step.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ccache
+            ~/Library/Caches/ccache
+            ~/AppData/Local/ccache
+          key: ccache-${{ matrix.os }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.os }}-
       - name: Configure
         run: cmake --preset ci
       - name: Build
@@ -57,6 +71,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake ccache libgtest-dev
 
+      # A separate cache from the `ci` job: the sanitizer build compiles with
+      # different flags, so its objects cannot be shared with the plain one.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-sanitize-${{ github.sha }}
+          restore-keys: ccache-sanitize-
       - name: Configure
         run: cmake --preset sanitize
       - name: Build
@@ -95,8 +117,14 @@ jobs:
         # such as -fmodules-ts that it does not understand), so this job
         # configures with clang++.
         run: cmake --preset ci -DCMAKE_CXX_COMPILER=clang++
+      # The analysis, not the build, is what this job spends its time on: a
+      # single clang-tidy invocation checks its files one at a time, which is
+      # minutes of a runner sitting idle. `run-clang-tidy` drives the same tool
+      # in parallel with the same checks and the same failure exit code, so the
+      # only thing that changes is the wall clock. `make tidy` runs exactly this,
+      # with a sequential fallback for a machine that lacks the helper.
       - name: Run clang-tidy
         run: |
           clang-tidy --version
-          clang-tidy -p build/ci --warnings-as-errors='*' \
-            $(find src -name '*.cc')
+          run-clang-tidy -p build/ci -j "$(nproc)" -quiet \
+            -warnings-as-errors '*' 'src/.*\.cc'

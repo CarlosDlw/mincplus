@@ -644,16 +644,51 @@ cmake --build --preset dev
 ctest --preset dev
 ```
 
+There are two speeds, and picking the right one is most of the difference:
+
+```sh
+make quick              # build, test, format check -- the inner loop
+make gates              # everything CI runs, before a commit
+```
+
+`make quick` is one preset, so it never pays for the sanitizer build or the
+static analysis. `make gates` is `ci`, `sanitize`, `format-check` and `tidy` in
+the order CI runs them, cheapest first.
+
+### Keeping builds fast
+
+Two things dominate the wall clock, and both are the tool's configuration
+rather than the code's:
+
+- **ccache.** The same clean build of the tree takes ~106 s with an empty cache
+  and ~4 s with a warm one. The 5 GiB default is small for four presets, so
+  entries get evicted and paid for twice: `make ccache` reports the hit rate and
+  `make ccache-tune` raises the limit (`CCACHE_SIZE=20G make ccache-tune`).
+- **clang-tidy is the `tidy` gate.** Its path-sensitive checks cost seconds per
+  file and one `clang-tidy` invocation walks them one at a time. `make tidy`
+  therefore uses `run-clang-tidy -j` when it is installed -- same checks, same
+  `--warnings-as-errors`, same non-zero exit on a finding -- and falls back to
+  the sequential invocation when it is not. On the reference machine that is
+  ~6m20s against ~1m50s for the same result.
+
+Note that `dev` and `ci` produce identical objects apart from `-Werror`, which
+ccache does key on, so they do not share cache entries. Iterating with `dev` and
+running `make gates` before a commit costs one build of each; running `make dev`
+*and* `make ci` pays for the same compile twice.
+
 ## Checks
 
 ```sh
 # Formatting (matches the CI job)
-find include src tests \( -name '*.h' -o -name '*.cc' \) -print0 \
-  | xargs -0 clang-format --dry-run --Werror
+make format-check
 
 # Static analysis (needs a configured build for compile_commands.json)
-clang-tidy -p build/dev $(find src -name '*.cc')
+make tidy
 ```
+
+Both are wrapped by `make gates`; the underlying commands are
+`clang-format --dry-run --Werror` over `include src tests` and
+`run-clang-tidy -p build/tidy` over `src`.
 
 ```sh
 # AddressSanitizer + UndefinedBehaviorSanitizer over the whole project
