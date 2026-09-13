@@ -76,14 +76,18 @@ TEST(CheckTest, CSpellingsAndPrimitiveNamesAreOneType) {
 }
 
 TEST(CheckTest, TheTargetDecidesWhatLongMeans) {
+  const std::optional<sema::TargetInfo> linux = sema::targetFromName(sema::kTripleLinuxAmd64);
+  const std::optional<sema::TargetInfo> windows = sema::targetFromName(sema::kTripleWindowsAmd64);
+  ASSERT_TRUE(linux.has_value());
+  ASSERT_TRUE(windows.has_value());
   {
-    SemaFixture f("test.mx", sema::Target::SystemVAmd64);
+    SemaFixture f("test.mx", *linux);
     f.source("fn i32 main() { let x: long = 1; return 0; }\n");
     ASSERT_TRUE(f.build());
     EXPECT_EQ(f.bindingType("x"), "i64");
   }
   {
-    SemaFixture f("test.mx", sema::Target::WindowsX64);
+    SemaFixture f("test.mx", *windows);
     f.source("fn i32 main() { let x: long = 1; return 0; }\n");
     ASSERT_TRUE(f.build());
     EXPECT_EQ(f.bindingType("x"), "i32");

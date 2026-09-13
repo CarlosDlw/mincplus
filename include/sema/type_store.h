@@ -34,7 +34,7 @@ namespace minc::sema {
 
 class TypeStore {
 public:
-  explicit TypeStore(TargetInfo target = targetInfo(kDefaultTarget),
+  explicit TypeStore(TargetInfo target = defaultTarget(),
                      std::size_t maxTypes = support::kMaxTypesPerUnit);
   TypeStore(const TypeStore&) = delete;
   TypeStore& operator=(const TypeStore&) = delete;

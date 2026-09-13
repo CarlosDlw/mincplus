@@ -61,10 +61,12 @@ Five commands, five views, one pipeline — each names the stage it shows:
 `-D name[=body]`, `-U name` and `-I dir` are front-end options, so every command
 that preprocesses accepts them, and a `-D` is a real source file
 (`<command line>`) so a caret on a command-line token points at something a
-reader can find. `--target systemv-amd64|windows-x64` (`check`) picks the ABI the
-C type spellings mean against, so `long` is 64 bits on the first and 32 on the
-second — the width is read from a table, never from the machine running the
-compiler.
+reader can find. `--target TRIPLE` (`check`) picks the target the C type
+spellings are read against, as an LLVM triple: `--target
+x86_64-unknown-linux-gnu` (the default) makes `long` 64 bits and
+`--target x86_64-pc-windows-msvc` makes it 32 — the width is read from a table
+keyed on the triple, never from the machine running the compiler. A triple the
+compiler does not state is an error that says why, never a silent fallback.
 
 ```console
 $ mincc lex examples/002_variables.mx
@@ -165,7 +167,7 @@ $ mincc check --stats examples/002_variables.mx
 # examples/002_variables.mx  (scopes 2, defs 5, refs 1, functions 1)  0 error(s), 0 warning(s)
 
 $ mincc check --types examples/002_variables.mx
-# types 21  target systemv-amd64  long=64  pointer=64
+# types 21  target x86_64-unknown-linux-gnu  long=64  pointer=64
   #0  <error>  error  size=0  align=0
   #1  void  void  size=0  align=0
   ...
@@ -186,8 +188,8 @@ $ echo $?
 given, so the two dumps differ by exactly what this stage added; it also prints
 the **conversions** it recorded and the **operation type** of a compound
 assignment (`[op=i32]`), because those are the two facts the IR cannot
-guarantee to re-derive; `--target windows-x64` reads the C spellings against
-LLP64 (where `long` is 32 bits), and `-Wconversion` reports the implicit
+guarantee to re-derive; `--target x86_64-pc-windows-msvc` reads the C spellings
+against LLP64 (where `long` is 32 bits), and `-Wconversion` reports the implicit
 narrowing that C allows silently.
 
 ```console

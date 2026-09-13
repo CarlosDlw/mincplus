@@ -32,7 +32,7 @@ std::uint64_t mix(std::uint64_t hash, std::uint64_t value) {
 } // namespace
 
 TypeStore::TypeStore(TargetInfo target, std::size_t maxTypes)
-    : target_(target), maxTypes_(maxTypes) {
+    : target_(std::move(target)), maxTypes_(maxTypes) {
   // Registration order *is* the constant list in `sema/type.h`. Appending here
   // without adding a constant (or the reverse) is caught by the test that
   // asserts `count() == kFirstInternedType` and by every test that names a

@@ -411,9 +411,16 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
 - [ ] A verifier pass after lowering, so a mistake in this stage is a diagnostic
       here and not a miscompile two stages down
 - [ ] Debug-info hooks so source locations survive into the backend
-- [ ] `include/sema/target.h`'s two-name enum becomes a **triple**, carrying the
-      ABI facts the front end actually needs (`long`'s width, and later `char`'s
-      signedness) rather than being the source of truth about targets
+- [x] `include/sema/target.h`'s two-name enum became a **triple**: the identity
+      is now the canonical LLVM spelling (`x86_64-unknown-linux-gnu`), which is
+      the string `codegen` has to hand to a `TargetMachine` anyway, so there is
+      no second spelling of one target. The ABI facts (`long`, `long double`,
+      the pointer width for `isize`/`usize`) are derived **by rule from the
+      components** -- LP64/ILP32 on the Unices, 32 on Windows, x87 on System V,
+      `double` on Darwin, binary128 on AArch64/RISC-V -- and a triple the table
+      does not state, an architecture it does not name, or a shape that is
+      ambiguous (`x86_64-linux-gnu` is `arch-os-env`, not `arch-vendor-os`) is
+      **refused with a sentence** instead of silently defaulted
 
 ## 7. Codegen — `src/backend/llvm` (isolated)
 

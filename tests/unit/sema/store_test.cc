@@ -45,7 +45,7 @@ TEST(SemaStoreTest, AStructurallyIdenticalUnitStillRechecksOnANewRevision) {
   ASSERT_TRUE(before.build());
   ASSERT_TRUE(after.build());
 
-  sema::Context context(sema::targetInfo(sema::kDefaultTarget));
+  sema::Context context(sema::defaultTarget());
   (void)context.check(0, 0, before.lowered(), before.map(), before.symbols());
   (void)context.check(0, 1, after.lowered(), after.map(), after.symbols());
 
@@ -104,13 +104,18 @@ TEST(SemaStoreTest, TheTargetBelongsToTheStore) {
   f.source("fn i32 main() { let x: long = 1; return 0; }\n");
   ASSERT_TRUE(f.build());
 
-  sema::Context sysv(sema::targetInfo(sema::Target::SystemVAmd64));
+  const std::optional<sema::TargetInfo> sysvTarget = sema::targetFromName(sema::kTripleLinuxAmd64);
+  ASSERT_TRUE(sysvTarget.has_value());
+  sema::Context sysv(*sysvTarget);
   const sema::SemaOutput* a = sysv.check(0, 0, f.lowered(), f.map(), f.symbols());
   ASSERT_NE(a, nullptr);
   // The context's store decided `long`, and it is the one the answer indexes.
   EXPECT_EQ(sysv.types().target().longBits, 64u);
 
-  sema::Context windows(sema::targetInfo(sema::Target::WindowsX64));
+  const std::optional<sema::TargetInfo> windowsTarget =
+      sema::targetFromName(sema::kTripleWindowsAmd64);
+  ASSERT_TRUE(windowsTarget.has_value());
+  sema::Context windows(*windowsTarget);
   (void)windows.check(0, 0, f.lowered(), f.map(), f.symbols());
   EXPECT_EQ(windows.types().target().longBits, 32u);
 }

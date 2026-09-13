@@ -73,9 +73,12 @@ struct CliOptions {
   // nothing on success without it.
   bool stats = false;
   // `--target`: the ABI the C type spellings and the layout are read against.
-  // A name, resolved through `sema/target.h`, so a target can only mean the row
-  // that table prints for it.
-  std::string target = "systemv-amd64";
+  // A triple, resolved through `sema/target.h`, so a target can only mean the row
+  // that table states for it. The spelling here is the default triple, and the
+  // parser deliberately does not include `sema` for one constant -- a test
+  // asserts this string equals `sema::kDefaultTriple`, so the duplication is
+  // checked rather than trusted.
+  std::string target = "x86_64-unknown-linux-gnu";
   // `-Wunused`, `-Wshadow`. Off by default, like every other warning here: a
   // compiler that warns about ordinary code teaches people to ignore it.
   bool warnUnused = false;

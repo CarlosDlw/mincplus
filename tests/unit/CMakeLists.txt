@@ -85,6 +85,7 @@ minc_add_executable(minc_unit_tests
     resolve/errors_test.cc
     resolve/store_test.cc
     sema/type_test.cc
+    sema/target_test.cc
     sema/convert_test.cc
     sema/coerce_test.cc
     sema/check_test.cc

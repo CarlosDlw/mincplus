@@ -47,9 +47,11 @@ public:
   // The target is fixed at construction because the `TypeStore` stores it: a
   // type's width is a property of the target it was read against, so changing
   // the target mid-fixture would leave types in the store that mean something
-  // else.
-  explicit SemaFixture(std::string name = "test.mx", sema::Target target = sema::kDefaultTarget)
-      : name_(std::move(name)), store_(sema::targetInfo(target)) {}
+  // else. It is a `TargetInfo` and not a name, so a test that wants another
+  // target asks the one parser a user's `--target` goes through.
+  explicit SemaFixture(std::string name = "test.mx",
+                       sema::TargetInfo target = sema::defaultTarget())
+      : name_(std::move(name)), store_(std::move(target)) {}
 
   SemaFixture(const SemaFixture&) = delete;
   SemaFixture& operator=(const SemaFixture&) = delete;

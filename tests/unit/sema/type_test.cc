@@ -64,28 +64,22 @@ TEST(TypeStoreTest, AFunctionTypeIsIdentifiedByItsSignature) {
 }
 
 TEST(TypeStoreTest, SizesFollowTheTarget) {
-  TypeStore sysv{targetInfo(Target::SystemVAmd64)};
+  const std::optional<TargetInfo> sysvTarget = targetFromName(kTripleLinuxAmd64);
+  ASSERT_TRUE(sysvTarget.has_value());
+  TypeStore sysv{*sysvTarget};
   EXPECT_EQ(sysv.sizeOf(kTypeI64), 8u);
   EXPECT_EQ(sysv.sizeOf(kTypeF80), 16u); // 10 bytes of value in a 16-byte slot
   EXPECT_EQ(sysv.sizeOf(kTypeStr), 8u);  // a pointer
   EXPECT_EQ(sysv.sizeOf(kTypeVoid), 0u); // no object representation
   EXPECT_EQ(sysv.sizeOf(kTypeError), 0u);
 
-  TypeStore windows{targetInfo(Target::WindowsX64)};
+  const std::optional<TargetInfo> windowsTarget = targetFromName(kTripleWindowsAmd64);
+  ASSERT_TRUE(windowsTarget.has_value());
+  TypeStore windows{*windowsTarget};
   // Same widths for these two -- the difference is the *spelling* `long`, which
   // the specifier reader resolves, not the types themselves.
   EXPECT_EQ(windows.sizeOf(kTypeI64), 8u);
   EXPECT_EQ(windows.target().longBits, 32u);
-}
-
-TEST(TargetTest, EveryTargetRoundTripsThroughItsName) {
-  for (const Target target : {Target::SystemVAmd64, Target::WindowsX64}) {
-    const std::optional<Target> parsed = targetFromName(toString(target));
-    ASSERT_TRUE(parsed.has_value()) << toString(target);
-    EXPECT_EQ(*parsed, target);
-  }
-  EXPECT_FALSE(targetFromName("some-other-abi").has_value());
-  EXPECT_FALSE(targetFromName("").has_value());
 }
 
 TEST(TypeSpecTest, ThePrimitivesAreWholeTypes) {
@@ -119,7 +113,9 @@ TEST(TypeSpecTest, PointerSizedSpellingsResolveToThePointerType) {
 }
 
 TEST(TypeSpecTest, TheCWidthsComeFromTheTargetAndNotTheHost) {
-  TypeStore sysv{targetInfo(Target::SystemVAmd64)};
+  const std::optional<TargetInfo> sysvTarget = targetFromName(kTripleLinuxAmd64);
+  ASSERT_TRUE(sysvTarget.has_value());
+  TypeStore sysv{*sysvTarget};
   EXPECT_EQ(readTypeSpec(words({"long"}), sysv).type, kTypeI64);
   EXPECT_EQ(readTypeSpec(words({"long", "long"}), sysv).type, kTypeI64);
   EXPECT_EQ(readTypeSpec(words({"int"}), sysv).type, kTypeI32);
@@ -130,7 +126,9 @@ TEST(TypeSpecTest, TheCWidthsComeFromTheTargetAndNotTheHost) {
   EXPECT_EQ(readTypeSpec(words({"unsigned"}), sysv).type, kTypeU32);
   EXPECT_EQ(readTypeSpec(words({"long", "double"}), sysv).type, kTypeF80);
 
-  TypeStore windows{targetInfo(Target::WindowsX64)};
+  const std::optional<TargetInfo> windowsTarget = targetFromName(kTripleWindowsAmd64);
+  ASSERT_TRUE(windowsTarget.has_value());
+  TypeStore windows{*windowsTarget};
   // LLP64: `long` is 32 bits even though a pointer is 64.
   EXPECT_EQ(readTypeSpec(words({"long"}), windows).type, kTypeI32);
   EXPECT_EQ(readTypeSpec(words({"unsigned", "long"}), windows).type, kTypeU32);
@@ -148,7 +146,9 @@ TEST(TypeSpecTest, CharTakesSignednessBecauseTheLanguageDoesNot) {
 }
 
 TEST(TypeSpecTest, TheShorthandsExpandAndCarryTheTargetRule) {
-  TypeStore sysv{targetInfo(Target::SystemVAmd64)};
+  const std::optional<TargetInfo> sysvTarget = targetFromName(kTripleLinuxAmd64);
+  ASSERT_TRUE(sysvTarget.has_value());
+  TypeStore sysv{*sysvTarget};
   EXPECT_EQ(readTypeSpec(words({"uint"}), sysv).type, kTypeU32);
   EXPECT_EQ(readTypeSpec(words({"__int128"}), sysv).type, kTypeI128);
   EXPECT_EQ(readTypeSpec(words({"unsigned", "__int128"}), sysv).type, kTypeU128);

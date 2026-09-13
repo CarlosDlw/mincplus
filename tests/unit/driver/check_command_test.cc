@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -28,7 +29,7 @@ struct CheckRun {
 
 [[nodiscard]] CheckRun run(const std::vector<std::string>& inputs, bool showAst = false,
                            bool showTypes = false, bool stats = false,
-                           sema::Target target = sema::kDefaultTarget,
+                           sema::TargetInfo target = sema::defaultTarget(),
                            bool warnConversion = false) {
   CheckRequest request;
   request.inputs = inputs;
@@ -127,8 +128,11 @@ TEST(CheckCommandTest, TheTargetChangesWhatALongIs) {
   EXPECT_EQ(sysv.code, exitCode(ExitCode::Ok));
   EXPECT_NE(sysv.out.find("long=64"), std::string::npos);
 
+  const std::optional<sema::TargetInfo> windowsTarget =
+      sema::targetFromName(sema::kTripleWindowsAmd64);
+  ASSERT_TRUE(windowsTarget.has_value());
   const CheckRun windows = run({file.path()}, /*showAst=*/false, /*showTypes=*/true,
-                               /*stats=*/false, sema::Target::WindowsX64);
+                               /*stats=*/false, *windowsTarget);
   EXPECT_EQ(windows.code, exitCode(ExitCode::Ok));
   EXPECT_NE(windows.out.find("long=32"), std::string::npos);
 }
@@ -139,7 +143,8 @@ TEST(CheckCommandTest, TypesPrintsTheTableAndNothingElse) {
 
   EXPECT_EQ(result.code, exitCode(ExitCode::Ok));
   EXPECT_NE(result.out.find("# types "), std::string::npos);
-  EXPECT_NE(result.out.find("systemv-amd64"), std::string::npos);
+  // The target line names the triple, because the triple *is* the identity.
+  EXPECT_NE(result.out.find(std::string(sema::kDefaultTriple)), std::string::npos);
   EXPECT_NE(result.out.find("i32"), std::string::npos);
   // No per-file summary: the table was what was asked for.
   EXPECT_EQ(result.out.find("0 error(s)"), std::string::npos);
@@ -166,8 +171,8 @@ TEST(CheckCommandTest, ConversionIsAWarningAndKeepsTheExitCode) {
   EXPECT_EQ(without.err.find("sema-implicit-conversion"), std::string::npos);
 
   TempFile loud("minc_check_loud.mx", source);
-  const CheckRun with = run({loud.path()}, /*showAst=*/false, /*showTypes=*/false,
-                            /*stats=*/true, sema::kDefaultTarget, /*warnConversion=*/true);
+  const CheckRun with = run({loud.path()}, /*showAst=*/false, /*showTypes=*/false, /*stats=*/true,
+                            sema::defaultTarget(), /*warnConversion=*/true);
   // A warning is not a failure: scripts that treat exit 1 as "does not compile"
   // must keep working.
   EXPECT_EQ(with.code, exitCode(ExitCode::Ok));

@@ -85,7 +85,7 @@ struct SemaOutput {
 
 class Context {
 public:
-  explicit Context(TargetInfo target = targetInfo(kDefaultTarget));
+  explicit Context(TargetInfo target = defaultTarget());
   Context(const Context&) = delete;
   Context& operator=(const Context&) = delete;
 

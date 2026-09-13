@@ -66,8 +66,7 @@ namespace {
 
 std::string dumpTypeStore(const TypeStore& types) {
   std::string out;
-  out += "# types " + std::to_string(types.count()) + "  target " +
-         std::string(toString(types.target().target)) +
+  out += "# types " + std::to_string(types.count()) + "  target " + types.target().name() +
          "  long=" + std::to_string(types.target().longBits) +
          "  pointer=" + std::to_string(types.target().pointerBits) + "\n";
   for (std::uint32_t i = 0; i < types.count(); ++i) {

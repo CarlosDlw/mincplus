@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 #include "checker.h"
 #include "sema/type_store.h"
@@ -34,7 +35,7 @@ SemaOutput checkUnit(const ast::LoweredFile& file, const resolve::DefMap& defs,
   return checker.run();
 }
 
-Context::Context(TargetInfo target) : types_(target) {}
+Context::Context(TargetInfo target) : types_(std::move(target)) {}
 
 const SemaOutput* Context::check(support::FileId file, std::uint32_t revision,
                                  const ast::LoweredFile& lowered, const resolve::DefMap& defs,

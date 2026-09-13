@@ -9,6 +9,9 @@
 #include "driver/exit_code.h"
 #include "driver/help_text.h"
 #include "driver/version.h"
+// Only for `kDefaultTriple`: the parser does not include `sema` for one
+// constant, and this test is what keeps the two spellings equal.
+#include "sema/target.h"
 
 namespace minc::driver {
 namespace {
@@ -236,26 +239,28 @@ TEST(HelpTextTest, ImplementedAndScaffoldedListsAreExact) {
   EXPECT_FALSE(scaffolded.empty());
 }
 
-TEST(CliTest, TheTargetOptionIsCarriedAndDefaultsToSystemV) {
+TEST(CliTest, TheTargetOptionIsCarriedAndDefaultsToTheDefaultTriple) {
   {
     const char* argv[] = {"mincc", "check", "a.mx"};
     const CliOptions opts = parseArgs(3, argv);
     EXPECT_EQ(opts.error, "");
-    EXPECT_EQ(opts.target, "systemv-amd64");
+    // The parser spells the default itself and does not include `sema` for one
+    // constant; this is the test that keeps the two spellings equal.
+    EXPECT_EQ(opts.target, std::string(sema::kDefaultTriple));
   }
   {
-    const char* argv[] = {"mincc", "check", "--target", "windows-x64", "a.mx"};
+    const char* argv[] = {"mincc", "check", "--target", "x86_64-pc-windows-msvc", "a.mx"};
     const CliOptions opts = parseArgs(5, argv);
     EXPECT_EQ(opts.error, "");
-    EXPECT_EQ(opts.target, "windows-x64");
+    EXPECT_EQ(opts.target, "x86_64-pc-windows-msvc");
   }
   {
     // `--target=name` is the same thing, because half the world writes it that
     // way and a CLI that accepts only one spelling is a paper cut.
-    const char* argv[] = {"mincc", "check", "--target=windows-x64", "a.mx"};
+    const char* argv[] = {"mincc", "check", "--target=x86_64-pc-windows-msvc", "a.mx"};
     const CliOptions opts = parseArgs(4, argv);
     EXPECT_EQ(opts.error, "");
-    EXPECT_EQ(opts.target, "windows-x64");
+    EXPECT_EQ(opts.target, "x86_64-pc-windows-msvc");
   }
   {
     const char* argv[] = {"mincc", "check", "--target", "nonsense", "a.mx"};

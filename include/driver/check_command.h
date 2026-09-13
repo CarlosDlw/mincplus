@@ -47,8 +47,10 @@ struct CheckRequest {
   std::vector<std::string> undefines;
   std::vector<std::string> includeDirs;
   std::vector<std::string> systemDirs;
-  // The ABI the type layout and the C spellings are read against.
-  sema::Target target = sema::kDefaultTarget;
+  // The ABI the type layout and the C spellings are read against. It carries the
+  // triple, so a later stage gets the target's *identity* and not just its
+  // widths -- and the identity is what selects an LLVM `TargetMachine`.
+  sema::TargetInfo target = sema::defaultTarget();
   // `--ast`: print the typed tree instead of the per-file summary.
   bool showAst = false;
   // `--types`: print only the type table.

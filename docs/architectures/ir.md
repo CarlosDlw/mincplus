@@ -255,6 +255,12 @@ is not thread-safe and types are owned by it, so a context shared between two
 units is a data race that appears only under the editor's concurrent work. One
 per unit, one per worker thread, and nothing here is a global.
 
+The **target is `sema`'s, and it is a triple.** `TargetInfo` now carries the
+canonical LLVM spelling (`x86_64-unknown-linux-gnu`) and not a name from a
+private enum, so this stage reads the identity it needs out of the typed artifact
+and never converts between two spellings of one target. The module's triple and
+its data layout both come from there; the target machine does not.
+
 The **target machine does not live here.** `ir` produces a module with a triple
 and a data layout string, which is all the lowering needs to be correct; choosing
 and owning a `TargetMachine` — the half that is expensive, target-specific and
@@ -732,6 +738,14 @@ The ladder, in the order it should be built:
    tree: each produces its named diagnostic and **no module**. "No module" is
    part of the assertion, not an implementation detail — it is the property that
    stops a half-built module from reaching a linker.
+6. **The target table against LLVM's own.** `sema`'s ABI table is stated by rule
+   from the triple's components and cannot link LLVM to check itself; this stage
+   can. One test walks every stated triple, builds an `llvm::Triple` and a
+   `DataLayout` from it, and asserts the pointer size agrees with
+   `TargetInfo::pointerBits`, that `long double`'s width agrees with the data
+   layout's float layout, and that the component names this stage parsed are the
+   ones LLVM parses. It is the one place the front end's target model can be
+   wrong without any test here noticing, so it is worth the dependency.
 
 What is deliberately *not* a test: **golden IR files**. IR here is an internal
 format whose text changes when LLVM changes, a target changes or a comment
@@ -765,6 +779,7 @@ other stages' artifacts are.
 | 18 | Debug metadata is built only under `-g`, and a broken line table is stripped rather than fatal | Metadata is a cost in the module and in every pass; and refusing to compile a correct program because its scope chain is malformed trades a breakpoint for a build |
 | 19 | No deferred literal type survives `sema`; a sweep decides whatever a seam did not | A deferred type has no width, so it has no LLVM type at all. A sweep rather than a per-seam promise, so a path nobody has written yet cannot break the property |
 | 20 | A constant is materialised at its type's width, and the language defines that width's arithmetic to wrap | Truncating a folded constant to its type is the defined semantics, not a lossy shortcut; it is what makes `ConstantInt::get` safe to call with the operand's stored value |
+| 21 | The target's identity is the **canonical LLVM triple**, stated by `sema` | It is the string a `TargetMachine` is built from, so a private name for it would be a second spelling to translate and a place for the two to disagree; and the ABI facts derive from its components **by rule**, with a triple the table does not state refused rather than defaulted |
 
 ## Non-goals
 

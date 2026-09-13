@@ -679,7 +679,7 @@ file says nothing, and the exit code is the answer.
 | `--stats` | one summary line per file: `# <path>  (scopes 2, defs 5, refs 1, functions 1)  0 error(s), 0 warning(s)` |
 | `--types` | the type table, once for the invocation: every type the compilation knows, with its spelling, size and alignment |
 | `--ast` | the typed tree: the function table as checked, then every node with the type it was given and the folded constant where there is one |
-| `--target NAME` | nothing by itself; it picks the ABI the C spellings are read against (`systemv-amd64`, `windows-x64`) |
+| `--target TRIPLE` | nothing by itself; it picks the ABI the C spellings are read against, as an LLVM triple in `arch-vendor-os[-env]` form (`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-unknown-linux-gnu`). A triple this compiler does not state, or one written in a shape that is ambiguous (`x86_64-linux-gnu`), is **refused with a sentence** rather than defaulted |
 | `-Wconversion` | nothing by itself; it warns on the implicit narrowing of the assignment conversion (off by default) |
 
 Each flag prints exactly one thing, so `--types --stats` is the table and the
@@ -726,6 +726,7 @@ answer. They are recorded in the `README.md` checklist (section *Types* and
 | 22 | Does a later stage recover a conversion from the two types it sees? | **No — every conversion is recorded as a pair, keyed on the consumer that applies it** (*What the artifact publishes*) | A shared `promote()` is one implementation of the rule, but the lowering still holds arithmetic-conversion logic, and a context-dependent conversion (an implicit receiver, a `str`-to-`slice` change) is not recoverable from a pair of types at all |
 | 23 | May a deferred literal type survive to the next stage? | **No — decided at the seam, then swept down the tree**; the examples test asserts it over every node | A deferred type has no width and therefore no LLVM mapping, so an operand left undecided is a wrong instruction, not a missing one; and the record's two ends have to be types the IR can name |
 | 24 | What decides the operands the context reaches through an operation? | **The same context, walked down from each node with a concrete type** — `1 + 2.0` in an `f64` binding is two `f64`s | The alternative (each operator typing its operands independently) makes the operation's type and its operands' disagree, and LLVM rejects `add f64` with an `i32` operand; the *checker* would have folded a value the emitted code never computes |
+| 25 | Is a target a name in a private enum or a **triple**? | **The canonical LLVM triple** (`x86_64-unknown-linux-gnu`), with the ABI facts derived from its components by rule | A two-name enum cannot name aarch64 or a 32-bit target, and the string `codegen` needs anyway would then be a second spelling to keep in step. A triple the table does not state is **refused with a sentence**; defaulting it is how a cross build becomes silently wrong |
 
 ## Non-goals
 

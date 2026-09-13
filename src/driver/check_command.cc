@@ -57,7 +57,7 @@ int checkInputs(const CheckRequest& request, std::ostream& out, std::ostream& er
   support::Session session;
   syntax::TreeStore trees(session.arena());
   resolve::ResolveStore resolves;
-  sema::Context sema(sema::targetInfo(request.target));
+  sema::Context sema(request.target);
 
   const support::DiagRenderer renderer(&session.sources(),
                                        support::RenderOptions{request.diagnosticColor, 4});
@@ -205,10 +205,14 @@ int runCheck(const CliOptions& options) {
   if (options.inputs.empty()) {
     return usageError("no input files");
   }
-  const std::optional<sema::Target> target = sema::targetFromName(options.target);
+  const std::optional<sema::TargetInfo> target = sema::targetFromName(options.target);
   if (!target.has_value()) {
+    // The *reason* comes from the parser that refused it, so the sentence and the
+    // refusal cannot be about different things; the list of stated rows is the
+    // one place a target can be read from.
     return usageError("unknown target '" + options.target +
-                      "'; known targets are 'systemv-amd64' and 'windows-x64'");
+                      "': " + sema::targetRefusal(options.target) + "; the default is '" +
+                      std::string(sema::kDefaultTriple) + "'");
   }
 
   CheckRequest request;
