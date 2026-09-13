@@ -145,6 +145,18 @@ void appendSnippet(std::ostringstream& out, const SourceFile& file, Span span,
   out << '\n';
 }
 
+// True when this diagnostic would print exactly what the one before it printed:
+// a note anchored on the same span. Same file and same byte range, because the
+// excerpt is a function of those two things -- a note one column over is a
+// different caret under the same line, and that one is worth showing.
+[[nodiscard]] bool repeatsSnippet(const Diagnostic& diag, const Diagnostic* previous) {
+  if (previous == nullptr || diag.severity != Severity::Note) {
+    return false;
+  }
+  return diag.span.file == previous->span.file && diag.span.begin == previous->span.begin &&
+         diag.span.end == previous->span.end;
+}
+
 void appendNote(std::ostringstream& out, const SourceManager* sources, const DiagNote& note) {
   const SourceFile* file = fileFor(sources, note.span.file);
   if (file != nullptr && note.span.valid()) {
@@ -161,6 +173,10 @@ DiagRenderer::DiagRenderer(const SourceManager* sources, RenderOptions options)
     : sources_(sources), options_(options) {}
 
 std::string DiagRenderer::render(const Diagnostic& diag) const {
+  return render(diag, /*withSnippet=*/true);
+}
+
+std::string DiagRenderer::render(const Diagnostic& diag, bool withSnippet) const {
   std::ostringstream out;
   const SourceFile* file = fileFor(sources_, diag.span.file);
   const bool located = file != nullptr && diag.span.valid();
@@ -182,7 +198,7 @@ std::string DiagRenderer::render(const Diagnostic& diag) const {
   }
   out << '\n';
 
-  if (located) {
+  if (located && withSnippet) {
     appendSnippet(out, *file, diag.span, options_);
   }
   for (const DiagNote& note : diag.notes) {
@@ -193,8 +209,10 @@ std::string DiagRenderer::render(const Diagnostic& diag) const {
 
 std::string DiagRenderer::renderAll(const DiagBag& bag) const {
   std::string out;
+  const Diagnostic* previous = nullptr;
   for (const Diagnostic& diag : bag.all()) {
-    out += render(diag);
+    out += render(diag, /*withSnippet=*/!repeatsSnippet(diag, previous));
+    previous = &diag;
   }
   if (bag.droppedCount() > 0) {
     out += kTruncationMarker;

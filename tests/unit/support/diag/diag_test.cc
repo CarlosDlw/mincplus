@@ -1,5 +1,6 @@
 // Copyright (c) 2026 minc+ contributors.
 // SPDX-License-Identifier: MIT
+#include <cstddef>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -11,6 +12,18 @@
 
 namespace minc::support {
 namespace {
+
+// How many times `needle` occurs in `haystack`. The excerpt tests below count
+// occurrences of a source line, which is how "the line was printed twice"
+// becomes an assertion instead of a screenshot.
+[[nodiscard]] std::size_t countOccurrences(const std::string& haystack, const std::string& needle) {
+  std::size_t count = 0;
+  for (std::size_t at = haystack.find(needle); at != std::string::npos;
+       at = haystack.find(needle, at + needle.size())) {
+    ++count;
+  }
+  return count;
+}
 
 TEST(SeverityTest, Strings) {
   EXPECT_STREQ(toString(Severity::Note), "note");
@@ -188,6 +201,59 @@ TEST(DiagRenderTest, AnsiModeColorsSeverityAndCaret) {
   EXPECT_NE(out.find("\x1b[1;31m"), std::string::npos);
   EXPECT_NE(out.find("\x1b[1;32m"), std::string::npos);
   EXPECT_NE(out.find("\x1b[0m"), std::string::npos);
+}
+
+// The bug this pins: `sema` answers an unknown type name with an error and a
+// `did you mean` note on the *same* span, so the line and the carets were printed
+// twice and the output read as two diagnostics for one mistake.
+TEST(DiagRenderTest, NoteOnTheSameSpanDoesNotRepeatTheExcerpt) {
+  SourceManager sm;
+  const FileId id = sm.addFile("n.mx", "fn isb main()").value();
+  DiagBag bag;
+  bag.error(Span(id, 3, 6), "`isb` is not a type", "sema-unknown-type");
+  bag.note(Span(id, 3, 6), "did you mean `i8`?");
+  DiagRenderer render(&sm);
+  const std::string out = render.renderAll(bag);
+  EXPECT_NE(out.find("note: did you mean `i8`?"), std::string::npos);
+  EXPECT_EQ(countOccurrences(out, "  fn isb main()\n"), 1u);
+  EXPECT_EQ(countOccurrences(out, "  " + std::string(2, ' ') + "^^^\n"), 1u);
+}
+
+// The other half of the rule: a note *elsewhere* is new information, so it keeps
+// its own excerpt -- the "look here instead" case.
+TEST(DiagRenderTest, NoteElsewhereKeepsItsOwnExcerpt) {
+  SourceManager sm;
+  const FileId id = sm.addFile("d.mx", "int a;\nint b;\n").value();
+  DiagBag bag;
+  bag.error(Span(id, 7, 10), "redefinition of `b`");
+  bag.note(Span(id, 0, 1), "previous definition of `b` is here");
+  DiagRenderer render(&sm);
+  const std::string out = render.renderAll(bag);
+  EXPECT_NE(out.find("  int a;\n"), std::string::npos);
+  EXPECT_NE(out.find("  int b;\n"), std::string::npos);
+}
+
+// A note one column over is a different caret under the same line, which is a
+// different picture -- the rule is the exact span, not the line.
+TEST(DiagRenderTest, NoteOnTheSameLineAtADifferentSpanKeepsItsExcerpt) {
+  SourceManager sm;
+  const FileId id = sm.addFile("o.mx", "abcd").value();
+  DiagBag bag;
+  bag.error(Span(id, 0, 1), "first");
+  bag.note(Span(id, 1, 2), "second");
+  DiagRenderer render(&sm);
+  EXPECT_EQ(countOccurrences(render.renderAll(bag), "  abcd\n"), 2u);
+}
+
+// `render` is the single-diagnostic form: with no sequence there is nothing to
+// compare against, so it always prints the excerpt.
+TEST(DiagRenderTest, SingleDiagnosticAlwaysHasItsExcerpt) {
+  SourceManager sm;
+  const FileId id = sm.addFile("s.mx", "ab").value();
+  DiagBag bag;
+  bag.note(Span(id, 0, 1), "alone");
+  DiagRenderer render(&sm);
+  EXPECT_NE(render.render(bag.all()[0]).find("  ab\n"), std::string::npos);
 }
 
 TEST(DiagRenderTest, RenderAllConcatenates) {

@@ -183,6 +183,11 @@ Rules:
   `ColorMode::Plain`, expands tabs, counts display columns by scalar (not by
   byte) for the caret, clips long lines, and appends the suppressed-diagnostic
   summary in `renderAll`.
+- `renderAll` folds away one kind of repetition a `render` loop would show: a
+  note anchored on exactly the span of the diagnostic above it prints its
+  sentence and not the excerpt again, so one mistake never reads as two. A note
+  pointing somewhere else keeps its excerpt. That is a property of the sequence,
+  which is why the two entry points are not the same function.
 
 ### `mem` — `Arena`
 
