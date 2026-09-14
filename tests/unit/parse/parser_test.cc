@@ -277,6 +277,70 @@ TEST(ParserTest, EveryRecursiveProductionGuardsItself) {
   }
 }
 
+TEST(ParserTest, AnExternDeclarationIsOneNodeWithNoBody) {
+  // `extern fn ...;` and `fn ... { }` are one kind and not two. The shape is the
+  // same -- return type, name, parameters -- and the difference is the word in
+  // front plus whether a body follows, so a consumer asks for the body and reads
+  // an empty answer as "this is a declaration".
+  const ParseFixture fixture("extern fn i32 puts(s: str);\n");
+  ASSERT_TRUE(fixture.built());
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  EXPECT_TRUE(fixture.tree().validate());
+  EXPECT_EQ(fixture.reconstruct(), fixture.source());
+
+  const syntax::SyntaxNode root = fixture.tree().root();
+  const auto decl = syntax::FnDecl::cast(root.childOfKind(SyntaxKind::FnDecl).value());
+  ASSERT_TRUE(decl.has_value());
+  EXPECT_TRUE(decl->isExtern());
+  EXPECT_FALSE(syntax::bodyOf(*decl).has_value());
+  EXPECT_EQ(syntax::identifierText(*syntax::returnTypeOf(*decl)), "i32");
+  EXPECT_EQ(syntax::identifierText(*syntax::nameOf(*decl)), "puts");
+}
+
+TEST(ParserTest, ADefinitionIsNotExternAndHasABody) {
+  const ParseFixture fixture(fnBody("return 0;"));
+  ASSERT_TRUE(fixture.built());
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+
+  const auto decl =
+      syntax::FnDecl::cast(fixture.tree().root().childOfKind(SyntaxKind::FnDecl).value());
+  ASSERT_TRUE(decl.has_value());
+  EXPECT_FALSE(decl->isExtern());
+  EXPECT_TRUE(syntax::bodyOf(*decl).has_value());
+}
+
+TEST(ParserTest, EitherFormWrittenAsTheOtherIsOneDiagnostic) {
+  // Two ways to write one form and mean the other, and each names the word that
+  // is missing or misplaced. One mistake, one diagnostic -- and the tree still
+  // holds every byte, because the form is built either way.
+  const ParseFixture bodyless("fn i32 f();\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(bodyless.built());
+  EXPECT_EQ(bodyless.errorCount(), 1u) << bodyless.errorMessages();
+  EXPECT_NE(bodyless.errorMessages().find("parse-missing-extern"), std::string::npos)
+      << bodyless.errorMessages();
+  EXPECT_NE(bodyless.errorMessages().find("`extern fn`"), std::string::npos)
+      << bodyless.errorMessages();
+  EXPECT_EQ(bodyless.reconstruct(), bodyless.source());
+
+  const ParseFixture withBody("extern fn i32 f() { return 0; }\n");
+  ASSERT_TRUE(withBody.built());
+  EXPECT_EQ(withBody.errorCount(), 1u) << withBody.errorMessages();
+  EXPECT_NE(withBody.errorMessages().find("parse-extern-with-body"), std::string::npos)
+      << withBody.errorMessages();
+  EXPECT_EQ(withBody.reconstruct(), withBody.source());
+}
+
+TEST(ParserTest, ADeclarationStopsTheRecoveryTheWayADefinitionDoes) {
+  // The file loop and the item recovery ask one predicate for "can this token
+  // start a declaration", so a construct the parser could not understand stops
+  // at the next `fn` *and* at the next `extern` rather than swallowing it.
+  const ParseFixture fixture("%%%\nextern fn i32 puts(s: str);\n");
+  ASSERT_TRUE(fixture.built());
+  EXPECT_EQ(fixture.errorCount(), 1u) << fixture.errorMessages();
+  EXPECT_EQ(fixture.reconstruct(), fixture.source());
+  EXPECT_EQ(fixture.tree().root().nodeChildren().size(), 2u) << fixture.dump(false);
+}
+
 TEST(ParserTest, EverySingleByteParsesWithoutCrashing) {
   // The parser must be total on arbitrary input: an editor will hand it a file
   // that is one keystroke long, and a fuzzer will hand it worse.

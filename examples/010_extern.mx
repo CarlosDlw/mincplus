@@ -1,0 +1,29 @@
+// `extern` declares a function that is defined *elsewhere* -- in a library, or
+// in another translation unit -- and the linker is what resolves it. The name is
+// the symbol's name, so this is also how a C function is reached.
+//
+// A declaration has no body, and the two spellings are exactly what tells the
+// two forms apart: `extern fn ...;` says the definition lives somewhere this
+// compiler is not looking, and `fn ... { }` is a definition. Writing one as the
+// other is reported, because a body-less `fn` is a function that was never
+// defined and an `extern` with a body contradicts its own word.
+
+extern fn i32 puts(s: str);
+extern fn void srand(seed: u32);
+
+// A declaration and a definition of one name are *one* function: the declaration
+// is what every call is checked against and what the symbol's type comes from,
+// the definition is what runs. Their signatures have to agree, and the compiler
+// says so when they do not -- the pair is ordinary here, and would be the same
+// pair if the definition were in another file.
+extern fn i32 twice(n: i32);
+
+fn i32 twice(n: i32) {
+    return n * 2;
+}
+
+fn i32 main() {
+    srand(1); // a `void` function, called for its effect
+    puts("extern: declared here, defined in the C library");
+    return twice(21);
+}

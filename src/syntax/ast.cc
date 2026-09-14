@@ -3,6 +3,8 @@
 #include "syntax/ast.h"
 
 #include <cstddef>
+
+#include "lex/token_kind.h"
 #include <optional>
 #include <string>
 #include <string_view>
@@ -66,6 +68,15 @@ std::optional<VariableStmt> VariableStmt::cast(SyntaxNode node) {
 
 bool VariableStmt::isConst() const {
   return node_.kind() == parse::SyntaxKind::ConstStmt;
+}
+
+// The word that introduces a declaration is its first non-trivia leaf: `fn` or
+// `extern`. Nothing can precede it, because the parser opens the node on that
+// token -- and asking this way is what keeps "which form is this" a property of
+// the tree rather than of a flag some stage remembered.
+bool FnDecl::isExtern() const {
+  const std::optional<SyntaxToken> first = firstTokenChild(syntax());
+  return first.has_value() && first->is(parse::toSyntaxKind(lex::TokenKind::KwExtern));
 }
 
 std::optional<SyntaxNode> returnTypeOf(const FnDecl& decl) {

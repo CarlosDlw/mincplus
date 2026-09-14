@@ -3,9 +3,11 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "resolve/resolve.h"
 #include "resolve/resolve_error.h"
@@ -67,6 +69,65 @@ TEST(ErrorsTest, RepeatingAFunctionDeclarationIsNotAnError) {
   // the chain keeps the rest.
   EXPECT_FALSE(f.hasResolveError("resolve-redeclaration"));
   EXPECT_EQ(f.defCount("same"), 2u);
+}
+
+TEST(ErrorsTest, EveryDeclarationOfOneFunctionSharesOneIdentity) {
+  // The pair `extern fn ...;` above `fn ... { }` is two *declarations* of one
+  // function and must answer to one `DefId`. Every stage below keys its maps on
+  // the id -- one type in `sema`, one `llvm::Function` in `ir` -- so two ids for
+  // one name means two signatures and two symbols: the definition landed on
+  // `f.1` and the program failed to link on "undefined reference to f".
+  ResolveFixture f;
+  f.source("extern fn i32 f();\n"
+           "fn i32 f() { return 7; }\n"
+           "fn i32 main() { return f(); }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.hasResolveError("resolve-redeclaration"));
+  ASSERT_EQ(f.defCount("f"), 2u);
+
+  // Both file-scope items produced the *same* def, which is the answer the item
+  // tree carries and the one `sema` and `ir` read.
+  const resolve::DefMap& map = f.map();
+  ASSERT_GE(map.itemDefs.size(), 3u);
+  EXPECT_EQ(map.itemDefs[0], map.itemDefs[1]);
+  EXPECT_NE(map.itemDefs[0], map.itemDefs[2]); // `main` is its own function
+
+  // And the identity is reachable from the second site as well, which is what a
+  // stage indexing *declaration sites* asks.
+  std::vector<std::uint32_t> indexes;
+  for (std::uint32_t i = 0; i < map.defs.size(); ++i) {
+    if (f.spelling(map.defs[i].name) == "f") {
+      indexes.push_back(i);
+    }
+  }
+  ASSERT_EQ(indexes.size(), 2u);
+  const resolve::DefId first{f.lowered().file(), indexes[0]};
+  const resolve::DefId second{f.lowered().file(), indexes[1]};
+  EXPECT_EQ(resolve::canonicalOf(map.defs[indexes[0]], first), first);
+  EXPECT_EQ(resolve::canonicalOf(map.defs[indexes[1]], second), first);
+  // The call in `main` counts against the canonical declaration, so "is this
+  // function used" has one answer and not one per declaration.
+  EXPECT_EQ(map.defs[indexes[0]].refCount, 1u);
+  EXPECT_EQ(map.defs[indexes[1]].refCount, 0u);
+}
+
+TEST(ErrorsTest, ADeclarationWithNoDefinitionResolves) {
+  // The declaration is the whole program's knowledge of the symbol: nothing in a
+  // resolution depends on a body existing, and one that never arrives is the
+  // linker's question rather than this stage's.
+  ResolveFixture f;
+  f.source("extern fn i32 puts(s: str);\n"
+           "fn i32 main() { return puts(\"x\"); }\n");
+  ASSERT_TRUE(f.build());
+
+  EXPECT_FALSE(f.hasResolveError("resolve-redeclaration"));
+  EXPECT_EQ(f.resolved().errors.size(), 0u);
+  EXPECT_EQ(f.defCount("puts"), 1u);
+  // `Extern` is not a linkage: a file-scope function is external either way, and
+  // the declaration says *where the definition is*, which is a fact about the
+  // body and not about visibility.
+  ASSERT_NE(f.defNamed("puts"), nullptr);
+  EXPECT_EQ(f.defNamed("puts")->linkage, resolve::Linkage::External);
 }
 
 TEST(ErrorsTest, ShadowIsAWarningAndOnlyWhenAsked) {

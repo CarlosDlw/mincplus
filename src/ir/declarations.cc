@@ -8,6 +8,13 @@
 // that already exists rather than one it has to create. The pass is therefore
 // *all* signatures first, then *all* bodies (`lower.cc`), and the two loops are
 // the shape of that.
+//
+// A declaration contributes a `declare` and nothing else: `extern fn` is how the
+// language writes "this symbol is defined somewhere this compiler is not looking",
+// and the linker is the stage that resolves it. An `extern` declaration that is
+// never called emits no symbol at all, because LLVM drops a declaration nothing
+// references -- which is why declaring a function the program never uses costs
+// nothing and needs no bookkeeping here.
 #include "lowering.h"
 
 #include <cstdint>
@@ -72,6 +79,18 @@ void Lowering::declareFunctions() {
     if (type == nullptr) {
       fatal(spanOf(info.decl), IRDiagnosticCode::Internal,
             "`" + name + "` is declared with a type that is not a function type");
+      continue;
+    }
+
+    // One `Function` per definition, never two. Two entries in the table can
+    // name the same def -- `extern fn i32 f();` above `fn i32 f() { }` is the
+    // ordinary pair -- and a second `Function::Create` would leave a stray
+    // symbol behind: LLVM renames the loser to `f.1`, so the module would carry
+    // a declaration of `f`, a `define` of `f.1` nobody calls, and a link error
+    // for the call the program actually wrote. `sema` has already refused two
+    // *disagreeing* signatures for one name, so the type chosen here is the type
+    // of the one function.
+    if (def.has_value() && functions_.contains(defKey(*def))) {
       continue;
     }
 

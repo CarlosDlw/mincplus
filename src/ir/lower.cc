@@ -209,13 +209,20 @@ Lowering::Lowering(const ast::LoweredFile& file, const resolve::DefMap& defs,
   // per `PathExpr` a hash instead of a scan. Both keys are unit offsets for the
   // same reason the checker uses them: a macro can give two names one *written*
   // location, and a unit offset is one token each, so it is unique.
+  //
+  // The answer is the def's **identity**, not the site's own index: a name
+  // declared twice is one function, and `functions_` is keyed on this. Answering
+  // with the site would create two `llvm::Function`s for one name, and LLVM
+  // renames the loser to `f.1` -- leaving `f` declared and undefined while the
+  // body lands under a name no call refers to.
   for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
     const resolve::Def& def = defs_.defs[i];
     if (def.predefined) {
       continue;
     }
+    const resolve::DefId site{def.unitSpan.file, static_cast<std::uint32_t>(i)};
     defByName_.emplace(offsetKey(def.unitSpan.file, def.unitSpan.begin),
-                       resolve::DefId{def.unitSpan.file, static_cast<std::uint32_t>(i)});
+                       resolve::canonicalOf(def, site));
   }
   for (const resolve::NameRef& ref : defs_.refs) {
     if (!ref.resolved()) {

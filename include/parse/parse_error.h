@@ -38,6 +38,13 @@ enum class ParseErrorCode : std::uint8_t {
   ExpectedExpression,
   // A token that cannot start a statement.
   ExpectedStatement,
+  // A function declaration with neither a body nor `extern`. The two spellings
+  // are exactly what tells a definition from a declaration, so one of them has
+  // to be there; the message names the one to type.
+  MissingExtern,
+  // `extern fn` with a body. `extern` says the definition lives in another unit,
+  // so a body here contradicts the word rather than being an extra detail.
+  ExternWithBody,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

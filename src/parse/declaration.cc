@@ -15,15 +15,62 @@
 
 namespace minc::parse {
 
-void Parser::parseFnDecl() {
+// `fn Type Name(...) Block`, and the declaration form `extern fn Type
+// Name(...);`.
+//
+// **One node kind, not two.** The two forms have the same shape and differ in
+// one word and in whether a body follows, so `FnDecl` covers both exactly as
+// `VariableStmt` covers `let` and `const`: a consumer asks `bodyOf` and gets an
+// empty answer for a declaration instead of trying two casts. The `extern` token
+// stays a child of the node, so the tree is still lossless and the word a reader
+// wrote is still in it.
+void Parser::parseFnDecl(bool isExtern) {
   Marker decl = start();
+  if (isExtern) {
+    bump(); // `extern`
+  }
   expect(lex::TokenKind::KwFn);
   parseTypeAndName();
   expect(lex::TokenKind::LParen);
   parseParamList();
   expect(lex::TokenKind::RParen);
-  parseBlock();
+  parseFunctionTail(isExtern);
   decl.complete(SyntaxKind::FnDecl);
+}
+
+// The body, or the `;` that stands in for it.
+//
+// `extern` is what decides which one is required, and both directions of getting
+// it wrong are reported *here*, because both are grammar and not semantics: the
+// parser is the stage that has the word and the token. The wrong form is still
+// built into the tree -- a body after `extern` is parsed as a body, a missing
+// body leaves the declaration without one -- so one mistake produces one
+// diagnostic rather than a cascade from every stage below.
+void Parser::parseFunctionTail(bool isExtern) {
+  if (isExtern) {
+    if (!at(lex::TokenKind::LBrace)) {
+      expect(lex::TokenKind::Semicolon);
+      return;
+    }
+    error("`extern` declares a function that is defined elsewhere, so it has no body",
+          ParseErrorCode::ExternWithBody);
+    parseBlock();
+    return;
+  }
+
+  if (at(lex::TokenKind::LBrace)) {
+    parseBlock();
+    return;
+  }
+
+  // No body and no `extern`. The `;` is consumed when it is there, so the slip
+  // that produced this -- a declaration written without the word that makes it
+  // one -- costs one diagnostic and not a second "expected ';'" on top of it.
+  error("a function with no body is a declaration; write `extern fn`",
+        ParseErrorCode::MissingExtern);
+  if (at(lex::TokenKind::Semicolon)) {
+    bump();
+  }
 }
 
 // A parameter is a binding, and it is written exactly like one:

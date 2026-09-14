@@ -119,6 +119,9 @@ private:
     const support::FileId owner =
         nameSpan.file != support::kInvalidFile ? nameSpan.file : span.file;
     const DefId id{owner, static_cast<std::uint32_t>(map_.defs.size())};
+    // A declaration that claims a name is its own identity; the two paths below
+    // are the ones that hand that identity to a declaration written earlier.
+    def.canonical = id;
 
     const auto existing = scope.byName[nsIndex].find(name);
     if (existing != scope.byName[nsIndex].end()) {
@@ -126,25 +129,31 @@ private:
       if (kind == DefKind::Function && map_.defs[canonical.index].kind == DefKind::Function) {
         // C lets a function be declared many times and a header be included
         // twice, so a repeated function declaration extends the chain instead of
-        // being an error. The canonical definition stays the lookup answer.
+        // being an error. The canonical definition stays the lookup answer --
+        // and, from here on, the *identity*: a second declaration of one
+        // function is one function, so it answers to one `DefId`.
         DefId tail = canonical;
         while (map_.defs[tail.index].nextRedundant.valid()) {
           tail = map_.defs[tail.index].nextRedundant;
         }
         map_.defs.push_back(def);
+        map_.defs[id.index].canonical = canonical;
         map_.defs[tail.index].nextRedundant = id;
         return canonical;
       }
       // Anything else with the same name in one scope and namespace is a
       // redeclaration. The new declaration is recorded -- the IDE wants the
       // site -- and linked into the chain, but it does not become the lookup
-      // answer and it is not reported again by the unused pass.
+      // answer and it is not reported again by the unused pass. Its identity is
+      // the earlier declaration's: the name denotes one thing, and the second
+      // declaration is a mistake about that thing rather than a second one.
       errors_.push_back(ResolveError{nameSpan,
                                      "redeclaration of '" + nameOf(name) + "'",
                                      ResolveErrorCode::Redeclaration,
                                      {},
                                      {}});
       map_.defs.push_back(def);
+      map_.defs[id.index].canonical = canonical;
       map_.defs[id.index].nextRedundant = canonical;
       map_.defs[id.index].hasProblem = true;
       return kInvalidDef;

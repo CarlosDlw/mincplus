@@ -141,7 +141,14 @@ public:
   // grammar.
   void parseFile();
   void parseItem();
-  void parseFnDecl();
+  // `isExtern` is a parameter rather than something this function sniffs for,
+  // because which form is being parsed is already decided by `parseItem` and the
+  // two forms differ in the body and nowhere else.
+  void parseFnDecl(bool isExtern);
+  // The part after the closing `)`: a block for a definition, `;` for an
+  // `extern` declaration, and a diagnostic for either of the two wrong
+  // combinations.
+  void parseFunctionTail(bool isExtern);
   void parseParamList();
   void parseParam();
   void parseBlock();

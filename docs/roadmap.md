@@ -381,7 +381,13 @@ which also records the reversal.
 - [ ] Control-flow checks that still want a CFG: `goto` targets, and
       unreachable-code precision inside loops (the per-block warning is exact
       for the statement after a `return`, less so after a `break`)
-- [ ] Storage classes and linkage: `static`, `extern`, tentative definitions
+- [x] `extern fn Type Name(...);` — the **declaration** form: a function defined
+      elsewhere, with no body, whose identity is shared with its definition
+      ([`architectures/extern.md`](architectures/extern.md)). `extern` is a
+      declaration word and not a storage class, which is why the rest of this
+      item is still open
+- [ ] Storage classes and linkage: `static`, tentative definitions, and the
+      visibility rules that go with them
 - [ ] Symbol table exported for the backend and C interop
 - [ ] Warning set: sign/conversion issues beyond `-Wconversion`, and the rest of
       the lints (each with a code and a test)
@@ -544,17 +550,25 @@ sweep below, and the triple matrix.
 
 Note what this section is *not*: the driver already hands objects to a real C
 linker and the compiler already emits nothing of its own for a calling
-convention, because the convention is LLVM's to emit from the triple. What is
-missing is the half that needs a *declaration* of a C entity in `.mx` before
-anything can be called — `extern`, the C declarator grammar, and the headers.
-That is why the language-surface items in § 3 and § 5 come first.
+convention, because the convention is LLVM's to emit from the triple. The
+*declaration* half has also landed: `extern fn` names a symbol defined elsewhere
+and the linker resolves it, so `mincc run` already calls libc
+([`architectures/extern.md`](architectures/extern.md),
+`examples/010_extern.mx`). What remains is everything that needs the C **type**
+model on this side of the boundary — the declarator grammar, aggregates by
+value, and the headers — which is why the language-surface items in § 3 and § 5
+come first.
 
 - [ ] Argument classification and returns per the target's ABI (System V AMD64
       and Windows x64 first): INTEGER/SSE/MEMORY, aggregates by value, and the
       alignments that follow from the triple
 - [ ] Aggregates by value: struct passing/returning, unions, alignments
 - [ ] Variadic calls (`va_list` conventions); bitfields `[?]`
-- [ ] Calling into C: `extern` declarations resolved against real libc
+- [x] Calling into C: a declaration resolved against real libc, for the scalar
+      and pointer types the language has today (`extern fn i32 puts(s: str);`,
+      and `examples/010_extern.mx` runs)
+- [ ] The C type model behind it: `long`/`unsigned` spellings that already
+      resolve, aggregate parameters, and the declarator forms a header uses
 - [ ] Being called from C: exported symbols with C linkage
 - [x] Emit `.o`, and link objects into an executable through the C driver —
       shipped as `mincc build`/`run` (§ 9), including `-L`/`-l` and `--sysroot`

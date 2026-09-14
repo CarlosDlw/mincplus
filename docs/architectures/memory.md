@@ -64,7 +64,12 @@ obligation*, and they differ only in who is responsible:
 | --- | --- | --- |
 | Checked surface (planned) | the **compiler**, by construction: a pointer carries the length and the permission in its type | everything, and no assumption reaches the optimizer |
 | Raw surface (`*T`, first to land) | the **programmer**, at each `*` | nothing, so it assumes nothing |
-| FFI (`extern`, `src/cinterop`) | the **ABI**: C's own rules apply at the boundary and stop there | the ABI's facts — layout, alignment, calling convention — and only those |
+| FFI (`src/cinterop`, reached through `extern fn`) | the **ABI**: C's own rules apply at the boundary and stop there | the ABI's facts — layout, alignment, calling convention — and only those |
+
+The `extern` *declaration form* is the language's, not the boundary's: it says
+"this function is defined elsewhere" and nothing about types crossing a
+boundary. The ABI facts are what the layer below adds, and the two are kept apart
+in [`extern.md`](extern.md) for that reason.
 
 This is why the model is written before the surface: it holds whatever the
 surface turns out to be, and it is the reason a checked layer can be added later
@@ -608,9 +613,13 @@ which *discharge the same obligations* as above, by construction. Nothing in
 § *The model* changes when they land; the `AccessObligation` record below gains
 the "proved" value it already has a slot for.
 
-**Stage 3 — the surfaces that only exist because of interop.** `extern`
-declarations, `restrict` annotations, function pointers, and the FFI wrapper's own
-rules, in `src/cinterop` with its own record.
+**Stage 3 — the surfaces that only exist because of interop.** The ABI facts a
+value crossing the boundary obeys — layout, alignment, calling convention — plus
+`restrict` annotations, function pointers, and the FFI wrapper's own rules, in
+`src/cinterop` with its own record. `extern fn` itself has already landed and is
+the language's *declaration* form rather than a boundary rule
+([`extern.md`](extern.md)); what stage 3 adds is what happens to a type that
+crosses, not how the crossing is spelled.
 
 **Not in the model, on purpose:** no `unsafe` keyword (the language is unchecked
 everywhere; the counted operations above are what a reader audits), no smart

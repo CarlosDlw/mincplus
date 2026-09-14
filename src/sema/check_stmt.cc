@@ -70,13 +70,19 @@ Checker::Checker(const ast::LoweredFile& file, const resolve::DefMap& defs,
   //
   // A predefined name has no declaration to point at, so it is left out rather
   // than parked at offset 0 where a real name could land.
+  //
+  // The answer is the def's **identity** and not its own slot: a name declared
+  // twice -- `extern fn i32 f();` above `fn i32 f() { }` -- is one function, so
+  // both sites have to answer with one `DefId`. Answering with the site's own
+  // index would give one function two types and the lowering two symbols.
   for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
     const resolve::Def& def = defs_.defs[i];
     if (def.predefined) {
       continue;
     }
+    const resolve::DefId site{def.unitSpan.file, static_cast<std::uint32_t>(i)};
     defByNameOffset_.emplace(keyOf(def.unitSpan.file, def.unitSpan.begin),
-                             resolve::DefId{def.unitSpan.file, static_cast<std::uint32_t>(i)});
+                             resolve::canonicalOf(def, site));
   }
 
   // The language's predefined names. `resolve` bound them; their *types* are
@@ -528,6 +534,15 @@ SemaOutput Checker::run() {
 }
 
 void Checker::runSignatures() {
+  // The first declaration seen for each function, by canonical def -- the index
+  // into `out_.typed.functionTable` of the declaration that got there first.
+  //
+  // Local to the pass, because it is the pass's own bookkeeping: the answer it
+  // exists to produce (the signature a name has) is published in `defTypes_`,
+  // and nothing outside these few hundred lines asks "which declaration came
+  // first".
+  std::unordered_map<std::uint32_t, std::size_t> firstDeclaration;
+
   for (const ast::AstId decl : operandsOf(file_.root())) {
     if (kindOf(decl) != ast::NodeKind::FnDecl || inError(decl)) {
       continue;
@@ -587,13 +602,50 @@ void Checker::runSignatures() {
     info.returnType = returnType;
     info.body = body;
     info.name = nameNode.valid() ? file_.at(nameNode).name : support::kInvalidSym;
+
+    const std::optional<resolve::DefId> def = defAtName(nameNode);
+    const std::size_t functionIndex = out_.typed.functionTable.size();
     out_.typed.functionTable.push_back(info);
+
+    // The declarations of one function, checked against each other -- and this
+    // is the first stage that *can*, because what has to agree is a type. A name
+    // may be declared more than once: `extern fn i32 f();` above
+    // `fn i32 f() { }` is the ordinary pair, and a header included twice is the
+    // same pair. Every declaration of one name answers to one `DefId`, which is
+    // the identity everything below this stage keys on, so the chain has to be
+    // *one* function here -- otherwise one name comes out with two types, and
+    // the lowering ends up with two symbols where the program has one.
+    if (def.has_value()) {
+      const auto earlier = firstDeclaration.find(def->index);
+      if (earlier == firstDeclaration.end()) {
+        firstDeclaration.emplace(def->index, functionIndex);
+      } else {
+        const FunctionInfo& first = out_.typed.functionTable[earlier->second];
+        const ast::AstId firstNameNode = childOf(first.decl, ast::NodeKind::Name);
+        const std::string name = std::string(symbols_.lookup(info.name));
+        if (first.body.valid() && body.valid()) {
+          error(nameNode.valid() ? nameNode : decl, SemaErrorCode::FunctionRedefinition,
+                "`" + name +
+                    "` is defined twice; a function has one definition, and the "
+                    "second one does not replace the first");
+          attachNote(SemaErrorCode::FunctionRedefinition, origin(firstNameNode),
+                     "the first definition is here");
+        } else if (first.functionType != functionType) {
+          error(nameNode.valid() ? nameNode : decl, SemaErrorCode::SignatureMismatch,
+                "`" + name + "` is declared with two signatures: `" +
+                    types_.spelling(functionType) + "` here, `" +
+                    types_.spelling(first.functionType) + "` earlier");
+          attachNote(SemaErrorCode::SignatureMismatch, origin(firstNameNode),
+                     "the earlier declaration is here");
+        }
+      }
+    }
 
     setType(decl, functionType);
     if (nameNode.valid()) {
       setType(nameNode, functionType);
     }
-    if (const std::optional<resolve::DefId> def = defAtName(nameNode)) {
+    if (def.has_value()) {
       if (def->index < defTypes_.size()) {
         defTypes_[def->index] = functionType;
         defIsConst_[def->index] = false;

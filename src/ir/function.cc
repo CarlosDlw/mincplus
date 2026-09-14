@@ -47,10 +47,10 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   }
   llvm::Function* function = found->second;
   if (!function->empty()) {
-    // Two bodies for one declaration. `resolve` already reported the
-    // redeclaration, so this is not a second diagnostic about the program: it is
-    // the *unchecked* case, and stopping is what keeps the module one function
-    // per name.
+    // Two bodies for one def. `sema` already reported `sema-function-redefinition`,
+    // so this is not a second diagnostic about the program: it is the
+    // *unchecked* case -- a caller that ran this stage over a tree it was told
+    // had an error -- and stopping is what keeps the module one body per symbol.
     return;
   }
 

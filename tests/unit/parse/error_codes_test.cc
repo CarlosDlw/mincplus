@@ -54,6 +54,12 @@ constexpr CodeCase kCases[] = {
     {"parameter with no name", "fn i32 main(i32) {}\n", ParseErrorCode::ExpectedName},
     {"parameter with no type", "fn i32 main(x:) {}\n", ParseErrorCode::ExpectedType},
     {"parameter with neither", "fn i32 main(; ) {}\n", ParseErrorCode::ExpectedName},
+    // The two ways to write one of the two forms and mean the other. Each names
+    // the word that is missing or misplaced, because the reader already knows
+    // which function they meant and only needs to know how to spell it.
+    {"body-less function with no `extern`", "fn i32 main();\n", ParseErrorCode::MissingExtern},
+    {"`extern` with a body", "extern fn i32 main() { return 0; }\n",
+     ParseErrorCode::ExternWithBody},
 };
 
 [[nodiscard]] std::string deepInput() {

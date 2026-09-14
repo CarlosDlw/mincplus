@@ -164,6 +164,52 @@ TEST(IrLowerTest, APoisonedUnitIsRefusedAndProducesNoModule) {
   EXPECT_TRUE(fixture.hasError("ir-internal")) << fixture.module();
 }
 
+TEST(IrLowerTest, ADeclarationAndItsDefinitionAreOneSymbol) {
+  test::IrFixture fixture;
+  fixture.source("extern fn i32 f();\n"
+                 "fn i32 f() { return 7; }\n"
+                 "fn i32 main() { return f(); }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  // One symbol, and the body under the name the program calls. A second
+  // `Function` for one def is what LLVM renames to `f.1`: the module then has a
+  // declaration of `f` and a `define` nobody refers to, and the link fails on
+  // "undefined reference to f".
+  EXPECT_NE(text.find("define i32 @f()"), std::string::npos) << text;
+  EXPECT_EQ(text.find("f.1"), std::string::npos) << text;
+  EXPECT_NE(text.find("call i32 @f()"), std::string::npos) << text;
+  EXPECT_EQ(fixture.violations(), 0U);
+}
+
+TEST(IrLowerTest, ACallToADeclarationBecomesADeclareAndACall) {
+  test::IrFixture fixture;
+  fixture.source("extern fn i32 puts(s: str);\n"
+                 "fn i32 main() { return puts(\"x\"); }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("declare i32 @puts(ptr)"), std::string::npos) << text;
+  EXPECT_EQ(text.find("define i32 @puts"), std::string::npos) << text;
+}
+
+TEST(IrLowerTest, ADeclarationNothingCallsIsStillADeclaration) {
+  // A declaration is a promise about a symbol and not a definition, so it needs
+  // neither a body nor a call. LLVM drops a declaration nothing references when
+  // the object is written, so an `extern` declaration a program never calls
+  // costs no symbol and no link-time question.
+  test::IrFixture fixture;
+  fixture.source("extern fn i32 unused(s: str);\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("declare i32 @unused(ptr)"), std::string::npos) << text;
+  EXPECT_EQ(text.find("define i32 @unused"), std::string::npos) << text;
+}
+
 TEST(IrLowerTest, EveryExampleLowers) {
   namespace fs = std::filesystem;
   std::vector<std::string> files;

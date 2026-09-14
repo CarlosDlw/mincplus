@@ -609,6 +609,25 @@ preprocessor reads the source bytes directly: everything above it consumes the
 preprocessed stream, which is the only reason a directive is not a syntax error
 in the grammar.
 
+**Declarations and definitions are one entity, not two.** `extern fn Type
+Name(...);` is how the language writes "this is defined elsewhere" — in another
+unit, in a library, in the C runtime — and `fn Type Name(...) { }` is the
+definition. They are one `FnDecl` node kind, one `DefId` in `resolve`, one type
+in `sema` and one symbol in the object, which is the property the whole pipeline
+below `resolve` depends on: `Def::canonical` is the identity every stage keys its
+maps on. The design record is
+[`architectures/extern.md`](architectures/extern.md), and the ABI facts a value
+crossing the boundary obeys are `src/cinterop`'s (roadmap §8) rather than this
+form's.
+
+**Builtins are not a stage.** When they arrive they are a table read by two
+stages that already exist — `sema` for the signature and the effect, `ir` for the
+lowering — plus the `sizeof`/`alignof`/`static_assert` operators, which are
+grammar and a `sema` fold rather than anything new. The design record is
+[`architectures/builtins.md`](architectures/builtins.md), and its first decision
+is that `exit` and `assert` are **not** builtins: one is a declared symbol in the
+runtime, the other is a macro that calls one.
+
 **`lower`, `validate` and `resolve` are stages, not part of `sema`.** The order
 is forced by the language, not chosen for tidiness. A C-like grammar lets a
 file-scope call name a function defined further down, so no body can be checked

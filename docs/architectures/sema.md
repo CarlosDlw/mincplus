@@ -468,6 +468,17 @@ lvalue that is **not** modifiable; assignment and `++`/`--` to it are
   `sema-main-signature` otherwise. A program with no `main` is not an error
   here: sema sees one translation unit and the entry point is a program
   property, which is `link`'s.
+- **One function, one definition and one signature.** A name may be declared
+  more than once — `extern fn i32 f();` above `fn i32 f() { }`, or a header
+  included twice — and the declarations are checked against each other here,
+  because what has to agree is a *type*: two bodies are
+  `sema-function-redefinition` and two signatures are
+  `sema-signature-mismatch`, each pointing at the second declaration with the
+  first as a note. The check is what makes the identity `resolve` computed
+  *safe* rather than merely true: with every declaration of a name carrying one
+  type, `defTypes_` has one value no matter which declaration wrote it last, so
+  the ordering question disappears instead of being answered
+  ([`extern.md`](extern.md)).
 - **`void`** — decided with this stage, because a language without it cannot
   write a function that returns nothing. `void` is a type; it is not a value
   type: no object may have it (`let x: void` is `sema-type-not-value`), no
@@ -601,6 +612,8 @@ Same contract as every other stage: `minc_sema` links no diagnostics, and
 | `sema-return-void-value` | error | `return e;` in a `void` function |
 | `sema-missing-return` | error | a non-`void` function can reach its end |
 | `sema-main-signature` | error | `main` is not `fn i32 main()` |
+| `sema-function-redefinition` | error | two definitions of one function |
+| `sema-signature-mismatch` | error | two declarations of one function with different signatures |
 | `sema-division-by-zero` | error | a constant division or remainder by zero |
 | `sema-unreachable-code` | warning | a statement after `return` in the same block |
 | `sema-limit-types`, `sema-limit-type-depth`, `sema-limit-errors` | error | a budget was reached |

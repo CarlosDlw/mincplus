@@ -111,10 +111,18 @@ void Parser::tooDeep() {
 
 // ------------------------------------------------------------------ file ---
 
+// The tokens that can begin a file-scope item: `fn`, and the `extern` that turns
+// one into a declaration. One predicate rather than the same pair of comparisons
+// in the loop and in the recovery, so a third form (`struct`, `import`) is added
+// in one place and the loop and the recovery cannot come to different answers.
+[[nodiscard]] static bool isItemStart(const Parser& parser) {
+  return parser.at(lex::TokenKind::KwFn) || parser.at(lex::TokenKind::KwExtern);
+}
+
 void Parser::parseFile() {
   Marker file = start();
   while (!atEnd() && !bailedOut_) {
-    if (at(lex::TokenKind::KwFn)) {
+    if (isItemStart(*this)) {
       parseItem();
     } else {
       error("expected a declaration", ParseErrorCode::ExpectedItem);
@@ -143,12 +151,12 @@ void Parser::parseItem() {
   if (bailedOut_) {
     return;
   }
-  parseFnDecl();
+  parseFnDecl(at(lex::TokenKind::KwExtern));
 }
 
 void Parser::recoverItem() {
   Marker junk = start();
-  while (!atEnd() && !at(lex::TokenKind::KwFn)) {
+  while (!atEnd() && !isItemStart(*this)) {
     bump();
   }
   junk.complete(SyntaxKind::Error);

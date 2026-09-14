@@ -260,6 +260,9 @@ and full C interoperability in both directions.
 - [x] `.mx` source files compiled by `mincc`
 - [x] `fn` function declaration form (`fn i32 main() { ... }`), as in
       `examples/001_main_func.mx`
+- [x] `extern fn` declarations — a function defined elsewhere (another unit, a
+      library, the C runtime): `extern fn i32 puts(s: str);`, as in
+      `examples/010_extern.mx`
 - [x] Block statements and `return`
 - [x] `//` line comments
 - [x] `let` bindings are **mutable**, with a colon type annotation or

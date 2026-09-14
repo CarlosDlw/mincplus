@@ -524,5 +524,81 @@ TEST(CheckTest, ANameWrittenByAPasteGetsItsOwnDeclarationAndType) {
   EXPECT_EQ(f.typeOfSpelling("a"), "i32");
 }
 
+// --- extern declarations ----------------------------------------------------
+
+// A declaration and a definition of one name are one function, and the whole
+// point of the stage agreeing with itself is that it stays one: one signature for
+// the calls to be checked against and one symbol for the linker to resolve.
+TEST(CheckTest, AnExternDeclarationIsTypedAndCallable) {
+  SemaFixture f;
+  f.source("extern fn i32 puts(s: str);\n"
+           "fn i32 main() {\n"
+           "  puts(\"x\");\n"
+           "  return 0;\n"
+           "}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << (f.errorCount() == 0 ? std::string() : f.firstError().message);
+}
+
+TEST(CheckTest, ADeclarationWithNoBodyHasNoReturnToCheck) {
+  // `sema-missing-return` is about a body that can run off its end, and a
+  // declaration has no end to run off. Reading it as one would make every
+  // `extern fn i32 ...;` an error.
+  SemaFixture f;
+  f.source("extern fn i32 f();\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << (f.errorCount() == 0 ? std::string() : f.firstError().message);
+}
+
+TEST(CheckTest, ACallIsCheckedAgainstTheDeclaredSignature) {
+  SemaFixture f;
+  f.source("extern fn i32 f(s: str);\nfn i32 main() { return f(1); }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 1u);
+  EXPECT_EQ(f.errorCodes().front(), "sema-invalid-assignment");
+}
+
+TEST(CheckTest, TwoDefinitionsOfOneNameAreReportedAndTheFirstIsNamed) {
+  SemaFixture f;
+  f.source("fn i32 f() { return 1; }\n"
+           "fn i32 f() { return 2; }\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 1u);
+  EXPECT_EQ(f.errorCodes().front(), "sema-function-redefinition");
+  EXPECT_NE(f.firstError().message.find("defined twice"), std::string::npos);
+  EXPECT_NE(f.firstError().note.find("first definition"), std::string::npos);
+}
+
+TEST(CheckTest, TwoSignaturesForOneNameAreReportedWithBothSpellings) {
+  // The declaration is what a call is checked against and what the symbol's type
+  // comes from, so a declaration that disagrees with the definition leaves the
+  // program with two meanings. Both spellings are in the message because the
+  // reader has to see which one they typed twice differently.
+  SemaFixture f;
+  f.source("extern fn i32 f(a: i32);\n"
+           "fn i32 f() { return 0; }\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 1u);
+  EXPECT_EQ(f.errorCodes().front(), "sema-signature-mismatch");
+  EXPECT_NE(f.firstError().message.find("`fn i32()`"), std::string::npos) << f.firstError().message;
+  EXPECT_NE(f.firstError().message.find("`fn i32(i32)`"), std::string::npos)
+      << f.firstError().message;
+  EXPECT_NE(f.firstError().note.find("earlier declaration"), std::string::npos);
+}
+
+TEST(CheckTest, RepeatingTheSameDeclarationIsNotAnError) {
+  // A header included twice declares its functions twice, and the two say the
+  // same thing -- so there is nothing to report.
+  SemaFixture f;
+  f.source("extern fn i32 f();\n"
+           "extern fn i32 f();\n"
+           "fn i32 f() { return 1; }\n"
+           "fn i32 main() { return f(); }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << (f.errorCount() == 0 ? std::string() : f.firstError().message);
+}
+
 } // namespace
 } // namespace minc::test

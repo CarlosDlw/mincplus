@@ -11,6 +11,8 @@ std::string_view tokenSpelling(lex::TokenKind kind) {
   switch (kind) {
   case lex::TokenKind::KwFn:
     return "fn";
+  case lex::TokenKind::KwExtern:
+    return "extern";
   case lex::TokenKind::KwLet:
     return "let";
   case lex::TokenKind::KwConst:

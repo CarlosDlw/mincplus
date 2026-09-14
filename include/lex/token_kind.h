@@ -47,7 +47,13 @@ enum class TokenKind : std::uint8_t {
   // because the grammar needs them to start a statement: a `let` and an `if`
   // cannot be told apart by position alone, and the parser is trivia-blind, so
   // the classification has to be lexical.
+  //
+  // `KwExtern` is a *declaration* keyword rather than a statement one: it is only
+  // legal immediately before `fn` at file scope, and it is lexical for the same
+  // reason -- the parser decides which of the two function forms it is reading
+  // from the first token of the declaration, and it may not ask a later stage.
   KwFn,
+  KwExtern,
   KwLet,
   KwConst,
   KwReturn,
@@ -149,6 +155,7 @@ enum class TokenKind : std::uint8_t {
 [[nodiscard]] constexpr bool isKeyword(TokenKind kind) {
   switch (kind) {
   case TokenKind::KwFn:
+  case TokenKind::KwExtern:
   case TokenKind::KwLet:
   case TokenKind::KwConst:
   case TokenKind::KwReturn:

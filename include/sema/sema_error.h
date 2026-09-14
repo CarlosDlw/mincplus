@@ -59,6 +59,15 @@ enum class SemaErrorCode : std::uint8_t {
   MissingReturn,
   // `main` is declared and is not `fn i32 main()`.
   MainSignature,
+  // Two definitions of one function. The language gives a name one definition,
+  // so the second body has nowhere to go -- which is why this is an error and
+  // not "the last one wins".
+  FunctionRedefinition,
+  // Two declarations of one function whose signatures disagree: `extern fn i32
+  // f(i32);` above `fn i32 f() { }`. The declaration is what every call is
+  // checked against and what the symbol's type comes from, so the two have to
+  // name the same function for the program to mean anything.
+  SignatureMismatch,
   // `break` with no loop to break out of.
   BreakOutsideLoop,
   // `continue` with no loop to continue.

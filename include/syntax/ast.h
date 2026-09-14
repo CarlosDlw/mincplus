@@ -59,11 +59,19 @@ private:
   SyntaxNode node_;
 };
 
-// `fn Type Name() Block`.
+// `fn Type Name() Block`, and its declaration form `extern fn Type Name();`.
+//
+// One wrapper for both, because they are one declaration with one difference:
+// `extern` says the definition is elsewhere, and a declaration therefore has no
+// body. A caller asks `bodyOf` and reads an empty answer as `isExtern`, which is
+// the pair the grammar guarantees -- a body implies no `extern`, and the reverse.
 class FnDecl : public AstNodeBase<FnDecl, parse::SyntaxKind::FnDecl> {
 public:
   FnDecl() = default;
   explicit FnDecl(SyntaxNode node) : AstNodeBase(node) {}
+
+  // True when the declaration begins with `extern`, and so has no body.
+  [[nodiscard]] bool isExtern() const;
 };
 
 class Block : public AstNodeBase<Block, parse::SyntaxKind::Block> {

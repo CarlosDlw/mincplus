@@ -268,6 +268,8 @@ struct ScopeId { std::uint32_t index; };              // defs survive a .mx edit
 struct Def {
   Span span; SymId name; DefKind kind; ScopeId scope; Namespace ns;
   Linkage linkage;          // external / internal / none -- C 6.2.2
+  DefId canonical;          // the identity of the thing declared: `self`, or
+                            // the first declaration of a repeated name
   DefId nextRedundant;      // the same name declared again in this scope
 };
 
@@ -289,6 +291,14 @@ struct Scope {
   plus everything it included, so its scope tree spans several files, but a
   definition belongs to the file it was written in. That is what lets a header's
   definitions stay valid while a `.mx` body changes.
+- **`canonical` and `nextRedundant` answer two different questions.** The chain
+  is the *sites* — a header included twice declares its functions twice, and the
+  IDE wants each one — while `canonical` is the *identity* every lookup answers.
+  They point in opposite directions for a non-function redeclaration, which is
+  exactly why "which def is this name" cannot be read off the chain. Everything
+  below this stage keys its maps on `canonical`, so two declarations of one
+  function get one type in `sema` and one `llvm::Function` in `ir`
+  ([`extern.md`](extern.md)).
 - **Tables are ordered vectors, not hash maps.** Lookup uses the sorted index
   (binary search); *iteration* uses declaration order, which is what diagnostics
   and suggestions need. An `unordered_map` would make the output of a

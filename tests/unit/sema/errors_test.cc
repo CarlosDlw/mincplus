@@ -413,6 +413,11 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       {"fn void f() { return 1; }\n", false},
       {"fn i32 f() { let x = 1; }\n", false},
       {"fn f64 main() { return 0.0; }\n", false},
+      // The two ways a function's declarations can disagree. Both need more than
+      // one declaration, which is why neither is a parse rule: what has to match
+      // is a *type*, and this is the stage that has types.
+      {"fn i32 f() { return 1; }\nfn i32 f() { return 2; }\n", false},
+      {"extern fn i32 f(a: i32);\nfn i32 f() { return 0; }\n", false},
       {"fn i32 main() { return 1 / 0; }\n", false},
       {"fn i32 main() { return 0; }\n", false},                               // maxTypes = 0
       {"fn i32 f() { return 1; let x = 2; return x; }\n", false},             // unreachable

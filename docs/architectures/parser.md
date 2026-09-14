@@ -610,6 +610,7 @@ decisions keep them possible — and which would foreclose them.
 | 16 | Grammar source of truth | One declarative grammar file drives the node-kind list and a consistency test; accessor code generation is a follow-up, not day one. |
 | 17 | Parameter syntax | **`name: type`, only.** The C order `type name` is rejected with a message that names it, because a run of identifiers cannot say which word was the name and `unsigned long` with the name forgotten would silently mean `unsigned` named `long`. |
 | 18 | Statement bodies | **Braces required** after `if`/`else`/`while`/`for`. Single-statement bodies are gone, so the dangling-`else` ambiguity cannot arise and a branch is always a `Block`. |
+| 19 | The declaration form | `extern fn Type Name(...);` is the declaration and `fn Type Name(...) { }` is the definition — **two productions, one node kind** (`FnDecl`), because the shape is the same and only the body differs. Both wrong spellings are diagnosed *here*, since which one is required is decided by the word and the token the parser is holding. Design record: [`extern.md`](extern.md). |
 
 ## `SyntaxKind` — one tag space, pinned to the lexer
 

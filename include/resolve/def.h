@@ -119,10 +119,28 @@ struct Def {
   ScopeId scope;
   Namespace ns = Namespace::Ordinary;
   Linkage linkage = Linkage::None;
+  // **The identity of the thing this declaration declares.** `self` for the
+  // declaration that introduced the name -- the ordinary case -- and that first
+  // declaration for a repeated one.
+  //
+  // Two questions look alike and are not: *which def is this declaration site*
+  // and *which def is this name*. A name has one answer, and it has to be one
+  // answer for every stage below, because they key maps on it: `sema` stores a
+  // declaration's type under it and `ir` creates one `llvm::Function` per key.
+  // Two ids for one function means two types and two symbols -- and the second
+  // is what LLVM renames to `f.1`, leaving the first declared and never defined.
+  //
+  // `self` is spelled out rather than left invalid so that "is this the canonical
+  // declaration" is a comparison and not a second lookup.
+  DefId canonical;
   // The next declaration of the same name in the same scope and namespace. C
   // lets a function be declared many times and lets a header be included twice,
   // so the scope table keeps the canonical definition and this chain keeps the
   // rest: the backend can see every declaration, and the IDE every site.
+  //
+  // The chain is for the *sites*; `canonical` is for the identity. They are
+  // deliberately separate fields because they answer opposite questions and,
+  // for the redeclaration path below, point in opposite directions.
   DefId nextRedundant;
   // How many name uses resolved to this definition. A count, not a list: the
   // list is derivable from the reference array and this is the question every
@@ -145,5 +163,17 @@ struct Def {
     return kind == DefKind::Function;
   }
 };
+
+// The declaration every lookup of this name answers, from a declaration site.
+//
+// `self` in the ordinary case; the first declaration of the name when the one in
+// hand is a repeat. The fallback exists for a `Def` built by hand -- a test, a
+// stage that constructs a map of its own -- and it is here rather than at each
+// call site because "which id do I key on" must have one answer in the whole
+// compiler. Everything below `resolve` keys on it: a type, a frame slot, an
+// `llvm::Function`.
+[[nodiscard]] constexpr DefId canonicalOf(const Def& def, DefId self) {
+  return def.canonical.valid() ? def.canonical : self;
+}
 
 } // namespace minc::resolve
