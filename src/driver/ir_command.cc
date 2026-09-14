@@ -11,35 +11,15 @@
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/frontend.h"
+#include "driver/stage_report.h"
 #include "ir/dump.h"
 #include "ir/invariants.h"
 #include "ir/ir.h"
-#include "ir/ir_report.h"
 #include "sema/target.h"
-#include "support/diag/diag_bag.h"
-#include "support/diag/diag_renderer.h"
 #include "support/session/session.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
-namespace {
-
-// Renders IR diagnostics through the same machinery every other stage's
-// diagnostics go through, so a caret and a code read the same here as anywhere.
-void render(std::span<const ir::IRDiagnostic> diagnostics, FrontEnd& frontEnd,
-            support::ColorMode color, std::ostream& err) {
-  if (diagnostics.empty()) {
-    return;
-  }
-  support::DiagBag bag;
-  (void)ir::reportIRDiagnostics(diagnostics, bag);
-  const support::DiagRenderer renderer(&frontEnd.session().sources(),
-                                       support::RenderOptions{color, 4});
-  err << renderer.renderAll(bag);
-  err.flush();
-}
-
-} // namespace
 
 int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
   FrontEndOptions options;
@@ -55,6 +35,7 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
 
   FrontEnd frontEnd(options);
   bool ok = frontEnd.run(request.inputs, err);
+  const support::SourceManager& sources = frontEnd.session().sources();
 
   for (const FrontEndUnit& unit : frontEnd.units()) {
     // A unit whose front end failed has no typed tree, or has one with errors in
@@ -67,10 +48,20 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
       continue;
     }
 
-    const ir::IRResult result = ir::lowerUnit(*unit.lowered, unit.resolved->map, unit.typed->typed,
-                                              frontEnd.sema().types(), frontEnd.symbols());
+    // `-g` is an *option* here rather than a flag that changes the walk: the
+    // lowering does the same work either way and only attaches locations when one
+    // was asked to be kept. `mincc ir -g` is how the metadata is reviewed -- as
+    // text, next to the instructions it annotates (`codegen.md`).
+    ir::LoweringOptions loweringOptions;
+    loweringOptions.debugInfo = request.debugInfo;
+    loweringOptions.producer = producerString();
+    loweringOptions.source = sources.find(unit.file);
+
+    const ir::IRResult result =
+        ir::lowerUnit(*unit.lowered, unit.resolved->map, unit.typed->typed, frontEnd.sema().types(),
+                      frontEnd.symbols(), loweringOptions);
     if (result.failed()) {
-      render(result.diagnostics, frontEnd, request.diagnosticColor, err);
+      renderStageDiagnostics(result.diagnostics, sources, request.diagnosticColor, err);
       ok = false;
       continue;
     }
@@ -83,7 +74,7 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
 
     const std::vector<ir::IRDiagnostic> violations = ir::scanModule(result.module);
     if (!violations.empty()) {
-      render(violations, frontEnd, request.diagnosticColor, err);
+      renderStageDiagnostics(violations, sources, request.diagnosticColor, err);
       ok = false;
     }
   }
@@ -113,6 +104,7 @@ int runIr(const CliOptions& options) {
   request.warnUnused = options.warnUnused;
   request.warnShadow = options.warnShadow;
   request.diagnosticColor = support::colorModeFrom(support::stderrSupportsColor());
+  request.debugInfo = options.debugInfo;
   return irInputs(request, std::cout, std::cerr);
 }
 

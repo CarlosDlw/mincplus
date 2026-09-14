@@ -67,10 +67,13 @@ namespace minc::ir {
   return (static_cast<std::uint64_t>(file) << 32U) | begin;
 }
 
+class DebugInfo;
+
 class Lowering {
 public:
   Lowering(const ast::LoweredFile& file, const resolve::DefMap& defs, const sema::TypedFile& typed,
-           const sema::TypeStore& types, const support::Interner& symbols);
+           const sema::TypeStore& types, const support::Interner& symbols,
+           const LoweringOptions& options);
   ~Lowering();
   Lowering(const Lowering&) = delete;
   Lowering& operator=(const Lowering&) = delete;
@@ -137,6 +140,19 @@ private:
   // obligation because the language already proved it is there.
   [[nodiscard]] const sema::AccessObligation* obligationFor(ast::AstId place) const;
   [[nodiscard]] bool isAccessNode(ast::AstId id) const;
+
+  // --- debug information --------------------------------------------------------
+  //
+  // The `-g` half of the lowering, and a no-op without it. `locate` is called at
+  // the top of every statement and expression rather than beside each instruction:
+  // the builder carries the current location into every instruction it creates, so
+  // one call per node is total coverage and a new instruction added below cannot
+  // silently lose its line number.
+  void locate(ast::AstId id);
+  void locate(support::Span span);
+  [[nodiscard]] bool debugEnabled() const {
+    return debug_ != nullptr;
+  }
 
   // --- diagnostics ------------------------------------------------------------
   void error(ast::AstId at, IRDiagnosticCode code, std::string message);
@@ -212,8 +228,11 @@ private:
   // The local an expression names, or nullptr when it names something that is not
   // a binding in this function.
   [[nodiscard]] llvm::AllocaInst* localOf(ast::AstId pathExpr) const;
+  // `at` is the declaration the slot is for, so the frame slot carries the
+  // location of the binding the reader wrote rather than of whatever instruction
+  // happened to be last.
   [[nodiscard]] llvm::AllocaInst* declareLocal(resolve::DefId def, sema::TypeId type,
-                                               std::string_view name);
+                                               std::string_view name, ast::AstId at);
   [[nodiscard]] std::optional<resolve::DefId> defOfPath(ast::AstId pathExpr) const;
   [[nodiscard]] std::optional<resolve::DefId> defAtName(ast::AstId nameNode) const;
   [[nodiscard]] std::optional<resolve::DefId> defOfPlace(ast::AstId expr) const;
@@ -322,6 +341,14 @@ private:
   const sema::TypedFile& typed_;
   const sema::TypeStore& types_;
   const support::Interner& symbols_;
+  // The lowering's options, kept whole rather than destructured: `debugInfo` is
+  // read once here to decide whether `debug_` exists, and `producer` is the string
+  // `DW_AT_producer` carries.
+  LoweringOptions options_;
+  // Null without `-g`. Every use is guarded by `debugEnabled()`, which is what
+  // makes the debug half of this class a single switch rather than a rule with
+  // holes in it.
+  std::unique_ptr<DebugInfo> debug_;
 
   // The module, opaque even here: `ModuleStorage` owns the context, and the
   // module and the layout belong to it in that order. Declared first because

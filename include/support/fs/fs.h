@@ -45,6 +45,14 @@ namespace minc::support {
 
 [[nodiscard]] bool isAbsolutePath(const std::string& path);
 
+// The same path with its last extension replaced by `extension` (which includes
+// the dot: `".o"`). A path with no extension gains one, and a *dotfile*
+// (`.gitignore`) counts as having no extension, which is the rule the C compilers
+// use and the one that makes `mincc build --emit obj .hidden` name `.hidden.o`
+// rather than `.o`. Purely lexical, like `normalizePath`: it names a file that
+// does not exist yet, which is the case it exists for.
+[[nodiscard]] std::string replaceExtension(const std::string& path, const std::string& extension);
+
 // Lexically removes "." and ".." segments and duplicated separators. It does
 // **not** touch the filesystem, so it can be applied to a path that does not
 // exist (a missing include is still worth naming in a tidy way).

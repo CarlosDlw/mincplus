@@ -35,6 +35,7 @@
 #include "sema/type_store.h"
 #include "sema/typed_ast.h"
 #include "support/intern/interner.h"
+#include "support/source/source_file.h"
 #include "support/span/span.h"
 
 namespace minc::ir {
@@ -150,6 +151,32 @@ struct IRResult {
   }
 };
 
+// What the lowering needs beyond the artifact it consumes.
+//
+// One field, `debugInfo`, and its inputs. The source file is handed over rather
+// than reached for because the lowering has the *spans* -- byte offsets into a
+// revision of a file -- and not the line table or the path, which live in the
+// session's source table; and `src/ir` may not depend on the driver to find
+// them. A `SourceFile*` rather than a path and a line table because the three
+// things the debug info needs (the id, the path, and the offset-to-line
+// mapping) are one object, and handing over three of its fields invites them to
+// disagree.
+//
+// It is an *option* and not a parameter because `-g` is the only thing that
+// changes here, and a default of "no debug info" is what every test and every
+// `mincc ir` invocation wants.
+struct LoweringOptions {
+  // Off unless the driver read `-g`. Metadata is nodes in the module and a cost
+  // in every pass, and a build that did not ask for a debugger's benefit should
+  // not pay for it.
+  bool debugInfo = false;
+  // The unit's main file. Null when `debugInfo` is false.
+  const support::SourceFile* source = nullptr;
+  // `DW_AT_producer`, so a debugger (and `readelf --debug-dump`) can say which
+  // compiler produced the line table.
+  std::string producer = "minc+";
+};
+
 // Lowers one checked translation unit.
 //
 // Precondition, enforced rather than trusted: `typed` is the typing of `file`
@@ -164,6 +191,7 @@ struct IRResult {
 // the interner those ids came from.
 [[nodiscard]] IRResult lowerUnit(const ast::LoweredFile& file, const resolve::DefMap& defs,
                                  const sema::TypedFile& typed, const sema::TypeStore& types,
-                                 const support::Interner& symbols);
+                                 const support::Interner& symbols,
+                                 const LoweringOptions& options = {});
 
 } // namespace minc::ir

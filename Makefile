@@ -14,7 +14,7 @@
 #   make quick          # the inner loop: build, test, format check
 #   make test           # configure + build + test the dev preset
 #   make gates          # everything CI runs, in the order CI runs it
-#   make examples       # every command, over every example
+#   make examples       # every command, over every example (including `ir -g`)
 
 CMAKE ?= cmake
 CTEST ?= ctest
@@ -155,14 +155,16 @@ examples: build
 	  $(BIN) resolve "$$file" > /dev/null; \
 	  $(BIN) check "$$file" > /dev/null; \
 	  $(BIN) ir "$$file" > /dev/null; \
-	done; \
+	  $(BIN) ir -g "$$file" > /dev/null; \
+done; \
 	for file in examples/pp/*.mx; do \
 	  echo "== $$file"; \
 	  $(BIN) pp -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	  $(BIN) parse -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	  $(BIN) resolve -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 	  $(BIN) check -I $(INCLUDE_DIR) "$$file" > /dev/null; \
-	done; \
+	  $(BIN) ir -g -I $(INCLUDE_DIR) "$$file" > /dev/null; \
+done; \
 	echo "examples ok"
 
 # --- the compiler cache -----------------------------------------------------

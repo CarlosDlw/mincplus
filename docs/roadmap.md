@@ -467,15 +467,40 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
 
 ## 7. Codegen — `src/backend/llvm` (isolated)
 
-- [ ] LLVM initialization and target selection from the triple: target machine
-      and data layout
-- [ ] Object emission (`.o`) and assembly output (`--emit=asm`)
-- [ ] Optimization pipelines for `-O0`..`-O3` and size
+The record is [`architectures/codegen.md`](architectures/codegen.md), and its
+governor is the promise the whole project exists to make: **if the checker lets
+it pass, it must run.** That is why the stage has no semantic refusal in it and
+why its failures are enumerated by *class* — the environment, the program, or
+this compiler.
+
+- [x] Design record: [`docs/architectures/codegen.md`](architectures/codegen.md)
+- [ ] LLVM initialization (the full target/`AsmPrinter` set, which is more than
+      `ir` needs) and target selection from the triple: target machine, and the
+      data layout the module already carries
+- [ ] Object emission (`.o`) and assembly output (`--emit=asm`), through
+      `addPassesToEmitFile` with its inverted boolean wrapped once and its
+      `DisableVerify=true` default overridden
+- [ ] Optimization pipelines for `-O0`..`-O3`, `-Os` and `-Oz` — the **new**
+      pass manager for the middle end, and LLVM's **legacy** one for codegen,
+      which is LLVM's own split and not an accident to fix
+- [ ] **Position-independent code on ELF and Mach-O, from a per-triple table** —
+      measured, not assumed: this host's `cc` defaults to `-pie`, and the
+      default relocation model links into `DT_TEXTREL` (a warning here, an
+      error on other linkers and architectures)
+- [ ] The relocation model, code model and CPU/features stated per triple, never
+      inherited from the host or from an LLVM default
 - [ ] Symbol visibility, sections and relocations taken from the triple and not
       from `#ifdef`s on the host
-- [ ] `[?]` Which LLVM: the distribution's shared library, or a pinned version
-      built once. Both work; the choice is about what a contributor needs
-      installed, not about the IR
+- [ ] The **failure table**, one code per class
+      (`codegen-target-unavailable`, `-emit-unsupported`, `-linker-not-found`,
+      `-linker-unavailable`, `-link-failed`, `-object-write-failed`, `-internal`)
+      with a test input per code and a sweep, in the shape of every earlier
+      stage's enumeration
+- [x] ~~`[?]` Which LLVM: the distribution's shared library, or a pinned version
+      built once~~ — the distribution's (22.1.8 here), and § *The three hosts* in
+      the record is what a contributor needs installed; linking `lld` in as a
+      library to drop the C-toolchain dependency is recorded as a real option
+      and expressly not taken
 - [ ] A triple matrix that is exercised and not assumed: cross-compiling from
       any host in the design targets to the others. A probe already proved the
       shape of it -- one module emitted as x86-64, aarch64, windows-x64 (COFF)
@@ -504,8 +529,16 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
 - [x] `check`: the whole front end through type checking, `DiagBag` rendered,
       no codegen — `--ast`, `--types`, `--target`, `-Wunused`/`-Wshadow`,
       `-Wconversion`
-- [ ] `build`: full pipeline → `.o` → link; `-o`, multiple inputs
-- [ ] `run`: build then execute, forwarding program arguments after `--`
+- [ ] `build`: full pipeline → `.o` → link through a C driver
+      (`clang`→`cc`→`gcc`, overridable with `--linker`); `-o`, multiple inputs,
+      `-O`, `-g`, `--emit=exe|obj|asm`, `-L`/`-l`, `-v` to print the `argv`
+- [ ] `run`: **`build` into a temporary executable plus `exec`**, not an
+      in-process JIT — one code path with `build`, process isolation (a crashing
+      program must not take the compiler with it), argument forwarding after
+      `--` interpreted by nobody, and the program's own exit status (a signal
+      death reported as such). The `LLJIT` oracle lives in `tests/`
+- [ ] No-entry-point refused by the compiler before the link, in its own words,
+      because three linkers spell that failure three unhelpful ways
 - [ ] Common flags: `-O`, `--emit`; `-I`, `-D` and `--target` are wired for the
       front-end commands and will be shared by `build`/`run`
 - [ ] Response files (`@file`) for long command lines

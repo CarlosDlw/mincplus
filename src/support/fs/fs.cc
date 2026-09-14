@@ -76,6 +76,28 @@ std::string joinPath(const std::string& directory, const std::string& name) {
   return directory + "/" + name;
 }
 
+std::string replaceExtension(const std::string& path, const std::string& extension) {
+  const std::string name = fileNameOf(path);
+  const std::string directory = directoryOf(path);
+  // The search stops at the first character of the base name, so a dot in a
+  // *directory* is never mistaken for the start of an extension -- and a leading
+  // dot is a dotfile, which has no extension to replace.
+  std::size_t cut = std::string::npos;
+  for (std::size_t i = name.size(); i > 0; --i) {
+    if (name[i - 1] == '.') {
+      if (i > 1) {
+        cut = i - 1;
+      }
+      break;
+    }
+    if (isSeparator(name[i - 1])) {
+      break;
+    }
+  }
+  const std::string base = cut == std::string::npos ? name : name.substr(0, cut);
+  return joinPath(directory, base + extension);
+}
+
 bool isAbsolutePath(const std::string& path) {
   if (path.empty()) {
     return false;

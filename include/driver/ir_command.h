@@ -41,6 +41,9 @@ struct IrRequest {
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;
+  // `-g`. Prints the same module with debug metadata attached, which is how the
+  // line table is reviewed as text rather than through a debugger.
+  bool debugInfo = false;
 };
 
 // The command minus the choice of streams, so the contract -- which stream

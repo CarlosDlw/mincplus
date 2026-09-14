@@ -31,7 +31,7 @@
 #include "llvm/IR/Operator.h"
 
 #include "ir/ir.h"
-#include "storage.h"
+#include "ir/storage.h"
 
 namespace minc::ir {
 namespace {
@@ -149,13 +149,34 @@ void scanInstruction(const llvm::Instruction& instruction, const llvm::Function&
                                           : std::string("?")) +
       "`";
 
-  // No metadata at all. `!tbaa` is the one the model names -- aliasing is not
-  // typed, so there is no metadata to emit -- and the rule is stated as
-  // "none" rather than "no `!tbaa`" because every other metadata kind is an
-  // assumption about the program that this compiler has not been asked to make.
-  if (instruction.hasMetadata()) {
+  // **A permit-list, not a deny-list** (`codegen.md`, decision 16). The one
+  // permitted attachment is the debug location, and the reason is the reason the
+  // list exists at all: metadata is a claim the optimizer is licensed to exploit,
+  // and `!dbg` licenses no transformation -- it says only *where in the source
+  // this came from*. Everything else (`!tbaa` above all, since aliasing is not
+  // typed here) is a claim about the program that this compiler was not asked to
+  // make. Written as "nothing except" rather than "no `!tbaa`" so a new metadata
+  // kind cannot join the exceptions by not being mentioned.
+  if (instruction.hasMetadataOtherThanDebugLoc()) {
     add(out, IRDiagnosticCode::Assumption,
-        "an instruction in " + where + " carries metadata; the language emits none");
+        "an instruction in " + where +
+            " carries metadata other than a debug location; the language emits none");
+  }
+
+  // The other half of the debug-representation rule: `#dbg_declare` records, never
+  // `llvm.dbg.*` intrinsic calls. The reference forbids the two in one module --
+  // mixing them produces a module that verifies and a debugger that lies -- so the
+  // scan asserts the form the lowering is supposed to have produced, which is the
+  // only way a future change to `DIBuilder`'s default can be caught here rather
+  // than by a person with `gdb` open.
+  if (const auto* call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+    if (const llvm::Function* callee = call->getCalledFunction()) {
+      if (callee->getName().starts_with("llvm.dbg.")) {
+        add(out, IRDiagnosticCode::Assumption,
+            "`" + callee->getName().str() + "` reached the module in " + where +
+                "; debug information is built from records, and the two forms may not coexist");
+      }
+    }
   }
 
   if (const auto* gep = llvm::dyn_cast<llvm::GetElementPtrInst>(&instruction)) {

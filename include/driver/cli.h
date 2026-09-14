@@ -87,6 +87,43 @@ struct CliOptions {
   bool warnConversion = false;
   // `--at [file:]line` for `pp`, `[file:]line:col` for `resolve`.
   std::string at;
+
+  // --- `build` and `run` -------------------------------------------------------
+  //
+  // Kept apart from the display flags above because these change what is
+  // *produced*, not what is printed: a typo in one of them is not a cosmetic
+  // difference, so each has a real value and none of them defaults to "whatever".
+
+  // `-g`. Debug information; see `codegen.md` § *Debug information*.
+  bool debugInfo = false;
+  // `-v`. Print the exact commands the build runs, which is the first thing a
+  // reader wants after a link failure.
+  bool verbose = false;
+  // `-o PATH`. Empty means the command's default, which differs per emit kind, so
+  // the choice is made where the emit kind is known and not here.
+  std::string output;
+  // `-O`. Stored as the letter(s) after the `-O` (`"2"`, `"s"`, `"z"`), because
+  // the spelling and its meaning are one thing and `backend` validates it.
+  std::string optLevel = "0";
+  // `--emit KIND`: `exe`, `obj`, `asm`. Validated by the command, which is where
+  // the sentence for an unknown kind can name the ones that exist.
+  std::string emit = "exe";
+  // `-L DIR` / `-l NAME`, in the order written: link order is meaning.
+  std::vector<std::string> libraryDirs;
+  std::vector<std::string> libraries;
+  // `--linker PATH`: the linker *driver* (clang/cc/gcc), never a raw linker.
+  std::string linker;
+  // `--sysroot DIR`: forwarded to the driver; required with `-L`/`-l` when the
+  // target is not the host.
+  std::string sysroot;
+  // Everything after `--` when the command is `run`. Interpreted by nobody: the
+  // whole point of the separator is that `mincc run p.mx -- -o --emit` passes two
+  // ordinary arguments to the program.
+  std::vector<std::string> programArgs;
+  // Whether a `--` was seen. Kept, because "no program arguments" and "program
+  // arguments after the separator" are different states of a `run` invocation.
+  bool sawDoubleDash = false;
+
   std::string error; // non-empty => usage error; ignore the rest
 };
 

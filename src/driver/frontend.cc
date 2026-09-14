@@ -13,6 +13,7 @@
 #include "ast/validate.h"
 #include "driver/error_report.h"
 #include "driver/input_source.h"
+#include "driver/version.h"
 #include "lex/token_stream.h"
 #include "parse/parse_report.h"
 #include "pp/pp_report.h"
@@ -25,6 +26,10 @@
 #include "syntax/tree.h"
 
 namespace minc::driver {
+
+std::string producerString() {
+  return std::string(kProgName) + " " + kVersion;
+}
 
 FrontEnd::FrontEnd(const FrontEndOptions& options)
     : options_(options), trees_(session_.arena()), sema_(options.target) {}

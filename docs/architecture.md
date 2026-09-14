@@ -698,6 +698,22 @@ warnings inside them are dropped at the report step while errors are not.
   kind, type kind, operator or callee a compile error instead of a silent gap.
   [`memory.md`](architectures/memory.md) sits under that stage: the object and
   provenance model whose rules the assumption list is the emitted half of.
+- **codegen** (`src/backend/llvm`, planned) selects a `TargetMachine` from the
+  module's triple, runs LLVM's pass pipeline, and writes an object or an
+  assembly listing. It contains no instruction selection, no register allocation
+  and no target knowledge, and it is the *smallest* stage in the pipeline for
+  how much it decides. It is also where the project's promise becomes a
+  statement about the program rather than about the compiler — **if the checker
+  lets it pass, it must run** — which is why its failures are enumerated by
+  class (environment, the program, this compiler) and why there is no semantic
+  refusal in it at all. The driver's `build` and `run` sit above it: `build`
+  drives a C linker *driver* (`clang`→`cc`→`gcc`) rather than a linker, and
+  `run` is `build` into a temporary executable plus `exec` — one code path, and
+  the program's own exit status. Design record:
+  [`architectures/codegen.md`](architectures/codegen.md) — the target machine,
+  the two pass managers, the position-independence rule that a host's default
+  PIE makes load-bearing, the link through a driver, the exhaustive failure
+  table, and debug information's half here and half in `ir`.
 - **lex** (`src/lex`) reads `SourceFile::text` (already trusted UTF-8) and
   produces the token stream. It does not re-validate encoding, re-derive
   limits, or resolve names — it answers "what is here", never "what does it

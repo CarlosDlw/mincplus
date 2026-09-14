@@ -32,7 +32,8 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
 
-#include "storage.h"
+#include "debug.h"
+#include "ir/storage.h"
 
 #include "ir/ir.h"
 #include "sema/target.h"
@@ -200,8 +201,8 @@ namespace {
 
 Lowering::Lowering(const ast::LoweredFile& file, const resolve::DefMap& defs,
                    const sema::TypedFile& typed, const sema::TypeStore& types,
-                   const support::Interner& symbols)
-    : file_(file), defs_(defs), typed_(typed), types_(types), symbols_(symbols),
+                   const support::Interner& symbols, const LoweringOptions& options)
+    : file_(file), defs_(defs), typed_(typed), types_(types), symbols_(symbols), options_(options),
       impl_(makeImpl(file.file())), context_(impl_->context), module_(*impl_->module),
       layout_(impl_->layout), builder_(impl_->context), allocaBuilder_(impl_->context) {
   // The declarations are indexed first, because an index is what keeps a lookup
@@ -235,6 +236,21 @@ Lowering::Lowering(const ast::LoweredFile& file, const resolve::DefMap& defs,
   impl_->layout = *layout;
   module_.setTargetTriple(llvm::Triple(target.name()));
   module_.setDataLayout(impl_->layout);
+
+  // Debug information last, because it reads the triple and the layout: the two
+  // module flags it sets belong to a module that already knows its target, and a
+  // `DIFile` built before the data layout would be attached to a module whose
+  // sizes nobody has decided. `-g` with no source file is a driver bug -- the
+  // driver always has one -- and is refused rather than defaulted, because a line
+  // table for the wrong file is worse than none.
+  if (options_.debugInfo) {
+    if (options_.source == nullptr) {
+      errorAt(support::Span{}, IRDiagnosticCode::Internal,
+              "debug information was requested with no source file to point the line table at");
+      return;
+    }
+    debug_ = std::make_unique<DebugInfo>(module_, *options_.source, options_.producer);
+  }
 
   // The cross-check `ir.md` names as the one place the front end's target model
   // can be wrong with nothing else noticing: `sema` states the pointer width by
@@ -274,6 +290,28 @@ void Lowering::errorAt(support::Span span, IRDiagnosticCode code, std::string me
 void Lowering::fatal(support::Span span, IRDiagnosticCode code, std::string message) {
   errorAt(span, code, std::move(message));
   failed_ = true;
+}
+
+// --- debug information ----------------------------------------------------------
+
+void Lowering::locate(ast::AstId id) {
+  if (debug_ == nullptr || !id.valid()) {
+    return;
+  }
+  locate(spanOf(id));
+}
+
+void Lowering::locate(support::Span span) {
+  if (debug_ == nullptr) {
+    return;
+  }
+  // Set on both builders: the alloca builder is the one that is *not* moved by
+  // `SetInsertPoint` in the usual flow, so a location set only on `builder_`
+  // would leave every frame slot pointing at whatever the entry block's first
+  // instruction happens to carry.
+  const llvm::DebugLoc location = debug_->locationAt(span);
+  builder_.SetCurrentDebugLocation(location);
+  allocaBuilder_.SetCurrentDebugLocation(location);
 }
 
 // --- tree access ---------------------------------------------------------------
@@ -406,7 +444,7 @@ llvm::AllocaInst* Lowering::localOf(ast::AstId pathExpr) const {
 }
 
 llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
-                                         std::string_view name) {
+                                         std::string_view name, ast::AstId at) {
   const std::uint64_t key = defKey(def);
   const auto existing = locals_.find(key);
   if (existing != locals_.end()) {
@@ -429,12 +467,18 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
   if (entryBlock_ != nullptr) {
     allocaBuilder_.SetInsertPoint(entryBlock_, entryBlock_->begin());
   }
+  // Re-seated, `SetInsertPoint` copies the location of the instruction it lands
+  // on, so the slot's own line number has to be set again after the seat.
+  locate(at);
   llvm::AllocaInst* alloca = allocaBuilder_.CreateAlloca(slotType, nullptr, name);
   // The alignment is stated rather than left to the target's choice: the number
   // has to be the one the type states, because it is the same number every
   // access through this object will carry and the scan compares the two.
   alloca->setAlignment(llvm::Align(alignmentOf(type)));
   locals_.emplace(key, alloca);
+  if (debug_ != nullptr && at.valid()) {
+    debug_->declareBinding(*alloca, name, types_, type, spanOf(at));
+  }
   return alloca;
 }
 
@@ -483,6 +527,14 @@ bool Lowering::run() {
       return false;
     }
   }
+  // The debug metadata is resolved before the verifier sees it, and the order is
+  // load-bearing: until `finalize` runs, the compile unit's retained arrays and
+  // every subprogram are temporaries, and a module with temporaries verifies
+  // intermittently and prints `<temporary>` in the places a reader looks.
+  if (debug_ != nullptr) {
+    debug_->finalize();
+  }
+
   // LLVM's own verifier, last: it cannot see a rule of *this* language (that is
   // `invariants.cc`), but it does prove the module is well formed, and a stage
   // that handed on a malformed module would make every later failure somebody
@@ -505,8 +557,8 @@ bool Lowering::run() {
 
 IRResult lowerUnit(const ast::LoweredFile& file, const resolve::DefMap& defs,
                    const sema::TypedFile& typed, const sema::TypeStore& types,
-                   const support::Interner& symbols) {
-  Lowering lowering(file, defs, typed, types, symbols);
+                   const support::Interner& symbols, const LoweringOptions& options) {
+  Lowering lowering(file, defs, typed, types, symbols, options);
   IRResult result;
   if (!lowering.run()) {
     result.diagnostics = lowering.takeDiagnostics();

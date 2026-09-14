@@ -19,6 +19,7 @@
 minc_add_library(minc_ir
   SOURCES
     lower.cc
+    debug.cc
     types.cc
     declarations.cc
     function.cc

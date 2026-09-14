@@ -1,15 +1,23 @@
 // Copyright (c) 2026 minc+ contributors.
 // SPDX-License-Identifier: MIT
-// What `ir::Module` actually owns, and the only place outside the lowering that
-// may name it.
+// What `ir::Module` actually owns, and the only way to reach it.
 //
 // `ir.h` is included by stages that must not link LLVM, so the handle there is
 // one pointer and nothing else. This header is the *reason* that works: the
-// context, the data layout and the module live together behind that pointer, and
-// only a translation unit inside `src/ir` includes this file. `dump.cc` and
-// `invariants.cc` do, which is exactly the pair of consumers `ir.md` names -- the
-// printer and the scanner -- and neither of them is reachable from the stages
-// above.
+// context, the data layout and the module live together behind that pointer,
+// and **this file includes `llvm/*`** -- so a translation unit that includes it
+// is one that has crossed the boundary on purpose.
+//
+// It lives under `include/` rather than beside the lowering because exactly one
+// consumer outside `src/ir` needs it: `src/backend`, which has to hand the
+// `llvm::Module` to LLVM's code generator. Inside `src/ir` the printer
+// (`dump.cc`) and the scanner (`invariants.cc`) use it, which is the pair
+// `ir.md` names.
+//
+// What it is **not** is a general accessor. `Module` has no public
+// `llvm::Module&` member function, so the boundary cannot be crossed by
+// including a header a stage above already includes; reaching the module takes
+// this file, whose name says what it does.
 #pragma once
 
 #include <memory>

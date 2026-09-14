@@ -656,8 +656,20 @@ which is where the algorithm that depends on them lives.
   its record is [`docs/architectures/ir.md`](docs/architectures/ir.md), with the
   memory rules it emits under in
   [`docs/architectures/memory.md`](docs/architectures/memory.md).
-- `src/backend/`, `src/cinterop/` — **next**, in that order and for
-  the reasons in
+- `src/backend/` — **next.** The codegen stage: a `TargetMachine` from the
+  triple, LLVM's pass pipeline (the new pass manager for the middle end, LLVM's
+  legacy one for codegen), and an object or an assembly listing out. Its
+  governor is the promise the project exists to make — **if the checker lets it
+  pass, it must run** — so it contains no semantic refusal, and it emits
+  position-independent code on ELF and Mach-O because a host whose `cc` defaults
+  to `-pie` is the ordinary case and a static object links into `DT_TEXTREL`. On
+  top of it sit the driver's `build` (which drives a C linker *driver*, not a
+  linker) and `run` (which is `build` into a temporary executable plus `exec`,
+  so the program's crash and exit status are the program's). Its record — the
+  failure table, the debug-info split between this stage and `ir`, and the
+  cross-platform notes — is
+  [`docs/architectures/codegen.md`](docs/architectures/codegen.md).
+- `src/cinterop/` — after it, for the reasons in
   [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline).
 - `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
@@ -715,7 +727,8 @@ their research references -- are in
 [`docs/architectures/preprocessor.md`](docs/architectures/preprocessor.md),
 [`docs/architectures/resolve.md`](docs/architectures/resolve.md),
 [`docs/architectures/sema.md`](docs/architectures/sema.md),
-[`docs/architectures/ir.md`](docs/architectures/ir.md), and
+[`docs/architectures/ir.md`](docs/architectures/ir.md),
+[`docs/architectures/codegen.md`](docs/architectures/codegen.md), and
 [`docs/architectures/memory.md`](docs/architectures/memory.md).
 
 ## Build

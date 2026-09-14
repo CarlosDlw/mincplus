@@ -96,6 +96,7 @@ minc_add_executable(minc_unit_tests
     sema/store_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
+    ir/debug_test.cc
     ir/invariants_test.cc
     ir/llvm_isolation_test.cc
     driver/cli_test.cc
@@ -105,6 +106,7 @@ minc_add_executable(minc_unit_tests
     driver/resolve_command_test.cc
     driver/check_command_test.cc
     driver/ir_command_test.cc
+    driver/build_command_test.cc
   DEPS
     minc_support
     minc_lex

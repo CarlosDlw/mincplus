@@ -49,6 +49,10 @@ void Lowering::lowerStatement(ast::AstId stmt) {
   if (!stmt.valid() || failed_ || inError(stmt)) {
     return;
   }
+  // One call here is total coverage for statements: every instruction the
+  // statement emits inherits this location from the builder, so a later addition
+  // to a lower-case here cannot lose its line number by forgetting to set one.
+  locate(stmt);
   switch (kindOf(stmt)) {
   case ast::NodeKind::LetStmt:
   case ast::NodeKind::ConstStmt:
@@ -117,7 +121,7 @@ void Lowering::lowerBinding(ast::AstId stmt) {
   if (def->index < defs_.defs.size() && defs_.defs[def->index].name != support::kInvalidSym) {
     name = symbols_.lookup(defs_.defs[def->index].name);
   }
-  llvm::AllocaInst* slot = declareLocal(*def, type, name);
+  llvm::AllocaInst* slot = declareLocal(*def, type, name, stmt);
   if (slot == nullptr) {
     // The binding's type could not be mapped, and the refusal is already
     // recorded. Nothing is stored: there is no object to store into.

@@ -8,8 +8,13 @@ namespace minc::driver {
 namespace {
 
 constexpr std::array<CommandInfo, 8> kCommands{{
-    {Command::Build, "build", "<files...>", "Compile sources and link an executable", false},
-    {Command::Run, "run", "<files...>", "Build and run the resulting program", false},
+    // The first two commands that produce something other than a diagnostic, and
+    // the first that hand work to a linker: `build` emits objects and drives a C
+    // linker driver, `run` is `build` plus an `exec` (`codegen.md`).
+    {Command::Build, "build", "[options] <files...>",
+     "Compile and link an executable; -o, -O, -g, --emit, --target, -L, -l", true},
+    {Command::Run, "run", "[options] <files...> [-- args...]",
+     "Build a program and run it; everything after `--` goes to the program", true},
     {Command::Check, "check", "[options] <files...>",
      "Check only: type-check every unit; silent on success, no code is emitted", true},
     // The three stages, each with the view it is responsible for, and the
@@ -106,6 +111,7 @@ CliOptions parseArgs(int argc, const char* const* argv) {
     if (!optionsEnded) {
       if (arg == "--") {
         optionsEnded = true;
+        opts.sawDoubleDash = true;
         continue;
       }
       if (arg == "-h" || arg == "--help") {
@@ -222,6 +228,93 @@ CliOptions parseArgs(int argc, const char* const* argv) {
         opts.at = argv[++i];
         continue;
       }
+      // `-g` and `-v`. Matched before the value-taking options below so a
+      // single-letter flag can never be mistaken for one whose value is joined.
+      if (arg == "-g") {
+        opts.debugInfo = true;
+        continue;
+      }
+      if (arg == "-v") {
+        opts.verbose = true;
+        continue;
+      }
+      // `-O LEVEL`. The level is the letter(s) after `-O`, and a bare `-O` means
+      // `-O1` -- both are what GCC and Clang do, and a compiler that accepts only
+      // one spelling is a paper cut in a build script.
+      if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'O') {
+        std::string level(arg.substr(2));
+        if (level.empty()) {
+          level = "1";
+        }
+        opts.optLevel = std::move(level);
+        continue;
+      }
+      // `-o PATH`, joined or separate. Last one wins, like every C compiler: a
+      // build script that appends `-o` means the appended one.
+      if (arg == "-o" || (arg.size() > 2 && arg.rfind("-o", 0) == 0)) {
+        std::string value = arg.size() > 2 ? std::string(arg.substr(2)) : std::string{};
+        if (value.empty()) {
+          if (i + 1 < argc) {
+            value = argv[i + 1] != nullptr ? argv[++i] : "";
+          }
+        }
+        if (value.empty()) {
+          opts.error = "option '-o' needs a file name";
+          return opts;
+        }
+        opts.output = std::move(value);
+        continue;
+      }
+      // `-L DIR` / `-l NAME`, joined or separate, and matched before the
+      // `-D`/`-U`/`-I` branch only because neither letter collides with those.
+      if (arg.size() >= 2 && arg[0] == '-' && (arg[1] == 'L' || arg[1] == 'l')) {
+        std::string value(arg.substr(2));
+        if (value.empty()) {
+          if (i + 1 < argc) {
+            value = argv[i + 1] != nullptr ? argv[++i] : "";
+          }
+        }
+        if (value.empty()) {
+          opts.error = "option '" + std::string(arg) + "' needs a value";
+          return opts;
+        }
+        if (arg[1] == 'L') {
+          opts.libraryDirs.push_back(std::move(value));
+        } else {
+          opts.libraries.push_back(std::move(value));
+        }
+        continue;
+      }
+      // `--emit KIND`, `--linker PATH`, `--sysroot DIR`. All three accept the
+      // joined and the separate spelling; the value is understood by the command,
+      // which is where the message can name the alternatives.
+      const auto valueOption = [&](std::string_view name, std::string& out) {
+        const std::string_view argView(arg);
+        if (argView == name) {
+          if (i + 1 >= argc || argv[i + 1] == nullptr) {
+            opts.error = "option '" + std::string(name) + "' needs a value";
+            return true;
+          }
+          out = argv[++i];
+          return true;
+        }
+        if (argView.size() > name.size() && argView.rfind(name, 0) == 0 &&
+            argView[name.size()] == '=') {
+          out = std::string(argView.substr(name.size() + 1));
+          if (out.empty()) {
+            opts.error = "option '" + std::string(name) + "' needs a value";
+          }
+          return true;
+        }
+        return false;
+      };
+      if (valueOption("--emit", opts.emit) || valueOption("--linker", opts.linker) ||
+          valueOption("--sysroot", opts.sysroot)) {
+        if (!opts.error.empty()) {
+          return opts;
+        }
+        continue;
+      }
       if (!isPositional(arg)) {
         opts.error = "unrecognized option '" + std::string(arg) + "'";
         return opts;
@@ -236,6 +329,13 @@ CliOptions parseArgs(int argc, const char* const* argv) {
         return opts;
       }
       opts.command = command;
+      continue;
+    }
+    // After a `--` in a `run`, a positional is the *program's*, not the
+    // compiler's. Nothing here looks at it -- it is copied and handed to `exec`
+    // -- which is what makes `-- -o --emit` two ordinary arguments.
+    if (opts.sawDoubleDash && opts.command == Command::Run) {
+      opts.programArgs.emplace_back(arg);
       continue;
     }
     opts.inputs.emplace_back(arg);

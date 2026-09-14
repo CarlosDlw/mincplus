@@ -6,6 +6,7 @@
 // do not exit, and the exit code is chosen here and nowhere else.
 #include <iostream>
 
+#include "driver/build_command.h"
 #include "driver/check_command.h"
 #include "driver/cli.h"
 #include "driver/error_report.h"
@@ -48,11 +49,15 @@ int main(int argc, char** argv) {
   case minc::driver::Command::Ir:
     return minc::driver::runIr(opts);
   case minc::driver::Command::Build:
+    return minc::driver::runBuild(opts);
   case minc::driver::Command::Run:
-    break;
+    return minc::driver::runRun(opts);
   }
 
+  // Unreachable: the switch above is total over `Command`, and `-Wswitch` keeps it
+  // that way as the enum grows. The fall-through exists so a value that somehow
+  // reached here is a message rather than a crash.
   std::cerr << minc::driver::kProgName << ": error: command '"
-            << minc::driver::toString(*opts.command) << "' is not implemented yet\n";
+            << minc::driver::toString(*opts.command) << "' has no dispatch\n";
   return minc::driver::exitCode(minc::driver::ExitCode::Failure);
 }

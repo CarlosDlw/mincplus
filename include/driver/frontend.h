@@ -37,6 +37,14 @@
 
 namespace minc::driver {
 
+// `DW_AT_producer`: the compiler and its version, as one string.
+//
+// Here rather than at each call site because it is part of the module's identity
+// and two commands must not disagree about it -- a line table that says `minc+`
+// from one command and `mincc 0.1.0` from another is a bug report nobody can act
+// on. A function and not a constant because the version is generated.
+[[nodiscard]] std::string producerString();
+
 // Everything the pipeline needs, in one struct, so a command builds it from its
 // request rather than passing eight arguments down.
 struct FrontEndOptions {

@@ -100,6 +100,10 @@ Value Lowering::lowerExpr(ast::AstId expr) {
     return {};
   }
   ++depth_;
+  // The node's own line, before anything below it runs: a nested expression
+  // overwrites this with its own, so the *innermost* expression that produced an
+  // instruction owns its location, which is what a stepping debugger expects.
+  locate(expr);
 
   Value result;
   switch (kindOf(expr)) {
@@ -274,6 +278,7 @@ Place Lowering::lowerPlace(ast::AstId expr) {
   if (!expr.valid()) {
     return {};
   }
+  locate(expr);
   switch (kindOf(expr)) {
   case ast::NodeKind::PathExpr: {
     llvm::AllocaInst* slot = localOf(expr);

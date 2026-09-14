@@ -640,6 +640,7 @@ list, and it is short on purpose — every row is something this stage may
 | Assumption | Status | Why not |
 | --- | --- | --- |
 | `!tbaa`, `!alias.scope`, `!noalias`, `!invariant.group`, `!nontemporal` | **never** | memory has no effective type; aliasing is untyped, and each of these is an inferred promise (`memory.md`, decisions 3 and 9) |
+| `!dbg` and debug records (`#dbg_declare`, `#dbg_value`) | **permitted under `-g` — the only metadata that is** | a source mapping is not an assumption: it says where the code came from, licenses no transformation, and LLVM's contract for it is "preserve or drop", never "exploit". The scan's rule is therefore a *permit-list* — "no metadata except debug info" — so a new metadata kind is a failing test rather than a quiet widening |
 | `noalias` (the parameter attribute), `captures(...)` | **only from source** | a written `restrict` is the sole producer; today the syntax does not exist, so the module contains none. Never inferred. `captures(...)` waits for a proof scan over the body |
 | `inbounds` (and the `nusw` it implies) | **only with a recorded proof** | today: never. See below — this is the row with a mechanism to design |
 | `nsw`, `nuw` | **never** | the language defines wrap; class one of § *The runtime contract* |
@@ -673,6 +674,14 @@ Two mechanisms, and they fail differently:
 And the rule underneath both: **this list is the only place a new assumption may
 be written down.** A future feature that wants one adds a row, an argument for
 why the language states it, and the scan; it does not add an attribute.
+
+The `!dbg` row is the reason the rule is written as a permit-list and not as a
+denylist: `-g` puts a location on every instruction, so a deny-list would have
+had to be edited every time a debug feature arrived, and the edit would be the
+kind that widens. [`codegen.md`](codegen.md) § *The conflict with the assumption
+scan* carries the reasoning and the two tests that keep the exception from
+widening — that `-g` changes no instruction, and that the strip-and-compare
+proves it.
 
 ## Signedness comes from the type
 
@@ -902,12 +911,18 @@ anyone has to notice it in review. This is the same *checkable rule* shape as
 `sema`'s "one input per diagnostic code" table: an architectural claim, turned
 into something that fails.
 
-## `mincc run`: ORC
+## `mincc run`: ORC — as the oracle, not as the command
+
+> **Revised.** This section originally made `run` the ORC JIT. `run` is
+> `build` plus `exec` — one code path, process isolation, the child's exit
+> status — and the JIT below is what the **test suite** uses. The argument is
+> [`codegen.md`](codegen.md) § *The one question that decides the shape*; what
+> follows stands unchanged for the oracle, and none of it is `run`'s.
 
 The executable path is `build` → object → link. The *fast* path, and the one
 that finally gives this project something it has never had — an **oracle** — is
-`run` over the ORC JIT, and it is worth designing now because it changes what
-"tested" means for every later feature:
+the ORC JIT inside `tests/`, and it is worth designing now because it changes
+what "tested" means for every later feature:
 
 ```
 auto jit = llvm::orc::LLJITBuilder().create();     // host triple, in-process
@@ -924,9 +939,10 @@ int result = sym->toPtr<int (*)()>()();
   `src/cinterop` exists.
 - **`LLVMContext` ownership transfers into the `ThreadSafeModule`.** After
   `addIRModule` the module belongs to the JIT, and the unit's context with it.
-  A `run` that keeps using either is a use-after-move waiting for a bad day.
-- **`run` is the host triple only.** Cross-compiling is `codegen`'s job with a
-  `TargetMachine`; a JIT that claims to run a Windows object on Linux is a lie.
+  A caller that keeps using either is a use-after-move waiting for a bad day.
+- **The oracle is the host triple only.** Cross-compiling is `codegen`'s job
+  with a `TargetMachine`; a JIT that claims to run a Windows object on Linux is
+  a lie.
 - **What it is for.** The end-to-end test shape this project has been missing:
   compile the program, execute it, and compare the value against a *reference* —
   the same source translated to C and compiled by the system compiler, for the
@@ -1088,7 +1104,7 @@ other stages' artifacts are.
 | 12 | One `LLVMContext` per unit, per worker; no globals | An `LLVMContext` is not thread-safe and owns the types; sharing one across an editor's concurrent units is a race, not a convenience |
 | 13 | `src/ir` may include `llvm/*`; nothing up to and including `sema` may | The pipeline's order is the boundary; a test greps the tree, so the rule fails in CI rather than in review |
 | 14 | The LLVM build configuration is asserted, not assumed | ABI-breaking checks, RTTI and EH are part of LLVM's ABI; a mismatch is a link error or a silent struct-layout disagreement |
-| 15 | `run` is `LLJIT` on the host triple, and it is the oracle | Eager, in-process, `libc` visible; cross-compiling is `codegen`'s job, and executing a program is the only thing that can prove the integer table |
+| 15 | `LLJIT` on the host triple is the **test suite's** differential oracle — and is **not** what `run` executes | Eager, in-process, `libc` visible, and a crash is a failing test; executing a program is the only thing that can prove the integer table. A *user-facing* `run` needs the opposite (isolation, and one code path with `build`), so the decision was split: see [`codegen.md`](codegen.md) § *The one question that decides the shape* |
 | 16 | No golden IR files; behaviour is the contract | IR text changes with LLVM, the target and comments; a regenerated golden file has stopped testing |
 | 17 | An unsupported construct is a *named refusal*, never a guess | `ir-unsupported-*` is a feature not yet built; `ir-internal` is a bug in this compiler — opposite fixes, so never the same message |
 | 18 | Debug metadata is built only under `-g`, and a broken line table is stripped rather than fatal | Metadata is a cost in the module and in every pass; and refusing to compile a correct program because its scope chain is malformed trades a breakpoint for a build |

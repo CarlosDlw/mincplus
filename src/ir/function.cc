@@ -21,6 +21,7 @@
 #include "llvm/IR/Instructions.h"
 
 #include "ast/node.h"
+#include "debug.h"
 #include "sema/typed_ast.h"
 #include "support/intern/sym_id.h"
 
@@ -53,8 +54,18 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
     return;
   }
 
+  // The function's debug scope is opened before the entry block, so the block's
+  // own instructions and the parameters stored into their slots all carry a line
+  // number rather than the file scope's.
+  if (debug_ != nullptr) {
+    const std::string symbol = linkageName(*def);
+    debug_->enterFunction(*function, symbol, symbol, types_, info.functionType,
+                          nameNode.valid() ? spanOf(nameNode) : spanOf(info.decl));
+  }
+
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(context_, "entry", function);
   builder_.SetInsertPoint(entry);
+  locate(info.decl);
   // Frame slots live in the entry block and never in a conditional one: an
   // `alloca` inside a loop grows the frame on every iteration, and every binding
   // in this language has a fixed size, so there is no reason to allow it.
@@ -96,7 +107,10 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
             defs_.defs[paramDef->index].name != support::kInvalidSym) {
           name = symbols_.lookup(defs_.defs[paramDef->index].name);
         }
-        llvm::AllocaInst* slot = declareLocal(*paramDef, paramType, name);
+        // The parameter's own node is the location, so a debugger stops on the
+        // parameter the reader wrote and not on the function's first line.
+        const ast::AstId paramAt = paramName.valid() ? paramName : param;
+        llvm::AllocaInst* slot = declareLocal(*paramDef, paramType, name, paramAt);
         llvm::Argument* argument = function->getArg(static_cast<unsigned>(index));
         storePlace(Place{slot, paramType}, Value{argument, paramType}, ast::AstId{});
       }
@@ -120,6 +134,9 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   }
   terminateDangling(function);
 
+  if (debug_ != nullptr) {
+    debug_->leaveFunction();
+  }
   current_ = nullptr;
   entryBlock_ = nullptr;
   currentReturn_ = sema::kInvalidType;
@@ -149,6 +166,7 @@ void Lowering::lowerBlock(ast::AstId block) {
   if (!block.valid() || failed_) {
     return;
   }
+  locate(block);
   for (const ast::AstId stmt : operandsOf(block)) {
     if (failed_) {
       return;

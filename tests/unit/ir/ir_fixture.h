@@ -32,6 +32,8 @@
 #include "sema/type_store.h"
 #include "sema/typed_ast.h"
 #include "support/session/session.h"
+#include "support/source/source_file.h"
+#include "support/span/file_id.h"
 #include "syntax/store.h"
 #include "syntax/tree.h"
 
@@ -51,6 +53,26 @@ public:
   }
   IrFixture& warnConversion(bool on = true) {
     options_.warnConversion = on;
+    return *this;
+  }
+  // `-g`. Off by default, like the option itself, so a test that does not ask for
+  // debug info is testing the module every other test is testing.
+  IrFixture& debugInfo(bool on = true) {
+    lowering_.debugInfo = on;
+    return *this;
+  }
+  // The producer string a real command passes. Fixed here rather than derived
+  // from the version, so a test asserts on a stable string.
+  IrFixture& producer(std::string text) {
+    lowering_.producer = std::move(text);
+    return *this;
+  }
+  // Hands the lowering no source file at all. The driver always has one, so this
+  // exists to prove the *refusal* rather than to model a real invocation: `-g`
+  // with nothing to point a line table at is a caller bug, and the lowering says
+  // so instead of emitting a `DIFile` with an empty name.
+  IrFixture& noSourceFile(bool on = true) {
+    withoutSource_ = on;
     return *this;
   }
 
@@ -77,7 +99,18 @@ public:
     resolved_ = resolve::resolveUnit(lowered_.file, session_.symbols(), resolveOptions_);
 
     typed_ = sema::checkUnit(lowered_.file, resolved_.map, session_.symbols(), store_, options_);
-    result_ = ir::lowerUnit(lowered_.file, resolved_.map, typed_.typed, store_, session_.symbols());
+    // The source file the spans index into: the same object the driver hands over,
+    // so the line table is read the way a real build reads it rather than from a
+    // copy the fixture made.
+    lowerLoweredFile_ = lowered_.file.file();
+    if (!withoutSource_) {
+      lowering_.source = session_.sources().find(lowerLoweredFile_);
+    }
+    if (lowering_.producer.empty()) {
+      lowering_.producer = "minc+ test";
+    }
+    result_ = ir::lowerUnit(lowered_.file, resolved_.map, typed_.typed, store_, session_.symbols(),
+                            lowering_);
     return true;
   }
 
@@ -86,6 +119,11 @@ public:
   }
   [[nodiscard]] const sema::SemaOutput& typed() const {
     return typed_;
+  }
+  // The unit's source file, which the debug info's line table is read from.
+  [[nodiscard]] const support::SourceFile* sourceFile() const {
+    return lowerLoweredFile_ == support::kInvalidFile ? nullptr
+                                                      : session_.sources().find(lowerLoweredFile_);
   }
   [[nodiscard]] bool moduleBuilt() const {
     return result_.module.built();
@@ -129,6 +167,9 @@ private:
   std::string source_;
   sema::SemaOptions options_;
   resolve::ResolveOptions resolveOptions_;
+  ir::LoweringOptions lowering_;
+  support::FileId lowerLoweredFile_ = support::kInvalidFile;
+  bool withoutSource_ = false;
 
   support::Session session_;
   pp::PPResult pp_;

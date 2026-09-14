@@ -16,6 +16,7 @@
 #include <iterator>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -25,13 +26,14 @@
 namespace minc {
 namespace {
 
-// The directories allowed to see LLVM. `src/backend` is listed before it exists
-// on purpose: the day it is created it must not have to remember to update a
-// test, and the list is the *policy* rather than a census of what is there.
+// The directories allowed to see LLVM, relative to whichever root the walk
+// starts at. The list is the *policy* rather than a census of what is there: a
+// new file under `ir/` or `backend/` is allowed by construction, and a new
+// directory has to say why it needs LLVM.
 [[nodiscard]] bool mayIncludeLlvm(const std::filesystem::path& relative) {
-  // Relative to `src/`, which is where the walk starts.
   const std::string text = relative.generic_string();
-  return text.rfind("ir/", 0) == 0 || text.rfind("backend/", 0) == 0;
+  return text.rfind("ir/", 0) == 0 || text.rfind("backend/", 0) == 0 || text == "ir" ||
+         text == "backend";
 }
 
 [[nodiscard]] bool isSourceFile(const std::filesystem::path& path) {
@@ -39,17 +41,9 @@ namespace {
   return extension == ".cc" || extension == ".h" || extension == ".cpp" || extension == ".hpp";
 }
 
-TEST(LlvmIsolationTest, OnlyTheIrAndBackendModulesIncludeLlvm) {
-  // Derived from the generated examples path rather than passed in: one
-  // generated path is already configured for every generator and platform, and
-  // the compiler's sources are its sibling. The walk is rooted at `src/` and not
-  // at the project, because the rule is about the *targets* -- a test linking
-  // LLVM to check the IR is allowed, and this test's own file necessarily spells
-  // the strings it looks for.
-  const std::filesystem::path root =
-      std::filesystem::path(test::kExamplesDir).parent_path() / "src";
-  ASSERT_TRUE(std::filesystem::exists(root)) << root;
-
+// Walks one tree and collects every file that includes LLVM without the right to.
+[[nodiscard]] std::vector<std::string> scanTree(const std::filesystem::path& root,
+                                                const std::string& label) {
   std::vector<std::string> offenders;
   std::error_code ec;
   for (const std::filesystem::directory_entry& entry :
@@ -69,13 +63,39 @@ TEST(LlvmIsolationTest, OnlyTheIrAndBackendModulesIncludeLlvm) {
     while (std::getline(in, line)) {
       if (line.find("#include \"llvm/") != std::string::npos ||
           line.find("#include <llvm/") != std::string::npos) {
-        offenders.push_back(relative.generic_string() + ": " + line);
+        offenders.push_back(label + relative.generic_string() + ": " + line);
       }
     }
   }
+  return offenders;
+}
+
+TEST(LlvmIsolationTest, OnlyTheIrAndBackendModulesIncludeLlvm) {
+  // Derived from the generated examples path rather than passed in: one
+  // generated path is already configured for every generator and platform, and
+  // the compiler's sources are its sibling. The project root is not walked as a
+  // whole because the rule is about the *targets* and about what a target can
+  // reach -- a test linking LLVM to check the IR is allowed, and this test's own
+  // file necessarily spells the strings it looks for.
+  const std::filesystem::path project = std::filesystem::path(test::kExamplesDir).parent_path();
+  const std::filesystem::path sources = project / "src";
+  const std::filesystem::path headers = project / "include";
+  ASSERT_TRUE(std::filesystem::exists(sources)) << sources;
+  ASSERT_TRUE(std::filesystem::exists(headers)) << headers;
+
+  // **Both trees**, and the second one is the half that used to be a comment:
+  // `ir.h` is included by the driver, so a `llvm::Module&` accessor added to it
+  // would put LLVM in the driver's translation units without a single file under
+  // `src/` changing. The boundary is only real if the *interface* is checked, so
+  // `include/ir/storage.h` exists precisely to be the one header that crosses it,
+  // and this walk is what keeps it the only one.
+  std::vector<std::string> offenders = scanTree(sources, "src/");
+  for (std::string& offender : scanTree(headers, "include/")) {
+    offenders.push_back(std::move(offender));
+  }
 
   for (const std::string& offender : offenders) {
-    ADD_FAILURE() << "LLVM is included outside src/ir: " << offender;
+    ADD_FAILURE() << "LLVM is included outside ir/ and backend/: " << offender;
   }
 }
 

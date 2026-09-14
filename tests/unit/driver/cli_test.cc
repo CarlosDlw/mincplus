@@ -155,7 +155,15 @@ TEST(HelpTextTest, StatesHostAndInteropPlatforms) {
   for (const char* toolchain : {"Clang", "GCC", "MSVC"}) {
     EXPECT_NE(help.find(toolchain), std::string::npos) << toolchain;
   }
-  EXPECT_NE(help.find("System V AMD64"), std::string::npos);
+  // The interop statement is about *how* C is reached, not about a promise to
+  // reproduce one ABI by hand: the link is driven by a C compiler driver.
+  EXPECT_NE(help.find("C interop"), std::string::npos);
+  EXPECT_NE(help.find("clang/cc/gcc"), std::string::npos);
+  // Every target the compiler states is named, so a reader does not have to run
+  // `--target nonsense` to learn the list.
+  for (const char* arch : {"x86_64", "aarch64", "riscv64", "i386"}) {
+    EXPECT_NE(help.find(arch), std::string::npos) << arch;
+  }
 }
 
 TEST(HelpTextTest, IsAsciiOnly) {
@@ -231,12 +239,21 @@ TEST(HelpTextTest, ImplementedAndScaffoldedListsAreExact) {
   }
 
   EXPECT_EQ(namesAfter(help, "Implemented: "), implemented);
-  EXPECT_EQ(namesAfter(help, "Scaffolded:  "), scaffolded);
   // Not one name is written in the text: the list starts with the first
   // implemented command in the table's order, whatever that turns out to be.
   ASSERT_FALSE(implemented.empty());
   EXPECT_NE(help.find("Implemented: " + implemented.front()), std::string::npos);
-  EXPECT_FALSE(scaffolded.empty());
+  // The scaffolded list is *derived*, so it may legitimately be empty -- every
+  // command is implemented today. An empty list prints as the literal `(none)`
+  // rather than as a trailing space, which is the regression this pins: a help
+  // text that ends a label with nothing after it reads as a truncated line.
+  if (scaffolded.empty()) {
+    EXPECT_NE(help.find("Scaffolded:  (none)"), std::string::npos);
+    EXPECT_EQ(help.find("Scaffolded commands"), std::string::npos);
+  } else {
+    EXPECT_EQ(namesAfter(help, "Scaffolded:  "), scaffolded);
+    EXPECT_NE(help.find("Scaffolded commands"), std::string::npos);
+  }
 }
 
 TEST(CliTest, TheTargetOptionIsCarriedAndDefaultsToTheDefaultTriple) {
