@@ -25,17 +25,22 @@ identically on every platform; the concrete guarantees are in
 
 ## Status
 
-Scaffold v0.3: the `src/support` foundation, the lexer (`src/lex`), the
+Scaffold v0.4: the `src/support` foundation, the lexer (`src/lex`), the
 preprocessor (`src/pp`), the parser and syntax tree (`src/parse`, `src/syntax`),
 the lowered AST and the type checker (`src/ast`, `src/resolve`, `src/sema`), the
-LLVM lowering (`src/ir`), and the `mincc` driver. The pipeline is wired through
-the lowering: `mincc check` runs
+LLVM lowering (`src/ir`), the LLVM backend (`src/backend/llvm`), and the `mincc`
+driver. **The pipeline is complete end to end**: a file goes in and an executable
+that runs comes out. `mincc check` runs
 `source -> lex -> preprocess -> parse -> lower -> validate -> resolve -> check`,
-and `mincc ir` carries that typed tree to an `llvm::Module`, so a file that
-starts with `#define` is type-checked and lowered as a translation unit.
-`build` and `run` parse correctly but report that they are not implemented;
-`codegen` (object emission) and `link` are what they are waiting for. `--help`
-and `--version` are functional.
+`mincc ir` carries that typed tree to an `llvm::Module`, and `mincc build` and
+`mincc run` carry that module through codegen and a link, so a file that starts
+with `#define` is type-checked, lowered, emitted and executed as a translation
+unit. `--help` and `--version` are functional.
+
+What is left is *language surface*, not pipeline: `extern` declarations and
+linkage, arrays, aggregates, casts, `sizeof`, `switch`, the checked-build guards
+and the runtime. The [language feature checklist](#language-features) marks what
+is implemented, and [`docs/roadmap.md`](docs/roadmap.md) marks what is next.
 
 The stage order is fixed and written down once, in
 [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline):
@@ -47,12 +52,15 @@ lets a call name a function defined further down, so name resolution has to
 finish before any body can be type-checked, and the green tree is built for
 fidelity rather than for analysis. **`ir` is shipped too**: the typed tree goes
 into an `llvm::Module`, `mincc ir` prints it, and everything below the boundary
-stays LLVM-free (a test greps the tree). **`codegen` is next.** Each stage takes
+stays LLVM-free (a test greps the tree). **`codegen` and the link are shipped on
+top of it**, in a module isolated the same way: it decides no semantics, and it
+is where the project's promise stops being about the compiler and starts being
+about the program — if the checker lets it pass, it must run. Each stage takes
 one artifact and returns one, reports nothing, and leaves every error as a value
 with a code and a span; only the `*_report` libraries and the driver turn those
 into text and an exit code.
 
-Six commands, six views, one pipeline — each names the stage it shows:
+Eight commands, eight views, one pipeline — each names the stage it shows:
 
 | Command | Shows |
 | --- | --- |
@@ -62,6 +70,8 @@ Six commands, six views, one pipeline — each names the stage it shows:
 | `mincc resolve <files...>` | the lowered tree, the scopes, and each name with the declaration it denotes |
 | `mincc check <files...>` | the verdict, and nothing else on success — `--stats` adds one summary line per file, `--types` the type table, `--ast` every node with the type it was given |
 | `mincc ir <files...>` | the LLVM module of the translation unit — `--target TRIPLE` picks the ABI, and the module's `target triple` is that ABI |
+| `mincc build <files...>` | a file on disk: an executable, an object or an assembly listing — `-o`, `-O`, `-g`, `--emit`, `-L`/`-l`, `-v` to print the commands it runs |
+| `mincc run <files...> [-- args...]` | the program's own output and its own exit status; everything after `--` is passed through and read by nobody |
 
 `-D name[=body]`, `-U name` and `-I dir` are front-end options, so every command
 that preprocesses accepts them, and a `-D` is a real source file
@@ -276,7 +286,10 @@ first-class types; the examples use the primitive names.
 - [ ] Generics / parametric types `[?]`
 
 `f80` is the x87 80-bit extended format. It is in the set because that is what
-C's `long double` is on System V AMD64; codegen for it lands later.
+C's `long double` is on System V AMD64, and it is the one type whose support is
+per target: a target without x87 has no LLVM type for it, so `ir` refuses it by
+name (`ir-unsupported-type`, naming the type and the triple) instead of
+substituting a narrower one.
 
 #### C-compatible type names
 
@@ -641,9 +654,10 @@ which is where the algorithm that depends on them lives.
   above and the list of which stage owns which error:
   [`docs/architectures/sema.md`](docs/architectures/sema.md).
 - `src/ir/` — the lowering: a typed tree in, an `llvm::Module` out, with the CFG,
-  the optimizers and the cross-platform target all LLVM's. It is the **first and
-  only stage that includes `llvm/*`** (a test greps the tree so the boundary
-  fails in CI rather than in review), and it *decides nothing* — it materializes
+  the optimizers and the cross-platform target all LLVM's. It is one of the **two
+  stages that may include `llvm/*`** — `src/backend` is the other — and a test
+  greps both trees so the boundary fails in CI rather than in review; everything
+  through `sema` stays LLVM-free. It *decides nothing* — it materializes
   what `sema` recorded and refuses, as an internal error, a decision it cannot
   read. Every access states an alignment read from the `AccessObligation`; every
   division, remainder and shift goes through an explicit test and `llvm.trap`,
@@ -656,7 +670,7 @@ which is where the algorithm that depends on them lives.
   its record is [`docs/architectures/ir.md`](docs/architectures/ir.md), with the
   memory rules it emits under in
   [`docs/architectures/memory.md`](docs/architectures/memory.md).
-- `src/backend/` — **next.** The codegen stage: a `TargetMachine` from the
+- `src/backend/` — the codegen stage: a `TargetMachine` from the module's
   triple, LLVM's pass pipeline (the new pass manager for the middle end, LLVM's
   legacy one for codegen), and an object or an assembly listing out. Its
   governor is the promise the project exists to make — **if the checker lets it

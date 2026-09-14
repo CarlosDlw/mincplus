@@ -96,8 +96,11 @@ Rules:
   subtracting `clang-analyzer-security.ArrayBound`: that one check reads LLVM's
   deliberate hung-off operands in `User.h` as an out-of-bounds access, and no
   header filter can scope it away because the report's path starts in the
-  translation unit. `src/ir/.clang-tidy` is the worked example; a second
-  LLVM-including module needs the same three lines.
+  translation unit. `src/ir/.clang-tidy` is the worked example, and it is
+  needed only where that check actually fires: `src/backend/llvm` reaches far
+  fewer LLVM headers and the tidy gate is green there with no subtraction at
+  all, so a module crossing the boundary adds the three lines when it has to
+  and not as ceremony.
 - `src/lex/` is the *raw* lexer and does not depend on diagnostics at all.
   That is enforced by the build graph (`minc_lex` lists no diag target), not by
   a comment, and it is why the lexer can be tested and fuzzed without a
@@ -116,12 +119,16 @@ Rules:
 - `src/ast/` and `src/resolve/` have **no platform branch**: a file is named by
   `support::FileId`, and the path identity behind it comes from `support`. Unix
   and Windows cannot disagree about which name a program means.
-- `src/support/term` is the only module allowed to contain `#if defined(_WIN32)`
-  and `<windows.h>` / `<unistd.h>`. Everything else asks it a yes/no question
-  and stays platform-agnostic. `src/support/fs` (planned, for file identity and
-  canonicalization — see
-  [`architectures/preprocessor.md`](architectures/preprocessor.md)) will be the
-  second and last such module, for the same reason.
+- **The whole platform branch is three files, all in `support`**: `support/term`
+  (`<windows.h>`/`<unistd.h>`, virtual-terminal mode), `support/fs` (`stat`
+  versus the Windows file index, case rules — see
+  [`architectures/preprocessor.md`](architectures/preprocessor.md)) and
+  `support/source/file_io` (binary mode on `stdin`, and the UTF-16 path
+  conversion that bypasses the ANSI code page). No other file in `src/` or
+  `include/` contains a platform branch, and the last two exist for the same
+  reason as the first: a question is asked, a yes/no comes back, and the caller
+  never learns which OS answered. This is checkable rather than aspirational —
+  `grep -rn _WIN32 src include` is the whole issue.
 - Targets are created with `minc_add_library` / `minc_add_executable`, which
   apply the include dirs, the C++ standard, and the shared warning set. A new
   module is a directory with a three-line `CMakeLists.txt`.
@@ -548,8 +555,8 @@ source (.mx)
   [x]             resolve    the AST           -> scopes + a symbol per name
   [x]             sema       the resolved AST  -> typed AST
   [x]             ir         the typed AST     -> LLVM module (CFG included)
-  [ ]             codegen    the LLVM module   -> object file / assembly
-  [ ]             link       objects           -> executable
+  [x]             codegen    the LLVM module   -> object file / assembly
+  [x]             link       objects           -> executable
 ```
 
 Tokenization is phase 3 and directives are phase 4, so the lexer feeds the
@@ -578,14 +585,17 @@ code. That is what makes a stage testable without a `Session`, fuzzable without
 a terminal, and reusable by the language server — which needs `resolve` and
 `sema` and never wants a process exit.
 
-The stages through `ir` are shipped and **wired**: `mincc parse` runs the whole
-front end, so a file that begins with `#define` has a syntax tree of its
-translation unit rather than a lex error on the `#`; `mincc resolve` runs that
-tree through lowering, validation and name resolution; `mincc check` runs all of
-it, types every expression, and reports the verdict without emitting anything;
-and `mincc ir` lowers the typed tree to an LLVM module and prints it. The six
-commands are six views of one pipeline, and each names the others so a reader
-is never left guessing which one to reach for:
+**Every stage is shipped, end to end**: a `.mx` file goes in and an executable
+that runs comes out, and no stage is a placeholder. They are also **wired**:
+`mincc parse` runs the whole front end, so a file that begins with `#define` has
+a syntax tree of its translation unit rather than a lex error on the `#`;
+`mincc resolve` runs that tree through lowering, validation and name resolution;
+`mincc check` runs all of it, types every expression, and reports the verdict
+without emitting anything; `mincc ir` lowers the typed tree to an LLVM module and
+prints it; and `mincc build` and `mincc run` carry that module through the
+backend to an object, a link and a process. The eight commands are eight views of
+one pipeline, and each names the others so a reader is never left guessing which
+one to reach for:
 
 | Command | Stage | Sees |
 | --- | --- | --- |
@@ -595,6 +605,8 @@ is never left guessing which one to reach for:
 | `mincc resolve` | the front end through name resolution | the lowered AST, the scopes, and every name with the declaration it denotes |
 | `mincc check` | the front end through type checking | the verdict — silent on success; `--stats` one line per file, `--types` the table of types, `--ast` every node with the type it was given |
 | `mincc ir` | the front end + lowering | the LLVM module of the translation unit; `--target` selects the ABI, and the module's `target triple` is that ABI |
+| `mincc build` | the whole pipeline, to a file | an executable, an object or an assembly listing — `-o`, `-O`, `-g`, `--emit`, `-L`/`-l`, and `-v` to print the commands it runs |
+| `mincc run` | the same pipeline, to a process | the program's own output and its own exit status; everything after `--` is passed through unread |
 
 `-D`/`-U`/`-I`/`-isystem` belong to the *front end*, not to one command that
 prints it, so all three commands that preprocess accept them and one helper
@@ -698,7 +710,7 @@ warnings inside them are dropped at the report step while errors are not.
   kind, type kind, operator or callee a compile error instead of a silent gap.
   [`memory.md`](architectures/memory.md) sits under that stage: the object and
   provenance model whose rules the assumption list is the emitted half of.
-- **codegen** (`src/backend/llvm`, planned) selects a `TargetMachine` from the
+- **codegen** (`src/backend/llvm`) selects a `TargetMachine` from the
   module's triple, runs LLVM's pass pipeline, and writes an object or an
   assembly listing. It contains no instruction selection, no register allocation
   and no target knowledge, and it is the *smallest* stage in the pipeline for
@@ -727,6 +739,8 @@ warnings inside them are dropped at the report step while errors are not.
   record: [`architectures/parser.md`](architectures/parser.md). The lexer
   deliberately does not pre-filter trivia; the tree builder is the layer that
   attaches it.
-- **driver** links the support, lex, parse, and syntax libraries, picks
-  `ColorMode` per stream with `support/term`, and renders `DiagBag` with
-  `DiagRenderer`.
+- **driver** links every stage and is the only place that turns a value into
+  text: it picks `ColorMode` per stream with `support/term`, renders diagnostics
+  with `DiagRenderer`, and owns the commands. `check` and `ir` share one front
+  end (`driver/frontend.*`) so they cannot run different pipelines, and `build`
+  and `run` are one function with a boolean between them for the same reason.

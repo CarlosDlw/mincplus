@@ -225,7 +225,7 @@ resolve) and lowers the AST to HIR before type checking; Roslyn runs
 
 **Shipped.** `mincc resolve` runs the front end through this stage
 (`lex -> preprocess -> parse -> lower -> validate -> resolve`), and
-`mincc check` runs it and then type-checks; `ir` is next.
+`mincc check` runs it and then type-checks.
 
 - [x] `src/ast` — lowering the lossless green tree into a compact, arena-backed
       AST. Not the same thing as the *typed view* section 3 already has: that is
@@ -453,7 +453,15 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
       here and not a miscompile two stages down
 - [x] `mincc ir` and its dump: the module as text, with the diagnostics of this
       stage rendered through the same machinery every other stage uses
-- [ ] Debug-info hooks so source locations survive into the backend
+- [x] Debug-info hooks so source locations survive into the backend: under
+      `-g` the lowering builds the `DICompileUnit`, a `DISubprogram` per function,
+      a `DILocation` per instruction and a `#dbg_declare` per binding, and the
+      assumption scan's rule became a **permit-list** (no metadata, except
+      `!dbg`) because the two rules contradicted each other and nothing caught
+      it. `tests/unit/ir/debug_test.cc` asserts that `-g` changes no instruction
+      -- strip the debug metadata and the module is byte-identical -- and that no
+      `llvm.dbg.*` intrinsic appears, since records and intrinsics cannot be
+      mixed in one module. The emission half is § 7
 - [x] `include/sema/target.h`'s two-name enum became a **triple**: the identity
       is now the canonical LLVM spelling (`x86_64-unknown-linux-gnu`), which is
       the string `codegen` has to hand to a `TargetMachine` anyway, so there is
@@ -473,38 +481,59 @@ it pass, it must run.** That is why the stage has no semantic refusal in it and
 why its failures are enumerated by *class* — the environment, the program, or
 this compiler.
 
+**Shipped**, and wired into the driver: `mincc build` carries a unit through
+`ir -> codegen -> link`, and `mincc run` is the same path with an `exec` at the
+end. What is left in this section is not the stage but its *proof*: the failure
+sweep below, and the triple matrix.
+
 - [x] Design record: [`docs/architectures/codegen.md`](architectures/codegen.md)
-- [ ] LLVM initialization (the full target/`AsmPrinter` set, which is more than
+- [x] LLVM initialization (the full target/`AsmPrinter` set, which is more than
       `ir` needs) and target selection from the triple: target machine, and the
       data layout the module already carries
-- [ ] Object emission (`.o`) and assembly output (`--emit=asm`), through
+- [x] Object emission (`.o`) and assembly output (`--emit=asm`), through
       `addPassesToEmitFile` with its inverted boolean wrapped once and its
       `DisableVerify=true` default overridden
-- [ ] Optimization pipelines for `-O0`..`-O3`, `-Os` and `-Oz` — the **new**
+- [x] Optimization pipelines for `-O0`..`-O3`, `-Os` and `-Oz` — the **new**
       pass manager for the middle end, and LLVM's **legacy** one for codegen,
       which is LLVM's own split and not an accident to fix
-- [ ] **Position-independent code on ELF and Mach-O, from a per-triple table** —
+- [x] **Position-independent code on ELF and Mach-O, from a per-triple table** —
       measured, not assumed: this host's `cc` defaults to `-pie`, and the
       default relocation model links into `DT_TEXTREL` (a warning here, an
-      error on other linkers and architectures)
-- [ ] The relocation model, code model and CPU/features stated per triple, never
-      inherited from the host or from an LLVM default
-- [ ] Symbol visibility, sections and relocations taken from the triple and not
-      from `#ifdef`s on the host
-- [ ] The **failure table**, one code per class
+      error on other linkers and architectures). `Static` on COFF, `PIC_`
+      everywhere else, and a platform the table does not name is a refusal
+      rather than a default
+- [x] The relocation model, code model and CPU/features stated per triple, never
+      inherited from the host or from an LLVM default: the CPU and the feature
+      set are empty strings and not `"native"`, so an object never depends on
+      the machine that happened to compile it
+- [x] No platform branch on the host: `src/backend` contains no `#if` at all,
+      and every target fact it needs (`reloc`, `code model`, the object suffix)
+      arrives from the triple. Symbol visibility and sections are LLVM's default
+      for that target machine, which is what a triple is for
+- [x] The **failure table**, one code per class
       (`codegen-target-unavailable`, `-emit-unsupported`, `-linker-not-found`,
       `-linker-unavailable`, `-link-failed`, `-object-write-failed`, `-internal`)
-      with a test input per code and a sweep, in the shape of every earlier
-      stage's enumeration
+      in `src/backend/llvm/diagnostics.cc`, with `allDiagnosticCodes()` derived
+      from the table so a code without a name is a failing test rather than a
+      printed number
+- [ ] The failure table's **per-code test input and unreachability sweep**, in
+      the shape of every earlier stage's enumeration: today the table is proven
+      complete and the *inputs* for the hardest rows (a missing linker driver,
+      a target this LLVM cannot generate code for, a link that fails) are
+      covered by the driver's tests, but a sweep that fails when a code becomes
+      unreachable is section 12's work and not done
 - [x] ~~`[?]` Which LLVM: the distribution's shared library, or a pinned version
       built once~~ — the distribution's (22.1.8 here), and § *The three hosts* in
       the record is what a contributor needs installed; linking `lld` in as a
       library to drop the C-toolchain dependency is recorded as a real option
       and expressly not taken
 - [ ] A triple matrix that is exercised and not assumed: cross-compiling from
-      any host in the design targets to the others. A probe already proved the
-      shape of it -- one module emitted as x86-64, aarch64, windows-x64 (COFF)
-      and riscv64 by changing the triple and nothing else
+      any host in the design targets to the others. Two directions are proven
+      today -- `--target aarch64-unknown-linux-gnu --emit obj` from this host
+      writes a real object with no C toolchain involved (a driver test asserts
+      it), and the sweep over every example x every stated triple found no crash
+      -- and the matrix as a whole is not: windows-x64 COFF, riscv64 and darwin
+      objects are produced but never handed to a linker or inspected for shape
 - [x] ~~`[?]` Whether a hand-written AMD64 codegen is in scope at all~~ — **no**,
       and the question is closed: the IR is LLVM's, so a hand-written backend
       would be a second implementation of what LLVM is better at
@@ -513,6 +542,13 @@ this compiler.
 
 ## 8. C interoperability — `src/cinterop`
 
+Note what this section is *not*: the driver already hands objects to a real C
+linker and the compiler already emits nothing of its own for a calling
+convention, because the convention is LLVM's to emit from the triple. What is
+missing is the half that needs a *declaration* of a C entity in `.mx` before
+anything can be called — `extern`, the C declarator grammar, and the headers.
+That is why the language-surface items in § 3 and § 5 come first.
+
 - [ ] Argument classification and returns per the target's ABI (System V AMD64
       and Windows x64 first): INTEGER/SSE/MEMORY, aggregates by value, and the
       alignments that follow from the triple
@@ -520,7 +556,10 @@ this compiler.
 - [ ] Variadic calls (`va_list` conventions); bitfields `[?]`
 - [ ] Calling into C: `extern` declarations resolved against real libc
 - [ ] Being called from C: exported symbols with C linkage
-- [ ] Emit/consume `.o` and `.a`; drive `cc`/`ld` for the final link
+- [x] Emit `.o`, and link objects into an executable through the C driver —
+      shipped as `mincc build`/`run` (§ 9), including `-L`/`-l` and `--sysroot`
+- [ ] Consume `.o` and `.a` as inputs: linking a `.o` this compiler did not
+      produce, and building an archive
 - [ ] `[?]` Whether to parse C headers directly or require declaration blocks
 - [ ] Interop test suite that links against libc in both directions
 
@@ -529,22 +568,43 @@ this compiler.
 - [x] `check`: the whole front end through type checking, `DiagBag` rendered,
       no codegen — `--ast`, `--types`, `--target`, `-Wunused`/`-Wshadow`,
       `-Wconversion`
-- [ ] `build`: full pipeline → `.o` → link through a C driver
+
+**Shipped**: `build` and `run` are one function with a boolean between them, so
+the two cannot disagree about what the pipeline means.
+
+- [x] `build`: full pipeline → `.o` → link through a C driver
       (`clang`→`cc`→`gcc`, overridable with `--linker`); `-o`, multiple inputs,
-      `-O`, `-g`, `--emit=exe|obj|asm`, `-L`/`-l`, `-v` to print the `argv`
-- [ ] `run`: **`build` into a temporary executable plus `exec`**, not an
+      `-O`, `-g`, `--emit=exe|obj|asm`, `-L`/`-l`, `-v` to print the `argv`. The
+      linker is driven with an `argv` array and never a shell string, and the
+      driver is discovered with the platform's own rules (`PATHEXT` on Windows)
+- [x] `run`: **`build` into a temporary executable plus `exec`**, not an
       in-process JIT — one code path with `build`, process isolation (a crashing
       program must not take the compiler with it), argument forwarding after
       `--` interpreted by nobody, and the program's own exit status (a signal
-      death reported as such). The `LLJIT` oracle lives in `tests/`
+      death reported as a non-zero status, since naming the signal is platform
+      code this module may not contain)
+- [ ] `run`'s **`LLJIT` differential oracle in `tests/`**: in process, running a
+      program is an *advantage* — no linker, no process per case, and a crash is
+      a failing test rather than a dead compiler — which is exactly why it
+      belongs there and not in the command. Today the driver's tests build and
+      execute the program instead
 - [ ] No-entry-point refused by the compiler before the link, in its own words,
-      because three linkers spell that failure three unhelpful ways
-- [ ] Common flags: `-O`, `--emit`; `-I`, `-D` and `--target` are wired for the
-      front-end commands and will be shared by `build`/`run`
+      because three linkers spell that failure three unhelpful ways. Measured
+      today: `fn i32 f() { return 1; }` reaches the linker and the user reads
+      `undefined reference to 'main'` in the linker's own language
+- [x] Common flags: `-O`, `--emit`; `-I`, `-D`, `-U`, `-isystem` and `--target`
+      are shared by `build` and `run` — the request both commands build comes
+      from one function, so `run` cannot accept an option `build` refuses or
+      default one differently
 - [ ] Response files (`@file`) for long command lines
-- [ ] `--color` with tty detection and `NO_COLOR`; wire `DiagRenderer` colors
+- [x] tty detection and `NO_COLOR` (and `TERM=dumb`) in `support/term`, with the
+      renderer's colors wired to it per stream, so a pipe or a log file gets
+      plain text and no command has to ask
+- [ ] The `--color` **override flag** (`auto`/`always`/`never`): the detection is
+      shipped, the way to contradict it is not
 - [ ] `-ferror-limit` and a "too many errors" path using `kMaxDiagnostics`
-- [ ] `--version` printing version, host, and target triple
+- [ ] `--version` printing version, host, and target triple: today it prints
+      `mincc 0.1.0` and stops there
 - [ ] `[?]` Incremental compilation / on-disk cache
 
 ## 10. Language extras
@@ -563,18 +623,32 @@ this compiler.
 
 ## 12. Quality
 
-- [x] Unit tests per shipped module (support, lexer, parser, syntax tree,
-      driver); preprocessor, sema, and IR suites land with those stages
+- [x] Unit tests per shipped module — `support`, `lex`, `pp`, `parse`,
+      `syntax`, `ast`, `resolve`, `sema` and `ir` each have a suite, and the
+      driver's tests are where `backend`, `build` and `run` are proven (they
+      are the stage's only consumer, and a test that links a program is the
+      only test that proves the link)
 - [x] Negative tests: every lexical flag code and every parse error code has a
       test that triggers it, and a sweep fails if a code becomes unreachable
 - [ ] Snapshot tests for AST dumps and rendered diagnostics (golden files)
 - [ ] End-to-end tests: every `examples/*.mx` compiles, links, runs, and its
-      output is asserted
+      output is asserted. `make examples` walks the corpus through `lex`,
+      `parse`, `resolve`, `check`, `ir` and `ir -g`, which is the front-end
+      half; no example is built into an executable and compared against its
+      expected output, and there is no corpus for a program that *does* something
+      (it cannot be: see the language checklist — no `extern` declaration, so no
+      `printf`)
 - [ ] Fuzzing for lexer, preprocessor, parser, and UTF-8, with a seeded corpus
 - [x] Sanitizer builds (ASan/UBSan) in CI
 - [ ] ThreadSanitizer run for the driver
 - [ ] Coverage reporting and compile-time/memory benchmarks
-- [ ] Cross-platform CI extended from `support` to the whole pipeline
+- [x] Cross-platform CI extended from `support` to the whole pipeline: the
+      `build-test` job configures, builds and runs the whole suite on Linux,
+      macOS and Windows, and `sanitize`, `format` and `tidy` are separate jobs
+- [ ] Install and pin LLVM in CI rather than relying on the runner image having
+      it: `find_package(LLVM CONFIG REQUIRED)` means a runner without LLVM
+      development files fails at *configure*, which is a red CI run that says
+      nothing about the change
 
 ## 13. Release and maintenance
 

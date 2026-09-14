@@ -27,11 +27,15 @@ link), and the ordinary C toolchain behaviour of the three hosts — which is
 where the most expensive mistake in this document came from (§ *Position
 independence*).
 
-**Status: planned.** `src/ir` exists and is wired; nothing in `src/backend`
-does, and `build`/`run` still report that they are not implemented. Two things
-this document decides *revise* `ir.md` rather than extend it — where `run`
-executes, and the assumption scan's metadata rule — and both revisions are
-marked in place.
+**Status: shipped.** `src/backend/llvm` selects the target machine and writes
+the object or the listing, `mincc build` drives the linker driver, and `mincc run`
+executes the program it produced. Two things this document decided *revise*
+`ir.md` rather than extend it — where `run` executes, and the assumption scan's
+metadata rule — and both revisions are marked in place there. Every code of the
+failure table below has a row in `diagnostics.cc` and a name a reader can grep
+for; the per-code test inputs and the unreachability sweep over that table are
+the one part of this stage that is written down and not yet built, and
+[`../roadmap.md`](../roadmap.md) § 7 says so.
 
 ## The one question that decides the shape: what is `run`?
 
