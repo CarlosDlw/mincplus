@@ -14,7 +14,7 @@
 #   make quick          # the inner loop: build, test, format check
 #   make test           # configure + build + test the dev preset
 #   make gates          # everything CI runs, in the order CI runs it
-#   make examples       # lex, preprocess and parse every example
+#   make examples       # every command, over every example
 
 CMAKE ?= cmake
 CTEST ?= ctest
@@ -154,6 +154,7 @@ examples: build
 	  $(BIN) parse --no-trivia "$$file" > /dev/null; \
 	  $(BIN) resolve "$$file" > /dev/null; \
 	  $(BIN) check "$$file" > /dev/null; \
+	  $(BIN) ir "$$file" > /dev/null; \
 	done; \
 	for file in examples/pp/*.mx; do \
 	  echo "== $$file"; \

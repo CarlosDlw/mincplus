@@ -28,14 +28,16 @@ and `ptrtoint` versus `ptrtoaddr` — is read in [`memory.md`](memory.md) and is
 deliberately not repeated here; that document owns the rules, this one owns what
 they are emitted *as*.
 
-**Status: planned; the whole front end has landed.** Nothing in `src/ir` exists
-yet, and everything this document asked of an earlier stage is now
-**implemented and published by `sema`** (`sema.md`, *What the artifact
-publishes*): the coercion record and `ExprInfo::opType` (§ *The fourth fact
-nobody recorded*, § *The coercion record*), the guarantee that no node in the
-artifact carries a deferred literal type, the target as a canonical **triple**,
-and — stage one of [`memory.md`](memory.md), which is settled — the **access
-record**, one `AccessObligation` per dereference (§ *The access record*).
+**Status: shipped.** `src/ir` builds an `llvm::Module` and `mincc ir` prints it
+for every example in the corpus; the module verifies, and the boundary holds —
+`grep` for `llvm/` outside `src/ir` is a test, not a habit. Everything this
+document asked of an earlier stage is **implemented and published by `sema`**
+(`sema.md`, *What the artifact publishes*): the coercion record and
+`ExprInfo::opType` (§ *The fourth fact nobody recorded*, § *The coercion
+record*), the guarantee that no node in the artifact carries a deferred literal
+type, the target as a canonical **triple**, and — stage one of
+[`memory.md`](memory.md), which is settled — the **access record**, one
+`AccessObligation` per dereference (§ *The access record*).
 
 That last one changes a line of this document rather than adding to it:
 `TypeKind::Pointer` is no longer a kind this stage refuses *by name*. It has a

@@ -92,7 +92,12 @@ Rules:
   order and not one directory: nothing up to and including `sema` may include
   `llvm/*`, and `src/ir`, `src/backend/llvm` and the tests may. A unit test
   greps the tree for the inclusion, so the rule fails in CI rather than in
-  review.
+  review. A module that crosses the boundary also carries its own `.clang-tidy`
+  subtracting `clang-analyzer-security.ArrayBound`: that one check reads LLVM's
+  deliberate hung-off operands in `User.h` as an out-of-bounds access, and no
+  header filter can scope it away because the report's path starts in the
+  translation unit. `src/ir/.clang-tidy` is the worked example; a second
+  LLVM-including module needs the same three lines.
 - `src/lex/` is the *raw* lexer and does not depend on diagnostics at all.
   That is enforced by the build graph (`minc_lex` lists no diag target), not by
   a comment, and it is why the lexer can be tested and fuzzed without a
@@ -542,7 +547,7 @@ source (.mx)
   [x]             validate   the AST           -> the AST, structurally legal
   [x]             resolve    the AST           -> scopes + a symbol per name
   [x]             sema       the resolved AST  -> typed AST
-  [ ]             ir         the typed AST     -> LLVM module (CFG included)
+  [x]             ir         the typed AST     -> LLVM module (CFG included)
   [ ]             codegen    the LLVM module   -> object file / assembly
   [ ]             link       objects           -> executable
 ```
@@ -573,13 +578,14 @@ code. That is what makes a stage testable without a `Session`, fuzzable without
 a terminal, and reusable by the language server — which needs `resolve` and
 `sema` and never wants a process exit.
 
-The stages through `sema` are shipped and **wired**: `mincc parse` runs the whole
+The stages through `ir` are shipped and **wired**: `mincc parse` runs the whole
 front end, so a file that begins with `#define` has a syntax tree of its
 translation unit rather than a lex error on the `#`; `mincc resolve` runs that
-tree through lowering, validation and name resolution; and `mincc check` runs
-all of it, types every expression, and reports the verdict without emitting
-anything. The five commands are five views of one pipeline, and each names the
-others so a reader is never left guessing which one to reach for:
+tree through lowering, validation and name resolution; `mincc check` runs all of
+it, types every expression, and reports the verdict without emitting anything;
+and `mincc ir` lowers the typed tree to an LLVM module and prints it. The six
+commands are six views of one pipeline, and each names the others so a reader
+is never left guessing which one to reach for:
 
 | Command | Stage | Sees |
 | --- | --- | --- |
@@ -588,6 +594,7 @@ others so a reader is never left guessing which one to reach for:
 | `mincc parse` | lexer + preprocessor + parser | the syntax tree over the preprocessed stream |
 | `mincc resolve` | the front end through name resolution | the lowered AST, the scopes, and every name with the declaration it denotes |
 | `mincc check` | the front end through type checking | the verdict — silent on success; `--stats` one line per file, `--types` the table of types, `--ast` every node with the type it was given |
+| `mincc ir` | the front end + lowering | the LLVM module of the translation unit; `--target` selects the ABI, and the module's `target triple` is that ABI |
 
 `-D`/`-U`/`-I`/`-isystem` belong to the *front end*, not to one command that
 prints it, so all three commands that preprocess accept them and one helper
@@ -674,7 +681,7 @@ warnings inside them are dropped at the report step while errors are not.
   model, the conversion rules, the node-by-node surface, which stage owns which
   error, and the decisions the language had to make with it. `mincc check` is
   the command that proves it.
-- **ir** (`src/ir`, planned) lowers the typed tree into an `llvm::Module`. It is
+- **ir** (`src/ir`) lowers the typed tree into an `llvm::Module`. It is
   the first stage that may include `llvm/*`, and the boundary that moves with it
   is the pipeline's own: everything up to and including `sema` stays LLVM-free,
   and a test greps the tree so the rule fails in CI rather than in review. The

@@ -49,14 +49,66 @@ configure_file(
   @ONLY
 )
 
-# LLVM is the planned backend but stays isolated in src/backend/llvm.
-# The scaffold only detects it; nothing outside the backend may include llvm/*.
-find_package(LLVM CONFIG QUIET)
-if(LLVM_FOUND)
-  message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-else()
-  message(STATUS "LLVM not found (backend/llvm will require it later)")
+# LLVM is the IR and the backend, and it is isolated on purpose: `src/ir` and
+# `src/backend` are the only targets that may include `llvm/*`, and a unit test
+# greps the tree so the rule fails in CI instead of in review.
+#
+# It is REQUIRED rather than optional. An optional dependency that silently turns
+# a stage off would make the compiler's behaviour a property of the build
+# environment -- the same defect `sema/target.h` refuses when it declines to guess
+# a triple. A checkout without LLVM development files cannot build the compiler,
+# and saying so at configure time is the honest failure.
+find_package(LLVM CONFIG REQUIRED)
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
+
+# LLVM's *build configuration* is part of its ABI, and these are the settings
+# that bite across the boundary: RTTI off on one side is an ODR violation rather
+# than a link error, and unwinding across a boundary that is not compiled for it
+# is undefined. `LLVM_ENABLE_ABI_BREAKING_CHECKS` (implied by
+# `LLVM_ENABLE_ASSERTIONS`) changes the *layout* of LLVM's own structs, and the
+# macro has to match; this project defines neither, so an LLVM built with them on
+# is a configuration this compiler cannot be right about.
+if(NOT LLVM_ENABLE_RTTI)
+  message(FATAL_ERROR
+    "LLVM was built without RTTI and this compiler is built with it. Matching "
+    "LLVM's configuration is part of the ABI: a mismatch is an ODR violation "
+    "across the LLVM boundary, not a link error.")
 endif()
+if(LLVM_ENABLE_EH)
+  message(FATAL_ERROR
+    "LLVM was built with exceptions enabled while this compiler is not; "
+    "unwinding across that boundary is undefined behaviour.")
+endif()
+if(LLVM_ENABLE_ASSERTIONS)
+  message(FATAL_ERROR
+    "LLVM was built with assertions on, which enables "
+    "LLVM_ENABLE_ABI_BREAKING_CHECKS and changes the layout of LLVM's own "
+    "types. Build against an LLVM with assertions off, or add the macro to "
+    "this project's definitions.")
+endif()
+
+# One function so every target that talks to LLVM gets the same include dirs,
+# the same definitions and the same library. `SYSTEM` is not cosmetic: LLVM's
+# headers are third-party code, and this project compiles with -Wconversion,
+# -Wsign-conversion and -Wundef as errors in CI. Marking the directory SYSTEM is
+# what keeps a warning inside an LLVM header from failing this project's build.
+function(minc_target_llvm target visibility)
+  # `LLVM_DEFINITIONS` is one space-separated string, not a CMake list, and
+  # `target_compile_definitions` takes a list. Handing the string straight over
+  # makes CMake treat it as a single value and quote it whole, which is wrong in
+  # two ways that do not look wrong in a build log: `-D_GLIBCXX_USE_CXX11_ABI=1`
+  # swallowed the three `__STDC_*` defines into its replacement list, so they
+  # were never defined, and `_GLIBCXX_USE_CXX11_ABI` itself got a garbage value --
+  # an ABI-affecting macro to get wrong. Splitting it restores one define per
+  # word; `-D` is stripped by `target_compile_definitions` itself.
+  separate_arguments(llvm_definitions NATIVE_COMMAND "${LLVM_DEFINITIONS}")
+  target_include_directories(${target} SYSTEM ${visibility} ${LLVM_INCLUDE_DIRS})
+  target_compile_definitions(${target} ${visibility} ${llvm_definitions})
+  # The umbrella library. A distribution LLVM is one shared object regardless of
+  # how the components are named, and linking the umbrella is what makes a
+  # build against it a single link rather than a component list to keep in step.
+  target_link_libraries(${target} ${visibility} LLVM)
+endfunction()
 
 add_subdirectory(src)
 

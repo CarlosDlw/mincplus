@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace minc::support {
 namespace {
@@ -97,6 +98,30 @@ std::optional<std::pair<std::uint64_t, std::size_t>> decodeCharOrEscape(std::str
       ++digits;
     }
     if (digits == 0) {
+      return std::nullopt;
+    }
+    return std::make_pair(value, next);
+  }
+  case 'u':
+  case 'U': {
+    // A universal character name names one *code point*, and a character
+    // literal's value is the code unit it packs -- so the number here is the
+    // code point itself, not its UTF-8 encoding. The lexer already checked that
+    // the digits name a scalar value.
+    const std::size_t want = escape == 'u' ? 4U : 8U;
+    std::uint64_t value = 0;
+    std::size_t next = index + 2;
+    std::size_t digits = 0;
+    while (digits < want && next < body.size()) {
+      const int digit = hexValue(body[next]);
+      if (digit < 0) {
+        break;
+      }
+      value = value * 16U + static_cast<std::uint64_t>(digit);
+      ++next;
+      ++digits;
+    }
+    if (digits != want) {
       return std::nullopt;
     }
     return std::make_pair(value, next);
@@ -217,6 +242,189 @@ IntegerLiteral parseCharLiteral(std::string_view text) {
     value = (value << 8U) | decoded->first;
   }
   result.value = ConstInt::fromSigned(static_cast<std::int64_t>(value));
+  result.ok = true;
+  return result;
+}
+
+namespace {
+
+// One Unicode scalar value, encoded the way UTF-8 spells it. The source names a
+// *character* and the object stores *bytes*, so the encoding happens here, once,
+// rather than at every consumer of a `str`.
+void appendUtf8(std::vector<std::uint8_t>& out, std::uint32_t code) {
+  if (code <= 0x7FU) {
+    out.push_back(static_cast<std::uint8_t>(code));
+  } else if (code <= 0x7FFU) {
+    out.push_back(static_cast<std::uint8_t>(0xC0U | (code >> 6U)));
+    out.push_back(static_cast<std::uint8_t>(0x80U | (code & 0x3FU)));
+  } else if (code <= 0xFFFFU) {
+    out.push_back(static_cast<std::uint8_t>(0xE0U | (code >> 12U)));
+    out.push_back(static_cast<std::uint8_t>(0x80U | ((code >> 6U) & 0x3FU)));
+    out.push_back(static_cast<std::uint8_t>(0x80U | (code & 0x3FU)));
+  } else {
+    out.push_back(static_cast<std::uint8_t>(0xF0U | (code >> 18U)));
+    out.push_back(static_cast<std::uint8_t>(0x80U | ((code >> 12U) & 0x3FU)));
+    out.push_back(static_cast<std::uint8_t>(0x80U | ((code >> 6U) & 0x3FU)));
+    out.push_back(static_cast<std::uint8_t>(0x80U | (code & 0x3FU)));
+  }
+}
+
+// The value of `digits` hex digits starting at `at`, or `nullopt` when one is
+// not a hex digit.
+[[nodiscard]] std::optional<std::uint32_t> readHex(std::string_view body, std::size_t at,
+                                                   std::size_t digits) {
+  if (at + digits > body.size()) {
+    return std::nullopt;
+  }
+  std::uint32_t value = 0;
+  for (std::size_t i = 0; i < digits; ++i) {
+    const int digit = hexValue(body[at + i]);
+    if (digit < 0) {
+      return std::nullopt;
+    }
+    value = value * 16U + static_cast<std::uint32_t>(digit);
+  }
+  return value;
+}
+
+} // namespace
+
+StringLiteral parseStringLiteral(std::string_view text) {
+  StringLiteral result;
+  // The lexer guarantees the quotes; a body with no terminator is the lexer's
+  // finding, and this reader answers about the bytes it was given.
+  if (text.size() < 2) {
+    result.message = "malformed string literal " + quoted(text);
+    return result;
+  }
+  const std::string_view body = text.substr(1, text.size() - 2);
+  std::size_t index = 0;
+  while (index < body.size()) {
+    const unsigned char c = static_cast<unsigned char>(body[index]);
+    if (c != '\\') {
+      result.bytes.push_back(c);
+      ++index;
+      continue;
+    }
+    if (index + 1 >= body.size()) {
+      result.message = "a string literal ends in a backslash";
+      return result;
+    }
+    const char escape = body[index + 1];
+    switch (escape) {
+    case 'n':
+      result.bytes.push_back(static_cast<std::uint8_t>('\n'));
+      index += 2;
+      break;
+    case 't':
+      result.bytes.push_back(static_cast<std::uint8_t>('\t'));
+      index += 2;
+      break;
+    case 'r':
+      result.bytes.push_back(static_cast<std::uint8_t>('\r'));
+      index += 2;
+      break;
+    case 'a':
+      result.bytes.push_back(static_cast<std::uint8_t>(7));
+      index += 2;
+      break;
+    case 'b':
+      result.bytes.push_back(static_cast<std::uint8_t>(8));
+      index += 2;
+      break;
+    case 'f':
+      result.bytes.push_back(static_cast<std::uint8_t>(12));
+      index += 2;
+      break;
+    case 'v':
+      result.bytes.push_back(static_cast<std::uint8_t>(11));
+      index += 2;
+      break;
+    case '?':
+      result.bytes.push_back(static_cast<std::uint8_t>('?'));
+      index += 2;
+      break;
+    case '\\':
+    case '\'':
+    case '"':
+      result.bytes.push_back(static_cast<std::uint8_t>(escape));
+      index += 2;
+      break;
+    case '0':
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7': {
+      std::uint32_t value = 0;
+      std::size_t digits = 0;
+      std::size_t next = index + 1;
+      while (next < body.size() && digits < 3 && body[next] >= '0' && body[next] <= '7') {
+        value = value * 8U + static_cast<std::uint32_t>(body[next] - '0');
+        ++next;
+        ++digits;
+      }
+      if (value > 0xFFU) {
+        result.message = "an octal escape in " + quoted(text) + " does not fit in one byte";
+        return result;
+      }
+      result.bytes.push_back(static_cast<std::uint8_t>(value));
+      index = next;
+      break;
+    }
+    case 'x': {
+      std::uint64_t value = 0;
+      std::size_t next = index + 2;
+      std::size_t digits = 0;
+      while (next < body.size()) {
+        const int digit = hexValue(body[next]);
+        if (digit < 0) {
+          break;
+        }
+        value = value * 16U + static_cast<std::uint64_t>(digit);
+        ++next;
+        ++digits;
+      }
+      if (digits == 0) {
+        result.message = "`\\x` in " + quoted(text) + " has no digits";
+        return result;
+      }
+      if (value > 0xFFU) {
+        result.message = "a `\\x` escape in " + quoted(text) + " is wider than one byte; use `\\u`";
+        return result;
+      }
+      result.bytes.push_back(static_cast<std::uint8_t>(value));
+      index = next;
+      break;
+    }
+    case 'u':
+    case 'U': {
+      const std::size_t digits = escape == 'u' ? 4U : 8U;
+      const std::optional<std::uint32_t> value = readHex(body, index + 2, digits);
+      if (!value.has_value()) {
+        result.message = "a Unicode escape in " + quoted(text) + " does not have " +
+                         std::to_string(digits) + " hex digits";
+        return result;
+      }
+      // The lexer already checked that the digits name a scalar value, so this
+      // cannot fail on a well-formed tree; it is here because a reader that
+      // silently accepted a surrogate would be encoding a code point that does
+      // not exist.
+      if (*value > 0x10FFFFU || (*value >= 0xD800U && *value <= 0xDFFFU)) {
+        result.message = "a Unicode escape in " + quoted(text) + " is not a character";
+        return result;
+      }
+      appendUtf8(result.bytes, *value);
+      index += 2 + digits;
+      break;
+    }
+    default:
+      result.message = "unknown escape `\\" + std::string(1, escape) + "` in " + quoted(text);
+      return result;
+    }
+  }
   result.ok = true;
   return result;
 }

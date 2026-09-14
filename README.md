@@ -25,30 +25,34 @@ identically on every platform; the concrete guarantees are in
 
 ## Status
 
-Scaffold v0.2: the `src/support` foundation, the lexer (`src/lex`), the
+Scaffold v0.3: the `src/support` foundation, the lexer (`src/lex`), the
 preprocessor (`src/pp`), the parser and syntax tree (`src/parse`, `src/syntax`),
-the lowered AST and the type checker (`src/ast`, `src/resolve`, `src/sema`), and
-the `mincc` driver. The front end is wired end to end: `mincc check` runs
+the lowered AST and the type checker (`src/ast`, `src/resolve`, `src/sema`), the
+LLVM lowering (`src/ir`), and the `mincc` driver. The pipeline is wired through
+the lowering: `mincc check` runs
 `source -> lex -> preprocess -> parse -> lower -> validate -> resolve -> check`,
-so a file that starts with `#define` is type-checked as a translation unit.
+and `mincc ir` carries that typed tree to an `llvm::Module`, so a file that
+starts with `#define` is type-checked and lowered as a translation unit.
 `build` and `run` parse correctly but report that they are not implemented;
-the backend is what they are waiting for. `--help` and `--version` are
-functional.
+`codegen` (object emission) and `link` are what they are waiting for. `--help`
+and `--version` are functional.
 
 The stage order is fixed and written down once, in
 [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline):
 `lex` and `preprocess` (phases 3 and 4 of translation), then
 `parse -> lower -> validate -> resolve -> sema -> ir -> codegen -> link`.
-The whole front end is shipped — through **lower**, **validate**, **resolve**
-and **sema**, which are stages of their own rather than one pass: a C-like
-grammar lets a call name a function defined further down, so name resolution has
-to finish before any body can be type-checked, and the green tree is built for
-fidelity rather than for analysis. **`ir` is next.** Each stage takes one
-artifact and returns one, reports nothing, and leaves every error as a value
+The front end is shipped — through **lower**, **validate**, **resolve** and
+**sema**, which are stages of their own rather than one pass: a C-like grammar
+lets a call name a function defined further down, so name resolution has to
+finish before any body can be type-checked, and the green tree is built for
+fidelity rather than for analysis. **`ir` is shipped too**: the typed tree goes
+into an `llvm::Module`, `mincc ir` prints it, and everything below the boundary
+stays LLVM-free (a test greps the tree). **`codegen` is next.** Each stage takes
+one artifact and returns one, reports nothing, and leaves every error as a value
 with a code and a span; only the `*_report` libraries and the driver turn those
 into text and an exit code.
 
-Five commands, five views, one pipeline — each names the stage it shows:
+Six commands, six views, one pipeline — each names the stage it shows:
 
 | Command | Shows |
 | --- | --- |
@@ -57,6 +61,7 @@ Five commands, five views, one pipeline — each names the stage it shows:
 | `mincc parse <files...>` | the syntax tree over that stream |
 | `mincc resolve <files...>` | the lowered tree, the scopes, and each name with the declaration it denotes |
 | `mincc check <files...>` | the verdict, and nothing else on success — `--stats` adds one summary line per file, `--types` the type table, `--ast` every node with the type it was given |
+| `mincc ir <files...>` | the LLVM module of the translation unit — `--target TRIPLE` picks the ABI, and the module's `target triple` is that ABI |
 
 `-D name[=body]`, `-U name` and `-I dir` are front-end options, so every command
 that preprocesses accepts them, and a `-D` is a real source file
@@ -67,6 +72,8 @@ x86_64-unknown-linux-gnu` (the default) makes `long` 64 bits and
 `--target x86_64-pc-windows-msvc` makes it 32 — the width is read from a table
 keyed on the triple, never from the machine running the compiler. A triple the
 compiler does not state is an error that says why, never a silent fallback.
+`--target` is accepted by `ir` as well, and there it is also the triple the
+emitted module declares.
 
 ```console
 $ mincc lex examples/002_variables.mx
@@ -633,7 +640,23 @@ which is where the algorithm that depends on them lives.
   for free. `mincc check` is its view. Design record, including the decisions
   above and the list of which stage owns which error:
   [`docs/architectures/sema.md`](docs/architectures/sema.md).
-- `src/ir/`, `src/backend/`, `src/cinterop/` — **next**, in that order and for
+- `src/ir/` — the lowering: a typed tree in, an `llvm::Module` out, with the CFG,
+  the optimizers and the cross-platform target all LLVM's. It is the **first and
+  only stage that includes `llvm/*`** (a test greps the tree so the boundary
+  fails in CI rather than in review), and it *decides nothing* — it materializes
+  what `sema` recorded and refuses, as an internal error, a decision it cannot
+  read. Every access states an alignment read from the `AccessObligation`; every
+  division, remainder and shift goes through an explicit test and `llvm.trap`,
+  because the language defines those as traps where LLVM defines them as poison;
+  signedness comes from the type, not the opcode. A post-pass **scan**
+  (`invariants.cc`) reads the finished module against the closed assumption list
+  — no metadata, no `noalias` but a written `restrict`, no `inbounds`, no
+  `nsw`/`nuw`, no fast-math, explicit alignments — so an emitter that forgets a
+  guard fails a test instead of producing wrong code. `mincc ir` is its view;
+  its record is [`docs/architectures/ir.md`](docs/architectures/ir.md), with the
+  memory rules it emits under in
+  [`docs/architectures/memory.md`](docs/architectures/memory.md).
+- `src/backend/`, `src/cinterop/` — **next**, in that order and for
   the reasons in
   [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline).
 - `tests/unit/` — gtest suites, one per module.
@@ -641,9 +664,10 @@ which is where the algorithm that depends on them lives.
   `tests/unit/lex/examples_test.cc`, parsed by
   `tests/unit/parse/examples_parse_test.cc`, and carried through lowering,
   validation, resolution and type checking by
-  `tests/unit/sema/examples_test.cc`, so an example cannot drift into syntax the
-  front end does not accept, names it cannot resolve, or types that do not
-  check.
+  `tests/unit/sema/examples_test.cc`, and lowered by an `ir` suite, so an
+  example cannot drift into syntax the front end does not accept, names it
+  cannot resolve, types that do not check, or a module that fails the invariant
+  scan.
   - `001_main_func.mx` — the smallest program: one function and a `return`
   - `002_variables.mx` — `let` with an annotation and with inference
   - `003_types.mx` — the primitive type names and the C-compatible spellings,

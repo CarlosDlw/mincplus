@@ -1,0 +1,18 @@
+# This directory is the one that includes `llvm/*`, and one analyzer check cannot
+# be told that those headers are not ours.
+#
+# `clang-analyzer-security.ArrayBound` fires on LLVM's own code reachable from
+# here -- `User.h`'s hung-off operands (`*(reinterpret_cast<Use **>(this) - 1)`),
+# which is a deliberate negative index, and the operand accessor in
+# `InstrTypes.h` that reaches it through an `assert`. The report is classified as
+# user code however `--header-filter` or `--exclude-header-filter` is set, because
+# the path begins in this translation unit, so there is no way to scope the check
+# to our own lines while an LLVM header is in the file. It is turned off here and
+# nowhere else: every module that does not cross the LLVM boundary still runs it.
+#
+# `InheritParentConfig` is what keeps this a subtraction rather than a
+# replacement -- without it the `Checks` list below would drop every check the
+# root `.clang-tidy` enables.
+InheritParentConfig: true
+Checks: >-
+  -clang-analyzer-security.ArrayBound

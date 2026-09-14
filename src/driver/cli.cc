@@ -7,7 +7,7 @@
 namespace minc::driver {
 namespace {
 
-constexpr std::array<CommandInfo, 7> kCommands{{
+constexpr std::array<CommandInfo, 8> kCommands{{
     {Command::Build, "build", "<files...>", "Compile sources and link an executable", false},
     {Command::Run, "run", "<files...>", "Build and run the resulting program", false},
     {Command::Check, "check", "[options] <files...>",
@@ -27,6 +27,11 @@ constexpr std::array<CommandInfo, 7> kCommands{{
     // proves them.
     {Command::Resolve, "resolve", "[options] <files...>",
      "Resolve names; scopes/defs/refs, --ast, --refs, --unresolved, --at", true},
+    // `ir` is the first command past the front end: it lowers each checked unit
+    // to LLVM IR and prints the module, which is what makes the lowering
+    // reviewable and `make examples` a test of it.
+    {Command::Ir, "ir", "[options] <files...>",
+     "Lower each file to LLVM IR; print the module, --target selects the ABI", true},
 }};
 
 // A lone "-" and any argument not starting with '-' are positional. Doing this
@@ -58,6 +63,8 @@ const char* toString(Command command) {
     return "pp";
   case Command::Resolve:
     return "resolve";
+  case Command::Ir:
+    return "ir";
   }
   return "unknown";
 }

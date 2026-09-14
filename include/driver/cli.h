@@ -18,7 +18,7 @@
 namespace minc::driver {
 
 // Subcommands the driver understands. Anything else is a usage error.
-enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp, Resolve };
+enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp, Resolve, Ir };
 
 // Name, argument shape, and one-line description of a subcommand. Kept in one
 // table so the parser, error messages, and help text cannot drift apart.

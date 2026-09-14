@@ -11,6 +11,7 @@
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/help_text.h"
+#include "driver/ir_command.h"
 #include "driver/lex_command.h"
 #include "driver/parse_command.h"
 #include "driver/pp_command.h"
@@ -44,6 +45,8 @@ int main(int argc, char** argv) {
     return minc::driver::runResolve(opts);
   case minc::driver::Command::Check:
     return minc::driver::runCheck(opts);
+  case minc::driver::Command::Ir:
+    return minc::driver::runIr(opts);
   case minc::driver::Command::Build:
   case minc::driver::Command::Run:
     break;

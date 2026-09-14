@@ -28,6 +28,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "support/consteval/const_int.h"
 
@@ -62,6 +63,26 @@ struct IntegerLiteral {
 // first -- the value GCC produces for a multi-character constant, which is the
 // least surprising rule available.
 [[nodiscard]] IntegerLiteral parseCharLiteral(std::string_view text);
+
+// A string literal's spelling **including its quotes**, decoded to bytes.
+//
+// The trailing NUL is deliberately *not* in `bytes`: whether a `str` has a
+// terminator at its end is a fact about the object the lowering builds, not
+// about what the source spelled, and a reader that appended one would make
+// `"a\0b"` and `"a\0b\0"` indistinguishable.
+//
+// `\u`/`\U` escapes are encoded as UTF-8, because the one reader and the one
+// writer of an escape have to agree about what the bytes are, and the language's
+// string is a byte string (README, *Literals*). A `\x` escape that would not fit
+// in one byte is refused rather than truncated: a value the reader cannot
+// represent is a mistake it can point at.
+struct StringLiteral {
+  std::vector<std::uint8_t> bytes;
+  bool ok = false;
+  std::string message;
+};
+
+[[nodiscard]] StringLiteral parseStringLiteral(std::string_view text);
 
 // The code unit at `index` and the index past it. A character that is not a
 // backslash is itself; a backslash introduces `\n`, `\t`, `\r`, `\a`, `\b`,
