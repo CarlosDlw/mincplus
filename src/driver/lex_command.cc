@@ -7,6 +7,7 @@
 #include <ostream>
 #include <string>
 
+#include "driver/diagnostic_options.h"
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/input_source.h"
@@ -27,8 +28,10 @@ int lexInputs(const LexRequest& request, std::ostream& out, std::ostream& err) {
   // reaches for a global.
   support::Session session;
 
-  const support::DiagRenderer renderer(&session.sources(),
-                                       support::RenderOptions{request.diagnosticColor, 4});
+  const support::DiagRenderer renderer(
+      &session.sources(), diagnosticOptions(request.diagnosticColor, request.errorLimit));
+  // The error budget spans the invocation: the bag is cleared per input.
+  std::size_t errorsShown = 0;
   const lex::DumpOptions dumpOptions{request.dumpColor};
 
   bool failed = false;
@@ -60,7 +63,7 @@ int lexInputs(const LexRequest& request, std::ostream& out, std::ostream& err) {
     out.flush();
 
     if (!session.diags().empty()) {
-      err << renderer.renderAll(session.diags());
+      err << renderer.renderAll(session.diags(), errorsShown);
       err.flush();
     }
     if (problems != 0) {
@@ -83,6 +86,7 @@ int runLex(const CliOptions& options) {
   request.dumpColor = support::colorModeFrom(support::stdoutSupportsColor(), options.colorChoice);
   request.diagnosticColor =
       support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
+  request.errorLimit = options.errorLimit;
   return lexInputs(request, std::cout, std::cerr);
 }
 

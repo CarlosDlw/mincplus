@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "driver/diagnostic_options.h"
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/input_source.h"
@@ -228,7 +229,9 @@ void printAt(const pp::Preprocessor& preprocessor, const pp::PPResult& result,
 int ppInputs(const PpRequest& request, std::ostream& out, std::ostream& err) {
   support::Session session;
   const support::DiagRenderer renderer(&session.sources(),
-                                       support::RenderOptions{request.color, 4});
+                                       diagnosticOptions(request.color, request.errorLimit));
+  // The error budget spans the invocation: the bag is cleared per input.
+  std::size_t errorsShown = 0;
   bool failed = false;
 
   for (const std::string& name : request.inputs) {
@@ -294,7 +297,7 @@ int ppInputs(const PpRequest& request, std::ostream& out, std::ostream& err) {
     out.flush();
 
     if (!session.diags().empty()) {
-      err << renderer.renderAll(session.diags());
+      err << renderer.renderAll(session.diags(), errorsShown);
       err.flush();
     }
     if (lexical != 0 || errors != 0) {
@@ -321,6 +324,7 @@ int runPp(const CliOptions& options) {
   request.showDeps = options.showDeps;
   request.at = options.at;
   request.color = support::colorModeFrom(support::stdoutSupportsColor(), options.colorChoice);
+  request.errorLimit = options.errorLimit;
   return ppInputs(request, std::cout, std::cerr);
 }
 

@@ -12,12 +12,14 @@
 // `mincc pp` is the token-level view of the same unit.
 #pragma once
 
+#include <cstddef>
 #include <iosfwd>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "driver/cli.h"
+#include "support/limits.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
@@ -37,6 +39,9 @@ struct ParseRequest {
   bool showTrivia = true;
   support::ColorMode dumpColor = support::ColorMode::Plain;       // tree -> `out`
   support::ColorMode diagnosticColor = support::ColorMode::Plain; // diagnostics -> `err`
+  // `-ferror-limit`: how many errors are shown before rendering stops, counted
+  // across the whole invocation. See `RenderOptions::errorLimit`.
+  std::size_t errorLimit = support::kMaxDiagnostics;
 };
 
 // The command minus the choice of streams: loads each input, parses it, writes

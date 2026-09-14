@@ -42,8 +42,16 @@ expected to answer works (`mincc`, `-h`, `--help`, `help`, `mincc help <command>
 `mincc <command> --help`), each command has its own grouped page, the parser and
 that page are generated from **one table** so they cannot disagree, a misspelled
 command or option gets a `did you mean`, `--color` overrides the terminal
-detection, and `-vV` prints the block a bug report needs. The design record is
-[`docs/architectures/cli.md`](docs/architectures/cli.md).
+detection, `-ferror-limit=N` caps how many errors are shown, `@file` reads a
+command line out of a file, and `-vV` prints the block a bug report needs. The
+design record is [`docs/architectures/cli.md`](docs/architectures/cli.md).
+
+The **default target is the host**: `kHostTriple` is written by CMake at
+configure time, so `mincc build hello.mx` links and runs on the machine it is
+sitting on, `long` has that machine's width, and `--target` is how a cross build
+is spelled. `-vV` prints both the host and the default, and a `--target` is
+accepted in any of the spellings LLVM itself recognizes (`arm64` and `aarch64`
+are the same machine).
 
 What is left is *language surface*, not pipeline: `extern` declarations and
 linkage, arrays, aggregates, casts, `sizeof`, `switch`, the checked-build guards
@@ -615,14 +623,17 @@ which is where the algorithm that depends on them lives.
 - `src/driver/` — `mincc` entry point. `command_spec` is the command line *as
   data*: one statement of every option, read by `cli` (parsing) and by
   `help_render` (the width-aware pages) both, so a name or a description lives in
-  exactly one place. `suggest` is the nearest-name search behind `did you mean`,
-  `help_text` is the I/O side of help (which stream, which exit code),
-  `error_report` is the one error format, `input_source` is the one way an input
-  path or `-` is loaded, and `lex_command`, `parse_command`, `pp_command`,
-  `resolve_command`, `check_command`, `ir_command` and `build_command` are the
-  subcommands sharing one `frontend` and one `stage_report`. `exit_code` is the
-  process contract. The version header is generated from `cmake/version.h.in`;
-  the source tree holds no second copy.
+  exactly one place. `response_file` is `@file` expansion, which happens before
+  the parse because the parse reads no file. `suggest` is the nearest-name search
+  behind `did you mean`, `diagnostic_options` is the one place a rendering's
+  color, tab width and error limit are assembled, `help_text` is the I/O side of
+  help (which stream, which exit code), `error_report` is the one error format,
+  `input_source` is the one way an input path or `-` is loaded, and `lex_command`,
+  `parse_command`, `pp_command`, `resolve_command`, `check_command`,
+  `ir_command` and `build_command` are the subcommands sharing one `frontend` and
+  one `stage_report`. `exit_code` is the process contract. The version header is
+  generated from `cmake/version.h.in` and the host triple from
+  `cmake/host.h.in`; the source tree holds no second copy of either.
 - `src/parse/` — the parser: a recursive-descent grammar over a token *source*,
   emitting events and error values. It links no diagnostics and no tree, so a
   grammar change is testable without a `Session`; `minc_parse_report` is the

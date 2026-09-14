@@ -10,13 +10,29 @@
 
 namespace minc::sema {
 namespace {
+// The canonical spelling, plus the aliases LLVM recognizes for the same machine.
+//
+// Two names for one architecture is what this file argues against, so the rule
+// is stated precisely instead of "canonical only": the *identity* has one
+// spelling (`toString`, and therefore `Triple::text`, the dump, and what
+// `codegen` hands LLVM), and the aliases exist on the **input** side, where the
+// alternative is refusing a name the platform's own tools print. See
+// `parseTriple` in `target.h` for why `arm64` in particular has to parse.
 bool archFromName(std::string_view name, Arch& out) {
-  // The canonical spelling only. LLVM also accepts `amd64` and `arm64`, and
-  // accepting them here would be two names for one architecture in a file whose
-  // whole argument is that one target has one name.
-  for (const Arch arch : {Arch::x86_64, Arch::aarch64, Arch::riscv64, Arch::i386}) {
-    if (toString(arch) == name) {
-      out = arch;
+  struct Alias {
+    std::string_view name;
+    Arch arch;
+  };
+  // Ordered by architecture so the canonical spelling is the one listed first,
+  // which is also the order `toString` prints them in.
+  static constexpr Alias kArchAliases[] = {
+      {"x86_64", Arch::x86_64}, {"amd64", Arch::x86_64},    {"aarch64", Arch::aarch64},
+      {"arm64", Arch::aarch64}, {"riscv64", Arch::riscv64}, {"i386", Arch::i386},
+      {"i486", Arch::i386},     {"i586", Arch::i386},       {"i686", Arch::i386},
+  };
+  for (const Alias& alias : kArchAliases) {
+    if (alias.name == name) {
+      out = alias.arch;
       return true;
     }
   }
@@ -245,10 +261,28 @@ std::optional<TargetInfo> targetFromName(std::string_view name) {
   return targetInfo(*triple);
 }
 
+std::string_view hostTriple() {
+  return kHostTriple;
+}
+
+bool sameAbi(const TargetInfo& left, const TargetInfo& right) {
+  // The three components that select an ABI, and the six widths the table
+  // derives from them. Comparing the widths as well is not redundant: it is what
+  // makes this function answer whether the two *objects* agree, so a caller
+  // cannot be misled by a triple that parsed but has no row.
+  return left.triple.arch == right.triple.arch && left.triple.os == right.triple.os &&
+         left.triple.env == right.triple.env && left.pointerBits == right.pointerBits &&
+         left.longBits == right.longBits && left.longDoubleBits == right.longDoubleBits &&
+         left.shortBits == right.shortBits && left.intBits == right.intBits &&
+         left.charBits == right.charBits;
+}
+
 TargetInfo defaultTarget() {
   const std::optional<TargetInfo> info = targetFromName(kDefaultTriple);
-  // Unreachable: `kDefaultTriple` is a row of the table, and a test asserts it.
-  // A default-constructed `TargetInfo` is the answer rather than an assertion
+  // Unreachable: `kDefaultTriple` is either the host CMake generated -- which is
+  // a triple this file states, and CMake says so at configure time -- or
+  // `kFallbackTriple`, which is one by construction. A test asserts both. A
+  // default-constructed `TargetInfo` is the answer rather than an assertion
   // because this function is called from a constructor's default argument, where
   // aborting would be a worse failure than a target whose name is empty.
   return info.value_or(TargetInfo{});

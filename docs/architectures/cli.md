@@ -8,8 +8,9 @@ stage contract; this document is about the one part of the compiler a user talks
 to directly.
 
 **Status: shipped.** The help engine, the per-command help, `mincc help <cmd>`,
-`--color`, the verbose version block and the spelling suggestions are
-implemented, and the parser reads the same tables the help is rendered from.
+`--color`, the verbose version block, the spelling suggestions, `@file` response
+files and `-ferror-limit` are implemented, the parser reads the same tables the
+help is rendered from, and the default target is the host.
 
 ## What was wrong, measured
 
@@ -260,12 +261,19 @@ needs the four facts that decide whether a bug is reproducible — the version,
 the machine it ran on, the target it was aimed at, and the LLVM it was built
 against.
 
-`host:` is **asked of LLVM** (`llvm::sys::getDefaultTargetTriple()`) rather than
-derived here, because LLVM's answer is the one its own backend will use, and a
-second spelling of the host is a second thing to be wrong. That it can differ
-from `default target:` is not a bug in the display: it is the display being
-honest about a difference that is real, and it is how the two findings at the end
-of this document were noticed.
+`host:` is **the build's own triple**, written by CMake into `sema/host.h`, and
+`default target:` is `sema`'s default -- which is the host. They are the same
+string by construction, and printing both is what makes that checkable rather
+than assumed: the only build where they differ is one whose host this compiler
+has no ABI row for, and there `host:` says `unknown` while the default falls back
+to a fixed triple. That is the case a bug report has to be able to see, and it is
+the reason the two lines stayed two lines.
+
+LLVM's `getDefaultTargetTriple()` used to answer this, and the answer was wrong
+twice over: it prints `arm64` where the table says `aarch64`, and `pc` where the
+build says `unknown`. A second spelling of the host is a second thing to be
+wrong, so the query is gone (`backend/codegen.h` says why) and there is one host
+answer -- in the canonical spelling `--target` accepts.
 
 `-vV` and `-Vv` are accepted as clusters because `rustc` made that spelling
 muscle memory. A general short-option cluster (`-abc` = `-a -b -c`) **is**
@@ -293,6 +301,96 @@ The precedence, in order, is:
 
 `auto` is the default, and it is decided **per stream**: help goes to stdout and
 diagnostics go to stderr, and `mincc build a.mx 2> err.log | less` has one of each.
+
+## `-ferror-limit`
+
+`-ferror-limit=N`: show at most `N` errors, count the rest, and stop. The three
+readings of the value are stated rather than discovered:
+
+- **`N` errors are shown, and the sequence stops there.** Not "errors are
+  dropped selectively": a note belonging to an error that was not shown is not
+  shown either, because half a diagnostic reads as an explanation for whatever is
+  above it.
+- **`0` means all of them.** It is stored as the retention cap (`kMaxDiagnostics`),
+  which is the most the bag can hold -- so "no limit" and "as many as exist" are
+  the same number, and the renderer has one comparison rather than two rules.
+- **A value above the cap is clamped to it**, without a diagnostic: "show at most
+  100000" is satisfied by showing all 1024 that exist.
+
+The bound is on **rendering, not on work**, and that is deliberate. Every input is
+still compiled: `--stats` counts every error, `--ast` still prints the whole tree,
+and the exit code is the compile's answer -- a suppressed error is still an error,
+or a script would read a truncated build as a successful one. What the limit
+closes is the hazard rendering always carries: one mistake in a macro body is a
+thousand diagnostics, each with an excerpt.
+
+The count is spent **across the inputs of the command line**, not once per file.
+The bag is cleared per translation unit, so a limit carried in the bag would be a
+limit per file, and ten files with one error each would print ten errors under
+`-ferror-limit=1`. The counter therefore lives in the caller and is handed to the
+renderer in and out (`DiagRenderer::renderAll`), which keeps the renderer a pure
+formatting object with no memory of its own.
+
+Every rendering that leaves something out says so, with its own count:
+
+```
+$ mincc check a.mx b.mx -ferror-limit=1
+a.mx:3:11: error[sema-invalid-operands]: ...
+... 2 more diagnostic(s) not shown (-ferror-limit=1)
+... 1 more diagnostic(s) not shown (-ferror-limit=1)
+```
+
+One line per rendering and not one per invocation, because the honest total is
+not knowable at the moment the line is written -- the second file has not been
+compiled yet. A rendering that shows nothing and prints that line is a correct
+answer to "what happened to my second file".
+
+The default comes from the retention cap's own *text* (`kMaxDiagnosticsText`),
+parsed at compile time, so the number the help prints and the number the compiler
+enforces cannot be edited apart.
+
+## `@file`
+
+A response file is how a build system passes a command line that has outgrown the
+shell and the operating system (`ARG_MAX` on POSIX, 32767 characters to
+`CreateProcess` on Windows). It is a **textual** feature: the words in the file
+are the words that would have been typed, so it can hold options, a command name
+and inputs alike, and nothing downstream knows one was used.
+
+That is why the expansion happens *before* the parse, in `driver/response_file`,
+and not inside it: `parseArgs` is pure and reads no file. The one thing the two
+must agree about is failure, and the rule is the one this document already
+states: **an unreadable response file is a usage error like any other, and `-h`
+still outranks it.** The words after the failure are copied unexpanded for
+exactly that reason -- a flag has to survive to be seen:
+
+```
+$ mincc @missing.rsp -h        # the page, exit 0
+$ mincc @missing.rsp           # error: cannot read response file `@missing.rsp`: ..., exit 2
+```
+
+The tokenizer's rules, which are the part a user has to be able to predict:
+
+| Written | Read as |
+| --- | --- |
+| any run of whitespace | one separator |
+| `'a b'`, `"a b"` | one word, `a b` |
+| `\ ` (space, quote, backslash, `#`, `@`) | the character itself |
+| `C:\dir\file` | itself -- `\d` is not escapable, so the backslash is a path separator |
+| `#` | an ordinary character; there are no comments |
+
+That third and fourth row are one decision and it is ours, not `gcc`'s: `gcc` and
+`clang` treat *every* backslash as an escape, which silently rewrites a Windows
+path (`C:\dir` becomes `C:dir`). A backslash is a path separator on one of the
+platforms this compiler runs on, so the rule is "escapes only what would
+owhere else be special" and the exception is written down rather than discovered.
+
+Nesting is allowed (`@file` inside `@file`), depth-first and in place, bounded
+by `kMaxResponseFileDepth` and refused by name when a file turns out to include
+itself -- the cap is what makes a chain nobody noticed a diagnostic, and the name
+check is what makes the common case a sentence rather than a depth limit.
+An unterminated quote is an error and not a guess: the two readings (`a b` as one
+word or as two) are a whole command line apart.
 
 ## Environment variables
 
@@ -324,31 +422,32 @@ The help text stays **ASCII-only** (enforced by a test): a Windows console with 
 legacy code page renders UTF-8 unpredictably, and a box-drawing character in a
 help page is not worth a broken page.
 
-## What this work does not own
+## The target, which the command line only carries
 
-Two things were found while writing this record and are **not** fixed here,
-because they are the target table's and not the command line's:
+The default target is **the host**, and the CLI's job here is only to carry
+whatever `--target` said to `sema`, which is where the ABI is decided. Three
+consequences are visible from the command line, and all three were found by
+writing this record:
 
-1. **"Host" is a constant.** `driver` decides whether a link crosses a target
-   boundary with `request.target.triple.text == sema::defaultTarget().triple.text`,
-   and `defaultTarget()` is `kDefaultTriple` — `x86_64-unknown-linux-gnu`,
-   written down. On a macOS or Windows host that comparison is false, so
-   `mincc build hello.mx` refuses to link with "needs `--linker` and
-   `--sysroot`" for a program aimed at the machine it is running on. The fix is
-   the host triple as the default target, which is `sema/target.h`'s decision.
-2. **`arm64-apple-darwin` is refused.** That is LLVM's own spelling of an Apple
-   Silicon host, and the table states `aarch64` and not `arm64`, so a name LLVM
-   produces for every M-series machine — the value `--version` now prints under
-   `host:` — cannot be passed to `--target`. Measured:
+1. **`mincc build hello.mx` links on every host.** The native/cross decision used
+   to compare the triple *text* against a constant, so on macOS or Windows a
+   plain `build` was classified as a cross build and refused for `--linker` and
+   `--sysroot`. It now asks `sema::sameAbi`, because "is this the machine I am
+   on?" is a question about the ABI and not about the vendor component --
+   `--target x86_64-pc-linux-gnu` builds for this machine exactly as the default
+   `x86_64-unknown-linux-gnu` does.
+2. **`arm64-apple-darwin` is accepted.** That is what Apple's own toolchain
+   prints for every M-series machine, and refusing the name of the machine this
+   compiler was just built on is tidiness mistaken for correctness. An alias is
+   **input syntax**: it parses to the canonical row, and the triple it produces
+   prints `aarch64`.
+3. **`-vV` is where a surprise about a cross build is answered.** `host:` and
+   `default target:` are both printed, and they differ only in the case where the
+   fallback was used.
 
-   ```
-   $ mincc check --target arm64-apple-darwin a.mx
-   mincc: error: unknown target 'arm64-apple-darwin': unknown architecture `arm64`;
-   the default is 'x86_64-unknown-linux-gnu'
-   $ mincc check --target x86_64-apple-darwin a.mx
-   (accepted)
-   ```
-
-Both are one-file changes in `sema/target.h` with tests, and both are the kind of
-gap this document exists to make visible rather than to hide behind a
-`--version` line that prints a host the compiler cannot actually target.
+The one thing this record will not hide: `mincc check` is **host-dependent** for
+the same input, as `gcc` and `clang` are -- `long` is 32 bits under a Windows
+default target and 64 under a Linux one. `--target` is how that is made explicit
+and `-vV` prints what it defaulted to. That is the price of the default being the
+machine the user is sitting at, and the alternative -- a constant -- is a
+compiler that refuses to link where it runs.

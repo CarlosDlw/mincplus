@@ -30,6 +30,7 @@
 #include "sema/sema.h"
 #include "sema/target.h"
 #include "support/intern/interner.h"
+#include "support/limits.h"
 #include "support/session/session.h"
 #include "support/span/file_id.h"
 #include "support/term/terminal.h"
@@ -57,6 +58,10 @@ struct FrontEndOptions {
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;
+  // `-ferror-limit`: how many errors are shown before rendering stops. One count
+  // for the whole invocation, not one per input -- `RenderOptions::errorLimit`
+  // states why it is a display bound and `FrontEnd::run` why it is not per file.
+  std::size_t errorLimit = support::kMaxDiagnostics;
 };
 
 // One input's artifacts. The pointers are owned by the `FrontEnd` that produced

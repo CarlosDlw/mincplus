@@ -51,15 +51,78 @@ constexpr std::string_view kStatedTriples[] = {
   return info.value_or(sema::defaultTarget());
 }
 
-TEST(TargetTest, TheDefaultIsStatedAndIsSystemVAmd64) {
+TEST(TargetTest, TheDefaultIsTheHostAndHasATableRow) {
+  // The default target is the host, and **the host is a row of this table**: an
+  // empty host means the build could not name a machine, and the fallback (the
+  // target the project was developed against) is used instead. Either way the
+  // default is a target this file states, which is what `defaultTarget`'s own
+  // `value_or` is a guard against rather than an expectation.
   const TargetInfo info = sema::defaultTarget();
   EXPECT_EQ(info.name(), std::string(sema::kDefaultTriple));
-  EXPECT_EQ(info.triple.arch, Arch::x86_64);
+  EXPECT_TRUE(sema::targetInfo(info.triple).has_value());
+  EXPECT_TRUE(sema::targetRefusal(sema::kDefaultTriple).empty());
+
+  // The host, when the build stated one, is what the default is -- and it is
+  // stated in the canonical spelling, so `--target <host>` is accepted.
+  if (!sema::hostTriple().empty()) {
+    EXPECT_EQ(sema::kDefaultTriple, sema::hostTriple());
+    EXPECT_TRUE(sema::targetFromName(sema::hostTriple()).has_value())
+        << sema::targetRefusal(sema::hostTriple());
+    EXPECT_EQ(sema::parseTriple(sema::hostTriple())->text, sema::hostTriple());
+  } else {
+    EXPECT_EQ(sema::kDefaultTriple, sema::kFallbackTriple);
+  }
+
+  // On this machine the host is Linux/amd64, so the widths are still System V's:
+  // the point of the default moving to the host is not that the numbers changed
+  // here, it is that they are the *host's* numbers everywhere.
   EXPECT_EQ(info.triple.os, OsFamily::linux);
-  EXPECT_EQ(info.triple.env, Env::gnu);
+  EXPECT_EQ(info.triple.arch, Arch::x86_64);
   EXPECT_EQ(info.pointerBits, 64u);
   EXPECT_EQ(info.longBits, 64u);
   EXPECT_EQ(info.longDoubleBits, 80u);
+}
+
+TEST(TargetTest, AnArchitectureAliasParsesToTheCanonicalSpelling) {
+  // The names LLVM itself recognizes for the architectures here. `arm64` is the
+  // one that matters: it is what Apple's toolchain and
+  // `getDefaultTargetTriple()` print for every M-series machine, and a compiler
+  // that refuses the name of the machine it was built on has confused tidiness
+  // with correctness.
+  struct Alias {
+    std::string_view spelled;
+    std::string_view canonical;
+  };
+  const Alias aliases[] = {
+      {"arm64-apple-darwin", "aarch64-apple-darwin"},
+      {"arm64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"},
+      {"amd64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"},
+      {"i686-unknown-linux-gnu", "i386-unknown-linux-gnu"},
+      {"i586-pc-windows-msvc", "i386-pc-windows-msvc"},
+  };
+  for (const Alias& alias : aliases) {
+    const std::optional<Triple> triple = sema::parseTriple(alias.spelled);
+    ASSERT_TRUE(triple.has_value()) << alias.spelled << ": " << sema::targetRefusal(alias.spelled);
+    EXPECT_EQ(triple->text, alias.canonical) << alias.spelled;
+    // The ABI is the canonical row's, not a second set of numbers: an alias is
+    // input syntax and nothing else.
+    EXPECT_TRUE(sema::sameAbi(require(alias.spelled), require(alias.canonical))) << alias.spelled;
+  }
+}
+
+TEST(TargetTest, SameAbiIgnoresTheVendorAndNothingElse) {
+  // `sameAbi` is what "aimed at the machine this process runs on" means for a
+  // link, so it must say yes to two spellings of one machine and no to two
+  // machines that merely look alike.
+  EXPECT_TRUE(sema::sameAbi(require("x86_64-pc-linux-gnu"), require("x86_64-unknown-linux-gnu")));
+  EXPECT_FALSE(
+      sema::sameAbi(require("x86_64-unknown-linux-gnu"), require("aarch64-unknown-linux-gnu")));
+  EXPECT_FALSE(
+      sema::sameAbi(require("x86_64-unknown-linux-gnu"), require("x86_64-unknown-freebsd")));
+  // The environment is part of the ABI even where it changes no width here today:
+  // it is what `codegen` hands to LLVM, and two different environments are two
+  // different target machines.
+  EXPECT_FALSE(sema::sameAbi(require("x86_64-pc-windows-msvc"), require("x86_64-w64-windows-gnu")));
 }
 
 TEST(TargetTest, EveryStatedTripleParsesToItself) {
@@ -132,8 +195,7 @@ TEST(TargetTest, AnUnknownTargetIsRefusedWithASentence) {
       "x86_64",                     // not enough components
       "x86_64-pc",                  // not enough components
       "x86_64-linux-gnu",           // `arch-os-env`: the vendor was left out
-      "arm64-unknown-linux-gnu",    // an alias for aarch64, deliberately not stated
-      "amd64-unknown-linux-gnu",    // ... nor this one
+      "arm7-apple-darwin",          // a similar-looking name that is not an alias
       "x86_64-pc-windows",          // Windows has no default environment
       "x86_64-apple-darwin-gnu",    // Darwin has exactly one
       "x86_64-pc-windows-nonsense", // no such environment

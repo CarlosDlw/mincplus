@@ -13,12 +13,14 @@
 // front end `parse` does, because a name in a macro body is a name.
 #pragma once
 
+#include <cstddef>
 #include <iosfwd>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "driver/cli.h"
+#include "support/limits.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
@@ -37,6 +39,9 @@ struct ResolveRequest {
   // `[file:]line:col`; empty means the tables.
   std::string at;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;
+  // `-ferror-limit`: how many errors are shown before rendering stops, counted
+  // across the whole invocation. See `RenderOptions::errorLimit`.
+  std::size_t errorLimit = support::kMaxDiagnostics;
 };
 
 // The command minus the choice of streams, so the contract -- which stream

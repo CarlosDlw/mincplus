@@ -49,6 +49,24 @@ configure_file(
   @ONLY
 )
 
+# The host triple, in the same generated form and for the same reason: it depends
+# on where this compiler is being *built*, and `sema/target.h` may not derive it
+# from a preprocessor macro (`--target` would then mean something different on
+# each host, and a cross build would be silently aimed at the build machine).
+#
+# CMake knows the target processor rather than the machine CMake runs on, which
+# is what we want: a compiler cross-built for aarch64 is a compiler whose host is
+# aarch64.
+#
+# `CMAKE_SYSTEM_PROCESSOR` is only loosely standardized -- `x86_64` and `AMD64`
+# are the same machine, `arm64` and `aarch64` differ only in who is speaking -- so
+# the mapping happens here, once, and produces the canonical spelling the table
+# states. An architecture or system this compiler has no ABI row for leaves the
+# value empty with a warning rather than a guess, and `sema` then falls back to
+# its fixed default; `--target` is required on such a host, which is honest.
+include(minc_host)
+
+
 # LLVM is the IR and the backend, and it is isolated on purpose: `src/ir` and
 # `src/backend` are the only targets that may include `llvm/*`, and a unit test
 # greps the tree so the rule fails in CI instead of in review.

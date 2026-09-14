@@ -208,12 +208,49 @@ std::string DiagRenderer::render(const Diagnostic& diag, bool withSnippet) const
 }
 
 std::string DiagRenderer::renderAll(const DiagBag& bag) const {
+  std::size_t shown = 0;
+  return renderAll(bag, shown);
+}
+
+std::string DiagRenderer::renderAll(const DiagBag& bag, std::size_t& shownErrors) const {
   std::string out;
   const Diagnostic* previous = nullptr;
+  std::size_t shown = shownErrors;
+  std::size_t hidden = 0;
   for (const Diagnostic& diag : bag.all()) {
+    // The limit counts *errors* and stops the sequence, so a note belonging to
+    // an error that was not shown is not shown either: half a diagnostic is
+    // worse than none, because the half that survives reads as an explanation
+    // for whatever is above it.
+    if (diag.severity == Severity::Error) {
+      if (shown >= options_.errorLimit) {
+        ++hidden;
+        continue;
+      }
+      ++shown;
+    } else if (hidden > 0) {
+      ++hidden;
+      continue;
+    }
     out += render(diag, /*withSnippet=*/!repeatsSnippet(diag, previous));
     previous = &diag;
   }
+  // Every rendering that hides something says so, and the count is that
+  // rendering's. The alternative -- announcing the stop once, in the rendering
+  // that reaches the limit -- loses the announcement in the case where a bag
+  // spends the budget exactly: nothing was hidden there, so nothing was said, and
+  // then the next input's diagnostics vanish with no explanation at all. A
+  // rendering that shows *nothing* and prints this line is therefore a correct
+  // answer to "what happened to my second file".
+  if (hidden > 0) {
+    out += kTruncationMarker;
+    out += ' ';
+    out += std::to_string(hidden);
+    out += " more diagnostic(s) not shown (-ferror-limit=";
+    out += std::to_string(options_.errorLimit);
+    out += ")\n";
+  }
+  shownErrors = shown;
   if (bag.droppedCount() > 0) {
     out += kTruncationMarker;
     out += ' ';

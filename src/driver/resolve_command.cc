@@ -14,6 +14,7 @@
 #include "ast/dump.h"
 #include "ast/lower.h"
 #include "ast/validate.h"
+#include "driver/diagnostic_options.h"
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/input_source.h"
@@ -173,8 +174,10 @@ int resolveInputs(const ResolveRequest& request, std::ostream& out, std::ostream
   syntax::TreeStore trees(session.arena());
   resolve::ResolveStore resolves;
 
-  const support::DiagRenderer renderer(&session.sources(),
-                                       support::RenderOptions{request.diagnosticColor, 4});
+  const support::DiagRenderer renderer(
+      &session.sources(), diagnosticOptions(request.diagnosticColor, request.errorLimit));
+  // The error budget spans the invocation: the bag is cleared per input.
+  std::size_t errorsShown = 0;
 
   // The preprocessed units, alive for the whole invocation: a token stream is a
   // view into the preprocessed text, and the text belongs to the `PPResult`.
@@ -263,7 +266,7 @@ int resolveInputs(const ResolveRequest& request, std::ostream& out, std::ostream
     out.flush();
 
     if (!session.diags().empty()) {
-      err << renderer.renderAll(session.diags());
+      err << renderer.renderAll(session.diags(), errorsShown);
       err.flush();
     }
     if (lexical != 0 || syntax != 0 || !result.errors.empty() || loweringErrors != 0 ||
@@ -294,6 +297,7 @@ int runResolve(const CliOptions& options) {
   request.at = options.at;
   request.diagnosticColor =
       support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
+  request.errorLimit = options.errorLimit;
   return resolveInputs(request, std::cout, std::cerr);
 }
 

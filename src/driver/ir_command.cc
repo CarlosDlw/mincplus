@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "driver/diagnostic_options.h"
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/frontend.h"
@@ -32,10 +33,13 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
   options.warnUnused = request.warnUnused;
   options.warnShadow = request.warnShadow;
   options.diagnosticColor = request.diagnosticColor;
+  options.errorLimit = request.errorLimit;
 
   FrontEnd frontEnd(options);
   bool ok = frontEnd.run(request.inputs, err);
   const support::SourceManager& sources = frontEnd.session().sources();
+  const support::RenderOptions diag =
+      diagnosticOptions(request.diagnosticColor, request.errorLimit);
 
   for (const FrontEndUnit& unit : frontEnd.units()) {
     // A unit whose front end failed has no typed tree, or has one with errors in
@@ -61,7 +65,7 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
         ir::lowerUnit(*unit.lowered, unit.resolved->map, unit.typed->typed, frontEnd.sema().types(),
                       frontEnd.symbols(), loweringOptions);
     if (result.failed()) {
-      renderStageDiagnostics(result.diagnostics, sources, request.diagnosticColor, err);
+      renderStageDiagnostics(result.diagnostics, sources, diag, err);
       ok = false;
       continue;
     }
@@ -74,7 +78,7 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
 
     const std::vector<ir::IRDiagnostic> violations = ir::scanModule(result.module);
     if (!violations.empty()) {
-      renderStageDiagnostics(violations, sources, request.diagnosticColor, err);
+      renderStageDiagnostics(violations, sources, diag, err);
       ok = false;
     }
   }
@@ -105,6 +109,7 @@ int runIr(const CliOptions& options) {
   request.warnShadow = options.warnShadow;
   request.diagnosticColor =
       support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
+  request.errorLimit = options.errorLimit;
   request.debugInfo = options.debugInfo;
   return irInputs(request, std::cout, std::cerr);
 }

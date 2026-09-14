@@ -31,11 +31,26 @@ namespace {
 [[nodiscard]] std::vector<std::string> wordsFor(Command command, const OptionSpec& option) {
   std::vector<std::string> words{"mincc", std::string(toString(command)), std::string(option.name)};
   if (option.value == ValueKind::Required) {
-    // A value the option actually takes: `--color` validates its own, and the
-    // point of the walk is that every documented option is *accepted*, not that a
-    // placeholder happens to be well-formed.
-    words.emplace_back(option.values.empty() ? std::string("value")
-                                             : std::string(option.values.front()));
+    // A value the option actually *takes*, in this order of preference, and the
+    // walk's point is that every documented option is accepted rather than that a
+    // placeholder happens to be well-formed:
+    //
+    //   1. the first documented value, for an option that lists its alternatives
+    //      (`--color auto`, `--emit exe`);
+    //   2. the documented default, which is by construction a value the option
+    //      accepts and is the only thing a free-form value can be checked
+    //      against (`--target`, `-ferror-limit 1024`);
+    //   3. a placeholder, for a value with neither.
+    //
+    // (2) is what makes this table-driven: an option that documents a default has
+    // to *accept* it, which is a fact about the option and not about this test.
+    if (!option.values.empty()) {
+      words.emplace_back(option.values.front());
+    } else if (!option.defaultValue.empty()) {
+      words.emplace_back(option.defaultValue);
+    } else {
+      words.emplace_back("value");
+    }
   }
   words.emplace_back("a.mx");
   return words;

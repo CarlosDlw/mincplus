@@ -41,15 +41,18 @@ namespace minc::backend {
 
 // --- the build environment ------------------------------------------------------
 //
-// Two facts `--version -v` prints and nothing else decides with. They live here
-// because they are LLVM's answers (`getDefaultTargetTriple`, the version this
-// library was built from) and this is the module allowed to ask.
-
-// The triple LLVM considers this machine to be. Deliberately *not* the same
-// question as "what does this compiler target by default" -- see the note in
-// `docs/architectures/cli.md` about the two being able to differ, and being
-// printed side by side when they do.
-[[nodiscard]] std::string hostTriple();
+// One fact `--version -v` prints and nothing else decides with: the LLVM this
+// compiler was built against. It lives here because it is LLVM's own answer and
+// this is the module allowed to ask.
+//
+// The host triple is *not* asked here. It used to be
+// (`llvm::sys::getDefaultTargetTriple()`), and that was one host answer too many:
+// the machine the compiler runs on is a property of the build, CMake states it in
+// `sema/host.h`, and the spelling `--target` accepts is the one `sema` prints. A
+// second answer from LLVM could only ever disagree with it about formatting --
+// `x86_64-pc-linux-gnu` against `x86_64-unknown-linux-gnu`, `arm64` against
+// `aarch64` -- which is exactly the difference a reader of `-vV` would have to
+// spend time deciding was not a bug.
 
 // The LLVM this compiler was built against, as its own version string.
 [[nodiscard]] std::string llvmVersion();

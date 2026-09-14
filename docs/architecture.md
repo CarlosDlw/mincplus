@@ -456,12 +456,27 @@ Design record: [`architectures/parser.md`](architectures/parser.md).
   ordinary command that took an argument, so `mincc help buidl` is a usage error
   and not a page. Each row also says whether its command is implemented, and the
   overview derives the "(not implemented yet)" marker from that rather than
-  naming commands in prose.
+  naming commands in prose. `@file` expansion is not part of the parse at all:
+  it happens first, and its failure arrives here as a string
+  (`parseArgs`' `expansionError`) so the same precedence rule covers it.
+  `opts.target` defaults to `sema::kDefaultTriple`, which is the **host** -- so
+  `mincc check` reads the type widths of the machine it runs on, as `gcc` does.
 - `help_render.h` / `.cc`: the renderer, pure and width-aware. One function
   serves the overview and one a single command's page, from `COLUMNS` →
   `ioctl`/`GetConsoleScreenBufferInfo` → 80 (in `support/term`, not here), so
   text is wrapped rather than pre-aligned by hand. ASCII-only, and the alignment
   is derived from the rows it is about to print.
+- `response_file.h` / `.cc`: `@file`, the command line as a file, expanded
+  **before** the parse because the parse is pure and reads nothing. The words in
+  the file are the words on the line, so it may hold options, a command name and
+  inputs alike; the expansion is depth-first and in place, bounded by
+  `kMaxResponseFileDepth`, and a file that includes itself is refused by name. The
+  tokenizer's one unusual rule is stated where it is implemented: `\` escapes
+  only what would otherwise be special, so a Windows path survives.
+- `diagnostic_options.h` / `.cc`: the one place a rendering's options are
+  assembled -- the stream's color, the driver's tab width, `-ferror-limit`. A
+  small file on purpose: it is the only dependency `lex` needs to render a
+  diagnostic, and `stage_report.h` would pull `ir` and `backend` into it.
 - `suggest.h` / `.cc`: the nearest name to an unknown command or option, for the
   `did you mean` note. Bounded edit distance over the spellings the table lists,
   so the suggestion can only name something that exists.
@@ -691,7 +706,16 @@ warnings inside them are dropped at the report step while errors are not.
   from `sema/target.h`, a table selected by **triple** (`--target
   x86_64-unknown-linux-gnu`, `--target x86_64-pc-windows-msvc`), so `long` means
   what the *target* means and a cross
-  build is not silently wrong; there is no `#ifdef` in the stage. The typed AST
+  build is not silently wrong; there is no `#ifdef` in the stage. The triple the
+  table is keyed on is canonical and the host is a row of it: **the default target
+  is the host** (`kHostTriple`, written by `cmake/minc_host.cmake` into
+  `sema/host.h` at configure time, and `kFallbackTriple` when the build could not
+  name a machine), because a compiler that defaults to a constant refuses to link
+  where it runs and reads `long` as the wrong width there. `--target` is how a
+  cross build is spelled, `sameAbi` is what the driver asks before calling a link
+  native -- not the triple *text*, since the vendor component is identity and not
+  ABI -- and an architecture alias (`arm64`, `amd64`, `i686`) is input syntax that
+  parses to the canonical row. The typed AST
   is a **parallel array** beside the lowered tree rather than a field inside its
   nodes, the same decision `resolve` made for its `NameRef`s: the tree stays a
   value, so it stays hashable and the item-tree cache keeps working. And

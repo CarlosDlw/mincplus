@@ -5,11 +5,13 @@
 #include <cstdio>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include "backend/codegen.h"
 #include "driver/exit_code.h"
 #include "driver/help_render.h"
 #include "driver/version.h"
+#include "sema/target.h"
 
 namespace minc::driver {
 namespace {
@@ -40,10 +42,17 @@ std::string versionLine() {
 }
 
 std::string versionBlock() {
-  // The two backend answers are kept in named strings first: `VersionFacts`
-  // holds views, and a view into a temporary is a use-after-free waiting for a
-  // change of optimisation level to start mattering.
-  const std::string host = backend::hostTriple();
+  // The two facts are kept in named strings first: `VersionFacts` holds views,
+  // and a view into a temporary is a use-after-free waiting for a change of
+  // optimisation level to start mattering.
+  //
+  // The host comes from `sema` -- the triple this compiler was built for, in the
+  // canonical spelling `--target` accepts -- and is empty only in a build whose
+  // host this compiler has no ABI row for, which is the one case where the line
+  // has something to say. `unknown` says it, rather than leaving a blank column
+  // that reads as a rendering fault.
+  const std::string_view hostTriple = sema::hostTriple();
+  const std::string host = hostTriple.empty() ? std::string("unknown") : std::string(hostTriple);
   const std::string llvm = backend::llvmVersion();
   const VersionFacts facts{kProgName, kVersion, host, llvm};
   return renderVersion(facts, /*verbose=*/true);

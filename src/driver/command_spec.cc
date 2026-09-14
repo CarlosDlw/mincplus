@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "sema/target.h"
+#include "support/limits.h"
 
 namespace minc::driver {
 namespace {
@@ -27,7 +28,7 @@ constexpr std::array<std::string_view, 3> kColorValues{"auto", "always", "never"
 constexpr std::array<std::string_view, 6> kOptLevels{"O0", "O1", "O2", "O3", "Os", "Oz"};
 constexpr std::array<std::string_view, 3> kEmitKinds{"exe", "obj", "asm"};
 
-constexpr std::array<OptionSpec, 30> kOptions{{
+constexpr std::array<OptionSpec, 31> kOptions{{
     // --- global: accepted by every command ---------------------------------
     {.id = OptionId::Help,
      .name = "--help",
@@ -45,6 +46,13 @@ constexpr std::array<OptionSpec, 30> kOptions{{
              "everything",
      .defaultValue = "auto",
      .values = kColorValues},
+    {.id = OptionId::ErrorLimit,
+     .name = "-ferror-limit",
+     .value = ValueKind::Required,
+     .valueName = "N",
+     .help = "show at most N errors and stop; the diagnostics after the limit are "
+             "counted and not shown, 0 means all of them",
+     .defaultValue = support::kMaxDiagnosticsText},
 
     // --- the front end -----------------------------------------------------
     {.id = OptionId::Define,
@@ -196,7 +204,8 @@ constexpr std::array<OptionSpec, 30> kOptions{{
 // A group is an ordered list of ids: the parser's membership test and the help's
 // table are the same list read from two sides.
 
-constexpr std::array<OptionId, 3> kGlobalIds{OptionId::Help, OptionId::Version, OptionId::Color};
+constexpr std::array<OptionId, 4> kGlobalIds{OptionId::Help, OptionId::Version, OptionId::Color,
+                                             OptionId::ErrorLimit};
 constexpr std::array<OptionId, 5> kInputIds{OptionId::Define, OptionId::Undefine, OptionId::Include,
                                             OptionId::Isystem, OptionId::Target};
 constexpr std::array<OptionId, 3> kWarningIds{OptionId::WarnUnused, OptionId::WarnShadow,

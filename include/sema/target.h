@@ -35,6 +35,11 @@
 #include <string>
 #include <string_view>
 
+// The triple this compiler was built for, written by CMake at configure time
+// (`cmake/minc_host.cmake`). Empty when the build is for a machine this compiler
+// has no ABI row for; `kDefaultTriple` below is what happens then.
+#include "sema/host.h"
+
 namespace minc::sema {
 
 // The components of a triple, as enumerators.
@@ -99,6 +104,18 @@ struct Triple {
 //
 // `std::nullopt` for a malformed name, an architecture or OS this compiler does
 // not state, or an environment the OS cannot have.
+//
+// **Architecture aliases are accepted and canonicalized.** The names LLVM itself
+// recognizes for the architectures this file states (`amd64` for `x86_64`,
+// `arm64` for `aarch64`, `i486`/`i586`/`i686` for `i386`) parse to the same row,
+// and the triple they produce prints the canonical spelling. Refusing them was
+// the earlier rule, on the grounds that one target should have one name -- and
+// the rule is kept where it matters (the *identity* has one spelling, the one a
+// dump and a `codegen` target and an error message all use) while dropping it
+// where it was only hostile: `arm64-apple-darwin` is what Apple's own toolchain
+// and `llvm::sys::getDefaultTargetTriple()` print for every M-series machine, and
+// a compiler that refuses to be aimed at the machine it was just built on has
+// confused tidiness with correctness.
 [[nodiscard]] std::optional<Triple> parseTriple(std::string_view name);
 
 struct TargetInfo {
@@ -145,17 +162,53 @@ struct TargetInfo {
 // The triples this project names. A caller that needs one by name uses these;
 // user input goes through `targetFromName`, which can refuse. They are the
 // spelling in one place, and the table is still what answers.
-inline constexpr std::string_view kDefaultTriple = "x86_64-unknown-linux-gnu";
+//
+// `kFallbackTriple` exists for the case where the build could not state a host:
+// it is the target the project was developed against (LP64, x87 `long double`),
+// and it is deliberately *not* the first choice any more.
+inline constexpr std::string_view kFallbackTriple = "x86_64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleLinuxAmd64 = "x86_64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleWindowsAmd64 = "x86_64-pc-windows-msvc";
 inline constexpr std::string_view kTripleLinuxAarch64 = "aarch64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleLinuxRiscv64 = "riscv64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleDarwinAmd64 = "x86_64-apple-darwin";
+inline constexpr std::string_view kTripleDarwinAarch64 = "aarch64-apple-darwin";
 
-// The default: System V AMD64. It is the interop target `README.md` and the
-// roadmap already commit to (LP64, x87 `long double`), and it is the same on
-// every host, so a Linux and a Windows checkout of the compiler agree on what
-// `long int` means before `--target` is written.
+// **The default target is the host.** A compiler whose default target was a
+// constant would refuse to link on every machine that constant does not name --
+// `mincc build hello.mx` on macOS or Windows would ask for `--linker` and
+// `--sysroot` to build for the machine it is running on -- and would read `long`
+// as 32 bits on a host where it is 64. Every production compiler defaults to the
+// host for that reason, and `--target` is how a cross build is spelled.
+//
+// The consequence is worth stating out loud: `mincc check` is *host-dependent*
+// for the same input, exactly as `gcc` and `clang` are. `--target` makes it
+// host-independent, and `-vV` prints both the host and the default so a bug
+// report says which one produced the output.
+//
+// A constant, and not only a function, because the option table names it: the
+// help must show the value a user gets, and a `constexpr` table cannot be filled
+// from a function. The *widths* are still the table's answer -- this is a name.
+inline constexpr std::string_view kDefaultTriple =
+    kHostTriple.empty() ? kFallbackTriple : kHostTriple;
+
+// The default target: the host when the build stated one, `kFallbackTriple`
+// otherwise. The ABI facts come from `targetInfo`, so nothing here states a
+// width.
 [[nodiscard]] TargetInfo defaultTarget();
+
+// The host this compiler was built for, in the canonical spelling, or the empty
+// string when the build could not state one. Used by `-vV`, and by the driver to
+// tell a native link from a cross one.
+[[nodiscard]] std::string_view hostTriple();
+
+// True when two targets have the same ABI -- same architecture, OS and
+// environment. This is what "aimed at the machine it is running on" means for a
+// link, and it is *not* a comparison of the triple text: the vendor component is
+// part of the target's identity (it is what `codegen` hands to LLVM) but not part
+// of the ABI, so `x86_64-pc-linux-gnu` and `x86_64-unknown-linux-gnu` are the same
+// machine and a native build must not be refused because a user spelled the
+// vendor differently from the way this build happens to.
+[[nodiscard]] bool sameAbi(const TargetInfo& left, const TargetInfo& right);
 
 } // namespace minc::sema

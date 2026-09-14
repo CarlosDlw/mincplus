@@ -9,6 +9,7 @@
 
 #include "driver/suggest.h"
 #include "sema/target.h"
+#include "support/limits.h"
 
 namespace minc::driver {
 namespace {
@@ -73,6 +74,38 @@ struct PreScan {
 
 [[nodiscard]] std::string quoted(std::string_view text) {
   return "'" + std::string(text) + "'";
+}
+
+// `-ferror-limit=N`. Digits only, so `-ferror-limit=1x` is refused instead of
+// being read as `1`, and the three readings of the value that are *not* an error
+// are stated here rather than left to be discovered:
+//
+//   * `0` means "all of them", which is stored as the retention cap -- the bag
+//     cannot hold more diagnostics than that, so it is the same thing, and one
+//     number is what the renderer has to compare against;
+//   * a value above the cap is clamped to it, for the same reason and without a
+//     diagnostic: "show at most 100000" is satisfied by showing all 1024 that
+//     exist, and refusing a limit that is *more* permissive than possible would
+//     be pedantry about an option that is only ever a convenience.
+[[nodiscard]] std::optional<std::size_t> parseErrorLimit(std::string_view text) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  std::size_t value = 0;
+  for (const char letter : text) {
+    if (letter < '0' || letter > '9') {
+      return std::nullopt;
+    }
+    const std::size_t previous = value;
+    value = value * 10 + static_cast<std::size_t>(letter - '0');
+    if (value < previous) {
+      return std::nullopt; // the digit that walked off the end of `size_t`
+    }
+  }
+  if (value == 0 || value > support::kMaxDiagnostics) {
+    return support::kMaxDiagnostics;
+  }
+  return value;
 }
 
 // The owners of an option, as a phrase: "build and run", "check", "ir and build".
@@ -236,6 +269,33 @@ void parseInto(CliOptions& opts, const PreScan& prescan, int argc, const char* c
           continue;
         }
 
+        // --- `-name=value`, the way a multi-letter option is written ----------
+        //
+        // `-ferror-limit=20`, `-isystem=/opt/inc`. The `=` is a separator only
+        // when the name is longer than one letter, and that is the whole rule:
+        // the one-letter joined family below takes the rest of the argument as
+        // the value **verbatim**, so `-I=dir` names the directory `=dir` -- which
+        // is what `gcc` and `clang` do, and a path or a macro body may
+        // legitimately contain `=` (`-DNAME=a=b`). A name that takes no value
+        // refuses the `=` rather than dropping it, which is the same rule as the
+        // long-option branch above.
+        const std::size_t equals = arg.find('=');
+        if (equals != std::string_view::npos && equals > 2) {
+          if (const OptionSpec* spec = findOptionByName(arg.substr(0, equals))) {
+            if (!spec->takesValue()) {
+              opts.error = "option " + quoted(arg.substr(0, equals)) + " does not take a value";
+              return;
+            }
+            const std::string_view value = arg.substr(equals + 1);
+            if (value.empty()) {
+              opts.error = "option " + quoted(arg.substr(0, equals)) + " needs a value";
+              return;
+            }
+            occurrences.push_back({spec->id, std::string(value)});
+            continue;
+          }
+        }
+
         // --- a joined value on a single-dash name: -DFOO, -Ipath, -o/path ----
         if (const OptionSpec* spec = findJoinedValueOption(arg)) {
           occurrences.push_back({spec->id, std::string(arg.substr(spec->name.size()))});
@@ -373,6 +433,15 @@ void parseInto(CliOptions& opts, const PreScan& prescan, int argc, const char* c
     case OptionId::Version:
       opts.showVersion = true;
       break;
+    case OptionId::ErrorLimit:
+      if (const std::optional<std::size_t> limit = parseErrorLimit(occurrence.value)) {
+        opts.errorLimit = *limit;
+      } else {
+        opts.error = "invalid value " + quoted(occurrence.value) + " for " + quoted(spec.name) +
+                     "; it takes a non-negative integer";
+        return;
+      }
+      break;
     case OptionId::Color:
       if (const std::optional<support::ColorChoice> choice =
               support::colorChoiceFromName(occurrence.value)) {
@@ -492,7 +561,7 @@ splitDefines(const std::vector<std::string>& defines) {
   return out;
 }
 
-CliOptions parseArgs(int argc, const char* const* argv) {
+CliOptions parseArgs(int argc, const char* const* argv, std::string_view expansionError) {
   CliOptions opts;
   opts.emptyCommandLine = argc <= 1;
   opts.target = std::string(sema::kDefaultTriple);
@@ -502,6 +571,16 @@ CliOptions parseArgs(int argc, const char* const* argv) {
   opts.showVersion = prescan.version;
 
   parseInto(opts, prescan, argc, argv);
+
+  // An `@file` that could not be read is the **root** cause of whatever the line
+  // looks like without it, so it is reported in place of a later complaint about
+  // a missing argument. It is still a usage error and not a special case: the
+  // flags outrank it exactly as they outrank a typo, which is the rule below.
+  if (!expansionError.empty() && !prescan.flagForm) {
+    opts.error = std::string(expansionError);
+    opts.suggestion.clear();
+    return opts;
+  }
 
   // **The flags outrank a typo on the same line.** The parse stops at the first
   // problem it meets, which is right for a line that meant one thing and wrong

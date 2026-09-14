@@ -65,6 +65,66 @@ TEST(DiagBagTest, RetentionIsCapped) {
   EXPECT_EQ(bag.errorCount(), kMaxDiagnostics);
 }
 
+// The rendering side of `-ferror-limit`: the bound is on what is *shown*, and
+// the sequence stops rather than skipping, because a note that survives its own
+// error reads as an explanation of whatever is above it.
+TEST(DiagRenderTest, TheErrorLimitStopsTheSequenceAndSaysSo) {
+  DiagBag bag;
+  bag.error(Span{}, "first");
+  bag.note(Span{}, "a note about the first");
+  bag.error(Span{}, "second");
+  bag.warning(Span{}, "a warning after the stop");
+
+  RenderOptions options;
+  options.errorLimit = 1;
+  DiagRenderer render(nullptr, options);
+
+  const std::string out = render.renderAll(bag);
+  EXPECT_NE(out.find("first"), std::string::npos);
+  EXPECT_NE(out.find("a note about the first"), std::string::npos);
+  EXPECT_EQ(out.find("second"), std::string::npos);
+  EXPECT_EQ(out.find("a warning after the stop"), std::string::npos);
+  // Counted, and named with the flag that would raise it.
+  EXPECT_NE(out.find("2 more diagnostic(s) not shown (-ferror-limit=1)"), std::string::npos);
+}
+
+TEST(DiagRenderTest, TheDefaultLimitShowsEverythingThatWasKept) {
+  DiagBag bag;
+  for (int index = 0; index < 5; ++index) {
+    bag.error(Span{}, "error " + std::to_string(index));
+  }
+  const std::string out = DiagRenderer(nullptr).renderAll(bag);
+  for (int index = 0; index < 5; ++index) {
+    EXPECT_NE(out.find("error " + std::to_string(index)), std::string::npos) << index;
+  }
+  EXPECT_EQ(out.find("not shown"), std::string::npos);
+}
+
+TEST(DiagRenderTest, TheLimitIsSpentAcrossBags) {
+  // The front end clears the bag per input, so a limit carried only in the bag
+  // would be a limit *per file*: ten files with one error each would print ten
+  // errors under `-ferror-limit=1`. The count is in and out for that reason, and
+  // every rendering that hides something says so -- including one that shows
+  // nothing, which is the answer to "what happened to my second file".
+  DiagRenderer render(nullptr, RenderOptions{ColorMode::Plain, 4, /*errorLimit=*/1});
+  std::size_t shown = 0;
+
+  const auto bagWith = [](const std::string& message) {
+    DiagBag bag;
+    bag.error(Span{}, message);
+    return bag;
+  };
+  const std::string first = render.renderAll(bagWith("one"), shown);
+  const std::string second = render.renderAll(bagWith("two"), shown);
+
+  EXPECT_NE(first.find("one"), std::string::npos);
+  // Nothing was left out of the first bag, so nothing is claimed.
+  EXPECT_EQ(first.find("not shown"), std::string::npos);
+  EXPECT_EQ(second.find("two"), std::string::npos);
+  EXPECT_NE(second.find("1 more diagnostic(s) not shown (-ferror-limit=1)"), std::string::npos);
+  EXPECT_EQ(shown, 1u);
+}
+
 TEST(DiagRenderTest, FormatsLocationAndCaret) {
   SourceManager sm;
   const FileId id = sm.addFile("m.mx", "fn int main() {}").value();

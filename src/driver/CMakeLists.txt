@@ -5,6 +5,8 @@ minc_add_library(minc_driver
   SOURCES
     cli.cc
     command_spec.cc
+    response_file.cc
+    diagnostic_options.cc
     help_render.cc
     help_text.cc
     suggest.cc

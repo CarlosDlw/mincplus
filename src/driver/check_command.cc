@@ -27,6 +27,7 @@ int checkInputs(const CheckRequest& request, std::ostream& out, std::ostream& er
   options.warnUnused = request.warnUnused;
   options.warnShadow = request.warnShadow;
   options.diagnosticColor = request.diagnosticColor;
+  options.errorLimit = request.errorLimit;
 
   FrontEnd frontEnd(options);
   const bool ok = frontEnd.run(request.inputs, err);
@@ -96,6 +97,7 @@ int runCheck(const CliOptions& options) {
   request.warnShadow = options.warnShadow;
   request.diagnosticColor =
       support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
+  request.errorLimit = options.errorLimit;
   return checkInputs(request, std::cout, std::cerr);
 }
 

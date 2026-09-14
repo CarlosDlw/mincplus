@@ -16,6 +16,7 @@
 // is the outcome the whole stage is arranged to prevent.
 #pragma once
 
+#include <cstddef>
 #include <iosfwd>
 #include <string>
 #include <utility>
@@ -23,6 +24,7 @@
 
 #include "driver/cli.h"
 #include "sema/target.h"
+#include "support/limits.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
@@ -41,6 +43,9 @@ struct IrRequest {
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;
+  // `-ferror-limit`: how many errors are shown before rendering stops. See
+  // `RenderOptions::errorLimit`.
+  std::size_t errorLimit = support::kMaxDiagnostics;
   // `-g`. Prints the same module with debug metadata attached, which is how the
   // line table is reviewed as text rather than through a debugger.
   bool debugInfo = false;

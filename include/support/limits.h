@@ -6,8 +6,21 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace minc::support {
+
+// A decimal literal, read at compile time, so a limit has **one** spelling: the
+// text the help page prints is the number the compiler enforces, and there is no
+// second constant to forget to edit. For a literal written in this file only, so
+// the characters are trusted to be digits.
+[[nodiscard]] constexpr std::size_t decimalFromText(std::string_view text) {
+  std::size_t value = 0;
+  for (const char digit : text) {
+    value = value * 10 + static_cast<std::size_t>(digit - '0');
+  }
+  return value;
+}
 
 // Single source files larger than this are rejected with a diagnostic.
 // 64 MiB is far above any realistic .mx file and keeps uint32 offsets safe.
@@ -53,7 +66,13 @@ inline constexpr std::uint32_t kMaxNestingDepth = 1024;
 inline constexpr std::size_t kMaxParseErrors = 4096;
 
 // Maximum diagnostics kept per bag; prevents OOM on cascading errors.
-inline constexpr std::size_t kMaxDiagnostics = 1024;
+//
+// It is also the most errors a rendering can show, which is why it is the default
+// and the ceiling of `-ferror-limit`: a limit above the number of diagnostics the
+// bag can hold would be a promise about output that does not exist to print. The
+// number is parsed from its own text so the help page cannot name a different one.
+inline constexpr std::string_view kMaxDiagnosticsText = "1024";
+inline constexpr std::size_t kMaxDiagnostics = decimalFromText(kMaxDiagnosticsText);
 
 // --- the preprocessor -------------------------------------------------------
 //
@@ -160,5 +179,15 @@ inline constexpr std::size_t kMaxTypesPerUnit = std::size_t{1} << 20;
 // report failure by returning nullptr on every platform. 2 GiB is far above any
 // legitimate single AST/IR allocation while staying clear of that edge.
 inline constexpr std::size_t kMaxArenaAllocation = std::size_t{1} << 31;
+
+// --- the driver ---------------------------------------------------------------
+
+// Nested `@file` depth. A response file that names another is a real pattern --
+// a build system generating a line nobody could type -- and a response file that
+// names *itself* is a hang. The cap is what makes either case a diagnostic, and
+// it is small because a chain this long is a mistake every single time.
+// A cycle is caught by name before the cap is reached; this bounds the case the
+// name check cannot see (a chain of distinct files that never ends).
+inline constexpr std::size_t kMaxResponseFileDepth = 16;
 
 } // namespace minc::support

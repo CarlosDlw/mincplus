@@ -21,18 +21,22 @@
 
 #include "backend/codegen.h"
 #include "ir/ir.h"
+#include "support/diag/diag_renderer.h"
 #include "support/source/source_manager.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
 
+// The options come from `diagnostic_options.h`, so this file is only about the
+// two *sources* below and not about how a diagnostic looks.
+//
 // The two sources of diagnostics a stage can produce, so one function serves
 // both and a new stage adds one overload rather than one command each.
 void renderStageDiagnostics(std::span<const ir::IRDiagnostic> diagnostics,
-                            const support::SourceManager& sources, support::ColorMode color,
-                            std::ostream& err);
+                            const support::SourceManager& sources,
+                            const support::RenderOptions& options, std::ostream& err);
 
 void renderStageDiagnostics(std::span<const backend::CodegenDiagnostic> diagnostics,
-                            support::ColorMode color, std::ostream& err);
+                            const support::RenderOptions& options, std::ostream& err);
 
 } // namespace minc::driver

@@ -7,6 +7,7 @@
 #include <ostream>
 #include <string>
 
+#include "driver/diagnostic_options.h"
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/input_source.h"
@@ -34,8 +35,10 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
   support::Session session;
   syntax::TreeStore store(session.arena());
 
-  const support::DiagRenderer renderer(&session.sources(),
-                                       support::RenderOptions{request.diagnosticColor, 4});
+  const support::DiagRenderer renderer(
+      &session.sources(), diagnosticOptions(request.diagnosticColor, request.errorLimit));
+  // The error budget spans the invocation: the bag is cleared per input.
+  std::size_t errorsShown = 0;
   syntax::DumpOptions dumpOptions;
   dumpOptions.color = request.dumpColor;
   dumpOptions.showTrivia = request.showTrivia;
@@ -104,7 +107,7 @@ int parseInputs(const ParseRequest& request, std::ostream& out, std::ostream& er
     out.flush();
 
     if (!session.diags().empty()) {
-      err << renderer.renderAll(session.diags());
+      err << renderer.renderAll(session.diags(), errorsShown);
       err.flush();
     }
     if (lexical != 0 || syntax != 0 || !result.errors.empty()) {
@@ -132,6 +135,7 @@ int runParse(const CliOptions& options) {
   request.dumpColor = support::colorModeFrom(support::stdoutSupportsColor(), options.colorChoice);
   request.diagnosticColor =
       support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
+  request.errorLimit = options.errorLimit;
   return parseInputs(request, std::cout, std::cerr);
 }
 

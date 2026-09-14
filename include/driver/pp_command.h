@@ -9,12 +9,14 @@
 // will need and the information a human cannot get from the output alone.
 #pragma once
 
+#include <cstddef>
 #include <iosfwd>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "driver/cli.h"
+#include "support/limits.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
@@ -31,6 +33,9 @@ struct PpRequest {
   // `--at [file:]line`: how the expansions on that line were produced.
   std::string at;
   support::ColorMode color = support::ColorMode::Plain;
+  // `-ferror-limit`: how many errors are shown before rendering stops, counted
+  // across the whole invocation. See `RenderOptions::errorLimit`.
+  std::size_t errorLimit = support::kMaxDiagnostics;
 };
 
 // Returns the process exit code. Nothing here exits, and nothing here writes to

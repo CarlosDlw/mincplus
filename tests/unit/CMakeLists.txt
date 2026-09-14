@@ -101,6 +101,7 @@ minc_add_executable(minc_unit_tests
     ir/llvm_isolation_test.cc
     driver/cli_test.cc
     driver/command_spec_test.cc
+    driver/response_file_test.cc
     driver/help_render_test.cc
     driver/suggest_test.cc
     driver/error_report_test.cc

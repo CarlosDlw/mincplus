@@ -36,6 +36,7 @@ enum class OptionId : std::uint8_t {
   Help,
   Version,
   Color,
+  ErrorLimit,
   // The front end: the preprocessor's inputs.
   Define,
   Undefine,

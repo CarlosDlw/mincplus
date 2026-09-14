@@ -38,9 +38,11 @@ struct PageStyle {
 // and what to read next.
 [[nodiscard]] std::string renderCommand(Command command, PageStyle style);
 
-// The facts a version line needs, supplied by the caller so this file needs no
-// LLVM: `hostTriple` and `llvmVersion` are the backend's answers, and they are
-// what a bug report is missing when they are absent.
+// The facts a version line needs, supplied by the caller so this file stays
+// pure: the host is the build's own triple (`sema/host.h`), the LLVM version is
+// the backend's answer, and the two of them are what a bug report is missing when
+// they are absent. `default target:` is read from `sema` here rather than passed
+// in, because it is a table constant and not a runtime fact.
 struct VersionFacts {
   std::string_view program;
   std::string_view version;

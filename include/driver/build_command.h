@@ -24,6 +24,7 @@
 //    world-writable directory are how one compiler's object becomes another's.
 #pragma once
 
+#include <cstddef>
 #include <iosfwd>
 #include <optional>
 #include <string>
@@ -34,6 +35,7 @@
 #include "backend/codegen.h"
 #include "driver/cli.h"
 #include "sema/target.h"
+#include "support/limits.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
@@ -66,6 +68,9 @@ struct BuildRequest {
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;
+  // `-ferror-limit`: how many errors are shown before rendering stops. See
+  // `RenderOptions::errorLimit`.
+  std::size_t errorLimit = support::kMaxDiagnostics;
 
   // What to produce, and how.
   OutputKind kind = OutputKind::Executable;

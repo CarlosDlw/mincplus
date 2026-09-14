@@ -11,6 +11,7 @@
 
 #include "ast/lower.h"
 #include "ast/validate.h"
+#include "driver/diagnostic_options.h"
 #include "driver/error_report.h"
 #include "driver/input_source.h"
 #include "driver/version.h"
@@ -35,8 +36,13 @@ FrontEnd::FrontEnd(const FrontEndOptions& options)
     : options_(options), trees_(session_.arena()), sema_(options.target) {}
 
 bool FrontEnd::run(const std::vector<std::string>& inputs, std::ostream& err) {
-  const support::DiagRenderer renderer(&session_.sources(),
-                                       support::RenderOptions{options_.diagnosticColor, 4});
+  // One renderer and one error count for the whole invocation: the bag is cleared
+  // per translation unit, so a limit carried in the bag would be a limit per
+  // file, and ten files with one error each would print ten errors under a limit
+  // of three.
+  const support::DiagRenderer renderer(
+      &session_.sources(), diagnosticOptions(options_.diagnosticColor, options_.errorLimit));
+  std::size_t errorsShown = 0;
 
   preprocessed_.reserve(inputs.size());
   lowered_.reserve(inputs.size());
@@ -132,7 +138,7 @@ bool FrontEnd::run(const std::vector<std::string>& inputs, std::ostream& err) {
       failed = true;
     }
     if (!session_.diags().empty()) {
-      err << renderer.renderAll(session_.diags());
+      err << renderer.renderAll(session_.diags(), errorsShown);
       err.flush();
     }
   }

@@ -315,6 +315,54 @@ TEST(CliTest, AnInvalidColourNamesTheValuesItTakes) {
   EXPECT_NE(opts.error.find("auto, always, never"), std::string::npos);
 }
 
+// --- the error limit --------------------------------------------------------
+
+TEST(CliTest, TheErrorLimitIsAcceptedJoinedSeparateAndAbbreviated) {
+  const CliOptions joined = parse({"check", "-ferror-limit=20", "a.mx"});
+  ASSERT_TRUE(joined.error.empty()) << joined.error;
+  EXPECT_EQ(joined.errorLimit, 20u);
+
+  const CliOptions separate = parse({"check", "-ferror-limit", "20", "a.mx"});
+  ASSERT_TRUE(separate.error.empty()) << separate.error;
+  EXPECT_EQ(separate.errorLimit, 20u);
+  // The file is still a file: the value was taken and nothing else was eaten.
+  ASSERT_EQ(separate.inputs.size(), 1u);
+  EXPECT_EQ(separate.inputs[0], "a.mx");
+}
+
+TEST(CliTest, ZeroMeansEverythingAndAHugeValueIsClampedToWhatCanBeKept) {
+  // `0` is clang's spelling of "no limit", and it is stored as the retention cap
+  // because that is the most the bag can hold -- one number for the renderer to
+  // compare against. A value above the cap is the same thing without a
+  // diagnostic: "show at most 100000" is satisfied by showing all that exist.
+  EXPECT_EQ(parse({"check", "-ferror-limit=0", "a.mx"}).errorLimit, support::kMaxDiagnostics);
+  EXPECT_EQ(parse({"check", "-ferror-limit=100000", "a.mx"}).errorLimit, support::kMaxDiagnostics);
+  EXPECT_EQ(parse({"check", "-ferror-limit=1024", "a.mx"}).errorLimit, 1024u);
+  // The default is the cap, spelled from the table so the help cannot name a
+  // different number from the one the compiler enforces.
+  EXPECT_EQ(parse({"check", "a.mx"}).errorLimit, support::kMaxDiagnostics);
+}
+
+TEST(CliTest, ABadErrorLimitIsRefusedRatherThanGuessed) {
+  // `1x` is not `1`: reading the digits until something else appears is how a
+  // command line starts meaning more than it says.
+  for (const char* spelling : {"-ferror-limit=x", "-ferror-limit=1x", "-ferror-limit=-1"}) {
+    const CliOptions opts = parse({"check", spelling, "a.mx"});
+    EXPECT_NE(opts.error.find("non-negative integer"), std::string::npos) << spelling;
+    EXPECT_NE(opts.error.find("-ferror-limit"), std::string::npos) << spelling;
+  }
+  // An empty value is a *missing* value and not an invalid one, which is the
+  // distinction the long-option branch already makes (`--color=`).
+  const CliOptions empty = parse({"check", "-ferror-limit=", "a.mx"});
+  EXPECT_NE(empty.error.find("needs a value"), std::string::npos) << empty.error;
+}
+
+TEST(CliTest, AParseErrorKeepsTheLastErrorLimitOnTheLine) {
+  const CliOptions opts = parse({"build", "-ferror-limit=5", "-ferror-limit=9", "a.mx"});
+  ASSERT_TRUE(opts.error.empty()) << opts.error;
+  EXPECT_EQ(opts.errorLimit, 9u); // last one wins, like every other option here
+}
+
 // --- positionals, `--`, and the program's own arguments ---------------------
 
 TEST(CliTest, LoneDashIsAFileNotAnOption) {

@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "backend/codegen.h"
+#include "driver/diagnostic_options.h"
 #include "driver/error_report.h"
 #include "driver/exit_code.h"
 #include "driver/frontend.h"
@@ -123,11 +124,18 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
   // for a target LLVM supports perfectly.
   backend::initialize();
 
+  // Built once from the request: every diagnostic below -- this stage's, the
+  // lowering's, the invariant scan's, the linker's -- is rendered through the
+  // same options, so `-ferror-limit` and the tab width cannot differ between the
+  // first error and the last.
+  const support::RenderOptions diag =
+      diagnosticOptions(request.diagnosticColor, request.errorLimit);
+
   if (!backend::targetAvailable(request.target)) {
     const std::vector<backend::CodegenDiagnostic> diagnostics{backend::CodegenDiagnostic{
         support::Span{}, backend::CodegenDiagnosticCode::TargetUnavailable,
         backend::targetRefusal(request.target)}};
-    renderStageDiagnostics(diagnostics, request.diagnosticColor, err);
+    renderStageDiagnostics(diagnostics, diag, err);
     return exitCode(ExitCode::Failure);
   }
 
@@ -206,7 +214,7 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
         ir::lowerUnit(*unit.lowered, unit.resolved->map, unit.typed->typed, frontEnd.sema().types(),
                       frontEnd.symbols(), loweringOptions);
     if (lowered.failed()) {
-      renderStageDiagnostics(lowered.diagnostics, sources, request.diagnosticColor, err);
+      renderStageDiagnostics(lowered.diagnostics, sources, diag, err);
       ok = false;
       continue;
     }
@@ -218,7 +226,7 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
     // the answer.
     const std::vector<ir::IRDiagnostic> violations = ir::scanModule(lowered.module);
     if (!violations.empty()) {
-      renderStageDiagnostics(violations, sources, request.diagnosticColor, err);
+      renderStageDiagnostics(violations, sources, diag, err);
       ok = false;
       continue;
     }
@@ -255,7 +263,7 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
 
     backend::EmitResult emittedResult = backend::emitModule(lowered.module, emitOptions);
     if (emittedResult.failed()) {
-      renderStageDiagnostics(emittedResult.diagnostics, request.diagnosticColor, err);
+      renderStageDiagnostics(emittedResult.diagnostics, diag, err);
       ok = false;
       continue;
     }
@@ -301,12 +309,16 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
   linkRequest.sysroot = request.sysroot;
   linkRequest.debugInfo = request.debugInfo;
   linkRequest.target = request.target;
-  // The host is the *target* when the target's triple is the one this process
-  // runs on. Compared as the canonical triple text and not as two `TargetInfo`s
-  // (which have no `operator==`), so the answer is one spelling against one
-  // spelling and not a field-by-field equality that would have to be kept in step
-  // with a struct a later change may grow.
-  linkRequest.targetIsHost = request.target.triple.text == sema::defaultTarget().triple.text;
+  // The host is the *target* when the two have the same ABI.
+  //
+  // Not a comparison of the triple text: `--target x86_64-pc-linux-gnu` builds
+  // for the machine this process runs on exactly as the default
+  // `x86_64-unknown-linux-gnu` does, and comparing the strings would classify one
+  // of them as a cross build and refuse to link it. The vendor component is part
+  // of the target's *identity* (it is what `codegen` hands to LLVM) but not part
+  // of its ABI, so `sameAbi` is what the question "is this the machine I am on?"
+  // actually asks.
+  linkRequest.targetIsHost = sema::sameAbi(request.target, sema::defaultTarget());
 
   if (request.verbose) {
     // Printed even when the link fails: the first thing anyone does with a link
@@ -316,7 +328,7 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
 
   const backend::LinkResult linkResult = backend::linkExecutable(linkRequest);
   if (linkResult.failed()) {
-    renderStageDiagnostics(linkResult.diagnostics, request.diagnosticColor, err);
+    renderStageDiagnostics(linkResult.diagnostics, diag, err);
     return exitCode(ExitCode::Failure);
   }
 
@@ -401,6 +413,7 @@ namespace {
   request.warnShadow = options.warnShadow;
   request.diagnosticColor =
       support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
+  request.errorLimit = options.errorLimit;
   request.kind = *kind;
   request.level = *level;
   request.output = options.output;

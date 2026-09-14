@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 // The `check` subcommand's contract: which stream carries what, in what order,
 // and which exit code -- tested directly instead of by spawning a process.
+#include <cstddef>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -16,6 +17,7 @@
 #include "driver/check_command.h"
 #include "driver/exit_code.h"
 #include "sema/target.h"
+#include "support/limits.h"
 #include "tests/examples_dir.h"
 
 namespace minc::driver {
@@ -30,7 +32,8 @@ struct CheckRun {
 [[nodiscard]] CheckRun run(const std::vector<std::string>& inputs, bool showAst = false,
                            bool showTypes = false, bool stats = false,
                            sema::TargetInfo target = sema::defaultTarget(),
-                           bool warnConversion = false) {
+                           bool warnConversion = false,
+                           std::size_t errorLimit = support::kMaxDiagnostics) {
   CheckRequest request;
   request.inputs = inputs;
   request.showAst = showAst;
@@ -38,6 +41,7 @@ struct CheckRun {
   request.stats = stats;
   request.target = target;
   request.warnConversion = warnConversion;
+  request.errorLimit = errorLimit;
   // With injected streams there is no terminal to ask, and asking the real one
   // would be the wrong question.
   request.diagnosticColor = support::ColorMode::Plain;
@@ -201,6 +205,30 @@ TEST(CheckCommandTest, EveryExampleChecks) {
     ++summaries;
   }
   EXPECT_EQ(summaries, files.size());
+}
+
+TEST(CheckCommandTest, TheErrorLimitStopsTheRenderingAndKeepsTheExitCode) {
+  // Two errors in one file, and a limit of one: the second is counted and not
+  // shown. The exit code is the *compile's* answer and not the rendering's -- a
+  // suppressed error is still an error, or a script would read a truncated
+  // build as a successful one.
+  const std::string_view source =
+      "fn i32 main() { return \"a\" + 1; }\nfn i32 other() { return \"b\" + 2; }\n";
+  TempFile file("minc_check_limit.mx", source);
+
+  const CheckRun all = run({file.path()});
+  EXPECT_EQ(all.code, exitCode(ExitCode::Failure));
+  EXPECT_NE(all.err.find("return \"a\" + 1"), std::string::npos);
+  EXPECT_NE(all.err.find("return \"b\" + 2"), std::string::npos);
+  EXPECT_EQ(all.err.find("not shown"), std::string::npos);
+
+  const CheckRun one = run({file.path()}, /*showAst=*/false, /*showTypes=*/false,
+                           /*stats=*/false, sema::defaultTarget(), /*warnConversion=*/false,
+                           /*errorLimit=*/1);
+  EXPECT_EQ(one.code, exitCode(ExitCode::Failure));
+  EXPECT_NE(one.err.find("return \"a\" + 1"), std::string::npos);
+  EXPECT_EQ(one.err.find("return \"b\" + 2"), std::string::npos);
+  EXPECT_NE(one.err.find("not shown (-ferror-limit=1)"), std::string::npos);
 }
 
 TEST(CheckCommandTest, AMissingFileIsADriverErrorAndNotACrash) {

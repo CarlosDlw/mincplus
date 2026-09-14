@@ -30,6 +30,7 @@
 // `exit_code.h`, and a unit with one error in any stage fails the command.
 #pragma once
 
+#include <cstddef>
 #include <iosfwd>
 #include <string>
 #include <utility>
@@ -37,6 +38,7 @@
 
 #include "driver/cli.h"
 #include "sema/target.h"
+#include "support/limits.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
@@ -65,6 +67,9 @@ struct CheckRequest {
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;
+  // `-ferror-limit`: how many errors are shown before rendering stops, counted
+  // across the whole invocation. See `RenderOptions::errorLimit`.
+  std::size_t errorLimit = support::kMaxDiagnostics;
 };
 
 // The command minus the choice of streams, so the contract -- which stream

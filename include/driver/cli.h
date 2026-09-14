@@ -23,6 +23,7 @@
 //    level and must not eat the file name after it.
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,6 +31,7 @@
 #include <vector>
 
 #include "driver/command_spec.h"
+#include "support/limits.h"
 #include "support/term/terminal.h"
 
 namespace minc::driver {
@@ -45,6 +47,11 @@ struct CliOptions {
   bool emptyCommandLine = false;
   // `--color=auto|always|never`.
   support::ColorChoice colorChoice = support::ColorChoice::Auto;
+  // `-ferror-limit=N`: how many errors are shown before rendering stops. The
+  // default is the retention cap, which is the same as "all of them" -- see
+  // `RenderOptions::errorLimit` in `support/diag/diag_renderer.h`, which is where
+  // it is applied and which states why it is a display bound and not a work bound.
+  std::size_t errorLimit = support::kMaxDiagnostics;
 
   // `--no-trivia`: leave whitespace and comments out of dump output. It is a
   // display filter, not a lexer mode -- the token stream keeps every byte
@@ -135,10 +142,18 @@ struct CliOptions {
 
 // Parses argv[1..argc). Accepts a possibly-null argv[i] (some CRTs allow it).
 //
-// `target` is filled with the compiler's default triple when no `--target` was
-// given, which is the same constant `sema` validates against -- one spelling,
-// read from that table rather than restated here.
-[[nodiscard]] CliOptions parseArgs(int argc, const char* const* argv);
+// `target` is filled with the compiler's default target when no `--target` was
+// given, which is the host -- one spelling, read from `sema` rather than restated
+// here.
+//
+// `expansionError` is what `expandResponseFiles` reported about an `@file` it
+// could not read, if any. It arrives as a parameter rather than being produced
+// here because this function does no I/O, and because the *rule* about it belongs
+// here: an unreadable response file is a usage error like every other one, and
+// `-h`/`-V` outranks it by the same argument that makes `mincc --nosuch -h`
+// print the page.
+[[nodiscard]] CliOptions parseArgs(int argc, const char* const* argv,
+                                   std::string_view expansionError = {});
 
 // `-D name[=body]`, written as one string, split into the pairs the preprocessor
 // takes. One implementation so every command that preprocesses cannot disagree
