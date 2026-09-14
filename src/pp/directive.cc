@@ -30,25 +30,6 @@ using detail::isSignificant;
 using detail::nextSignificant;
 using detail::skipTrivia;
 
-// True when `...` starts at `index`. The lexer produces three `.` tokens: the
-// language has no variadic syntax yet, so a token kind for C's macro syntax
-// would put a C concept in the language's lexer. Adjacency is checked through
-// source offsets, so `. . .` is not an ellipsis.
-[[nodiscard]] bool startsEllipsis(const std::vector<PPToken>& tokens, std::size_t index) {
-  if (index + 2 >= tokens.size()) {
-    return false;
-  }
-  for (std::size_t i = index; i < index + 3; ++i) {
-    if (!tokens[i].is(lex::TokenKind::Dot)) {
-      return false;
-    }
-    if (i > index && tokens[i].loc.spelling.offset != tokens[i - 1].loc.spelling.end()) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // The index of the parameter a body token names, or `kNotAParameter`.
 [[nodiscard]] std::uint8_t parameterIndex(const std::string_view text, const MacroInfo& macro,
                                           const support::Interner& symbols) {
@@ -151,9 +132,14 @@ bool Preprocessor::buildParameterList(const std::vector<PPToken>& definition, st
 
   while (true) {
     skipTrivia(definition, index);
-    if (startsEllipsis(definition, index)) {
+    // `...` is one token, and it is the *language's*: a function declaration can
+    // be variadic now, so the marker is classified by the lexer and this stage
+    // reads it like any other. It used to be rebuilt from three adjacent `.`s
+    // here, which is the kind of second copy that drifts -- and did: the
+    // consumption below was three tokens long for as long as the marker was.
+    if (index < definition.size() && definition[index].is(lex::TokenKind::Ellipsis)) {
       out.variadic = true;
-      index += 3;
+      ++index;
       break;
     }
     if (index >= definition.size() || !definition[index].isName()) {

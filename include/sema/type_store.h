@@ -74,7 +74,10 @@ public:
   [[nodiscard]] TypeId pointerTo(TypeId pointee);
   // The parameters are copied into the store; the caller's span need not
   // outlive the call.
-  [[nodiscard]] TypeId function(TypeId returnType, std::span<const TypeId> params);
+  // `variadic` is required rather than defaulted: every caller is a signature,
+  // and a default would let one of them build the non-variadic type for a
+  // variadic function without the compiler saying anything.
+  [[nodiscard]] TypeId function(TypeId returnType, std::span<const TypeId> params, bool variadic);
 
   // --- access ---------------------------------------------------------------
 
@@ -91,6 +94,10 @@ public:
     return types_[id.index];
   }
   [[nodiscard]] std::span<const TypeId> paramsOf(TypeId id) const;
+  // True for a function type whose parameter list ends in `...`. False for
+  // everything that is not a function, so a caller never has to ask the kind
+  // first -- the question "may this call pass more arguments" has one answer.
+  [[nodiscard]] bool isVariadic(TypeId id) const;
   [[nodiscard]] std::size_t count() const {
     return types_.size();
   }

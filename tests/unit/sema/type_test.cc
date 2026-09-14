@@ -54,12 +54,20 @@ TEST(TypeStoreTest, IdentityIsStructureAndNotSpelling) {
 
 TEST(TypeStoreTest, AFunctionTypeIsIdentifiedByItsSignature) {
   TypeStore types;
-  const TypeId first = types.function(kTypeI32, {});
-  const TypeId second = types.function(kTypeI32, {});
-  const TypeId different = types.function(kTypeVoid, {});
+  const TypeId first = types.function(kTypeI32, {}, /*variadic=*/false);
+  const TypeId second = types.function(kTypeI32, {}, /*variadic=*/false);
+  const TypeId different = types.function(kTypeVoid, {}, /*variadic=*/false);
+  // `f(i32)` and `f(i32, ...)` are two types: the marker is part of the
+  // signature, so interning them together would give one LLVM signature to two
+  // different calls.
+  const TypeId varargs = types.function(kTypeI32, {}, /*variadic=*/true);
   EXPECT_TRUE(first.valid());
   EXPECT_EQ(first, second);
   EXPECT_NE(first, different);
+  EXPECT_NE(first, varargs);
+  EXPECT_FALSE(types.isVariadic(first));
+  EXPECT_TRUE(types.isVariadic(varargs));
+  EXPECT_EQ(types.spelling(varargs), "fn i32(...)");
   EXPECT_EQ(types.spelling(first), "fn i32()");
 }
 

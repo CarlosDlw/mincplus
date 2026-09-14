@@ -109,7 +109,12 @@ namespace {
   case '?':
     return punct(offset, 1, TokenKind::Question);
   case '.':
-    return punct(offset, 1, TokenKind::Dot);
+    // Longest match, and the reason `....` is `...` then `.`: three dots are one
+    // token, and a fourth is another one. A float literal cannot reach here --
+    // `.5` is scanned as a number before the punctuator table is consulted -- so
+    // there is no ambiguity between the two readings of a leading dot.
+    return c1 == '.' && c2 == '.' ? punct(offset, 3, TokenKind::Ellipsis)
+                                  : punct(offset, 1, TokenKind::Dot);
   case '#':
     return c1 == '#' ? punct(offset, 2, TokenKind::HashHash) : punct(offset, 1, TokenKind::Hash);
   default:

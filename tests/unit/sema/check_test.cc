@@ -588,6 +588,64 @@ TEST(CheckTest, TwoSignaturesForOneNameAreReportedWithBothSpellings) {
   EXPECT_NE(f.firstError().note.find("earlier declaration"), std::string::npos);
 }
 
+TEST(CheckTest, AVariadicCallPassesArgumentsPastTheDeclaredParameters) {
+  // The un-specified arguments have no parameter to be checked against, so the
+  // only rule they obey is the promotion the ABI applies on the way out -- and
+  // that is recorded as a conversion, not as a second typing rule.
+  SemaFixture f;
+  f.source("extern fn i32 printf(fmt: str, ...);\n"
+           "fn i32 main() {\n"
+           "  let small: i8 = 65;\n"
+           "  let ratio: f32 = 0.5;\n"
+           "  printf(\"%d %f\\n\", small, ratio);\n"
+           "  return 0;\n"
+           "}\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << (f.errorCount() == 0 ? std::string() : f.firstError().message);
+  // The marker is part of the type and shows up in its spelling, so a reader of
+  // `mincc check --types` can see which signature the calls were checked against.
+  EXPECT_NE(f.dumpTypes().find("fn i32(str, ...)"), std::string::npos) << f.dumpTypes();
+}
+
+TEST(CheckTest, AVariadicCallStillNeedsItsDeclaredArguments) {
+  SemaFixture f;
+  f.source("extern fn i32 f(a: i32, ...);\nfn i32 main() { return f(); }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 1u);
+  EXPECT_EQ(f.errorCodes().front(), "sema-argument-count");
+  // "at least", because a minimum is what is missing: without that word the
+  // message reads as if the count were simply wrong.
+  EXPECT_NE(f.firstError().message.find("at least 1"), std::string::npos) << f.firstError().message;
+}
+
+TEST(CheckTest, AVariadicDeclarationDisagreesWithAFixedDefinition) {
+  // The marker is part of the signature, so this pair is not one function. It is
+  // the case the type has to distinguish: interning the two together would let a
+  // variadic *call* type-check against a fixed signature and pass one argument
+  // too many to a function that cannot read it.
+  SemaFixture f;
+  f.source("extern fn i32 f(a: i32, ...);\n"
+           "fn i32 f(a: i32) { return a; }\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 1u);
+  EXPECT_EQ(f.errorCodes().front(), "sema-signature-mismatch");
+  EXPECT_NE(f.firstError().message.find("fn i32(i32, ...)"), std::string::npos)
+      << f.firstError().message;
+}
+
+TEST(CheckTest, AVariadicDeclarationDefinedVariadicallyAgrees) {
+  // The other half, and the one a header plus a source file has to have: the two
+  // declarations say the same thing, marker included, so there is nothing to
+  // report.
+  SemaFixture f;
+  f.source("extern fn i32 f(a: i32, ...);\n"
+           "extern fn i32 f(a: i32, ...);\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << (f.errorCount() == 0 ? std::string() : f.firstError().message);
+}
+
 TEST(CheckTest, RepeatingTheSameDeclarationIsNotAnError) {
   // A header included twice declares its functions twice, and the two say the
   // same thing -- so there is nothing to report.

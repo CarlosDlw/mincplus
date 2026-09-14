@@ -150,19 +150,25 @@ TypeId TypeStore::pointerTo(TypeId pointee) {
   return intern(type);
 }
 
-TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params) {
+TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params, bool variadic) {
   Type type;
   type.kind = TypeKind::Function;
   type.returnType = returnType;
   type.firstParam = static_cast<std::uint32_t>(params_.size());
   type.paramCount = static_cast<std::uint32_t>(params.size());
+  type.variadic = variadic;
   // Look for an existing one *before* copying the parameters, so a repeated
   // signature does not grow the parameter arena.
+  //
+  // `variadic` is in the hash and in the comparison below because it is part of
+  // what a function type *is*: interning `f(i32)` and `f(i32, ...)` to one id
+  // would make the lowering emit one LLVM signature for two different calls.
   const std::uint64_t hash = [&] {
     std::uint64_t h = kFnvOffset;
     h = mix(h, static_cast<std::uint64_t>(type.kind));
     h = mix(h, type.returnType.index);
     h = mix(h, type.paramCount);
+    h = mix(h, type.variadic ? 1u : 0u);
     for (const TypeId param : params) {
       h = mix(h, param.index);
     }
@@ -172,7 +178,7 @@ TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params) {
   for (auto it = range.first; it != range.second; ++it) {
     const Type& candidate = types_[it->second.index];
     if (candidate.kind != TypeKind::Function || candidate.returnType != returnType ||
-        candidate.paramCount != params.size()) {
+        candidate.paramCount != params.size() || candidate.variadic != variadic) {
       continue;
     }
     bool same = true;
@@ -202,6 +208,10 @@ std::span<const TypeId> TypeStore::paramsOf(TypeId id) const {
     return {};
   }
   return std::span<const TypeId>(params_.data() + type.firstParam, type.paramCount);
+}
+
+bool TypeStore::isVariadic(TypeId id) const {
+  return known(id) && get(id).kind == TypeKind::Function && get(id).variadic;
 }
 
 bool TypeStore::isInteger(TypeId id) const {
@@ -314,6 +324,9 @@ std::string TypeStore::spelling(TypeId id) const {
         text += ", ";
       }
       text += spelling(params[i]);
+    }
+    if (type.variadic) {
+      text += params.empty() ? "..." : ", ...";
     }
     text += ")";
     return text;

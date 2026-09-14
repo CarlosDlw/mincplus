@@ -425,7 +425,7 @@ exists to remove.
 | `&& \|\|` | both `bool`; result `bool`; short-circuit is the IR's business | `sema-condition-not-bool` |
 | `?:` | condition `bool`; arms unify by usual arithmetic conversion, or are the same type; result is an lvalue only when both arms are lvalues of the same type | `sema-condition-not-bool` / `sema-invalid-operands` |
 | assignment | left is a modifiable lvalue; right converts to the left's (unqualified) type; the whole expression is not an lvalue | `sema-invalid-assignment` / `sema-assign-to-const` |
-| call | callee's type is `Function`; argument count matches; each argument converts to its parameter | `sema-not-a-function` / `sema-argument-count` |
+| call | callee's type is `Function`; the count matches exactly — or is *at least* the declared count when the callee's type is variadic; each argument converts to its parameter, and an argument past the last parameter gets the ABI's default promotion | `sema-not-a-function` / `sema-argument-count` |
 
 **Value category** is a property of an expression, not of its type: a name, a
 parenthesised name, and a `?:` whose arms are both lvalues, are *modifiable
@@ -479,6 +479,17 @@ lvalue that is **not** modifiable; assignment and `++`/`--` to it are
   type, `defTypes_` has one value no matter which declaration wrote it last, so
   the ordering question disappears instead of being answered
   ([`extern.md`](extern.md)).
+- **A variadic call** — a declaration whose parameter list ends in `...` accepts
+  *more* arguments than it names, so the count check is a minimum for one and an
+  equality for every other function. The arguments past the last parameter have
+  no parameter to be checked against, and the only rule left is the ABI's
+  **default argument promotion** (`bool`/`char`/`i8`/`i16`/`u8`/`u16` to `i32`,
+  `f32` to `f64`, everything else as it is), recorded as a conversion so the
+  lowering materialises it like any other. The marker is part of the *function
+  type* and not a flag beside it (`fn i32(str, ...)`), which is what makes a
+  variadic declaration and a fixed definition a `sema-signature-mismatch` rather
+  than one function — and what stops a variadic call from type-checking against
+  a callee that cannot read the extra arguments ([`extern.md`](extern.md)).
 - **`void`** — decided with this stage, because a language without it cannot
   write a function that returns nothing. `void` is a type; it is not a value
   type: no object may have it (`let x: void` is `sema-type-not-value`), no

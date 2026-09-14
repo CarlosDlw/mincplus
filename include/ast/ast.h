@@ -44,6 +44,10 @@ struct Item {
   // Just the declared name, for a caret and for `source_to_def`.
   support::Span nameSpan;
   std::uint32_t paramCount = 0;
+  // True when the parameter list ends in `...`, which is part of the signature
+  // and not an extra: `f(i32)` and `f(i32, ...)` are different functions, so a
+  // change between them has to invalidate whatever the item tree keys on.
+  bool variadic = false;
   bool hasBody = false;
   // Where in this file's node array the declaration and its body are. Not part
   // of the signature; see above.
@@ -52,7 +56,8 @@ struct Item {
 
   [[nodiscard]] bool operator==(const Item& other) const {
     return kind == other.kind && name == other.name && span == other.span &&
-           nameSpan == other.nameSpan && paramCount == other.paramCount && hasBody == other.hasBody;
+           nameSpan == other.nameSpan && paramCount == other.paramCount &&
+           variadic == other.variadic && hasBody == other.hasBody;
   }
   [[nodiscard]] bool operator!=(const Item& other) const {
     return !(*this == other);

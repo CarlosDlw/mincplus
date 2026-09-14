@@ -562,6 +562,15 @@ void Checker::runSignatures() {
     // rather than whatever the walk happened to reach first.
     std::vector<TypeId> params;
     const ast::AstId paramList = childOf(decl, ast::NodeKind::ParamList);
+    // `...` is part of the signature and not an extra: the marker is a child of
+    // the list (the grammar only lets a declaration have one), and the type it
+    // produces is a *different* type from the same parameters without it.
+    //
+    // A variadic list cannot be in an error region while its parameters are
+    // readable, so the marker is asked for unconditionally: the parser reported
+    // a bad marker in a bad list, and this stage does not repeat it.
+    const bool variadic =
+        paramList.valid() && childOf(paramList, ast::NodeKind::VariadicParam).valid();
     if (paramList.valid() && !inError(paramList)) {
       for (const ast::AstId param : operandsOf(paramList)) {
         if (kindOf(param) != ast::NodeKind::Param) {
@@ -590,7 +599,7 @@ void Checker::runSignatures() {
       }
     }
 
-    TypeId functionType = types_.function(returnType, params);
+    TypeId functionType = types_.function(returnType, params, variadic);
     if (!functionType.valid()) {
       reportLimit(decl);
       functionType = kTypeError;

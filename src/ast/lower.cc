@@ -96,6 +96,7 @@ constexpr parse::SyntaxKind kIdentifierKind = parse::toSyntaxKind(lex::TokenKind
   hash = mixSpan(hash, item.span);
   hash = mixSpan(hash, item.nameSpan);
   hash = mix(hash, item.paramCount);
+  hash = mix(hash, item.variadic ? 1u : 0u);
   hash = mix(hash, item.hasBody ? 1u : 0u);
   return hash;
 }
@@ -293,6 +294,7 @@ private:
     const AstId params = childOfKind(decl, parse::SyntaxKind::ParamList);
     if (params.valid()) {
       item.paramCount = countParams(params);
+      item.variadic = childOfKind(params, parse::SyntaxKind::VariadicParam).valid();
     }
     const AstId body = childOfKind(decl, parse::SyntaxKind::Block);
     item.hasBody = body.valid();

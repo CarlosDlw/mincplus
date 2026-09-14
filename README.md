@@ -263,6 +263,10 @@ and full C interoperability in both directions.
 - [x] `extern fn` declarations — a function defined elsewhere (another unit, a
       library, the C runtime): `extern fn i32 puts(s: str);`, as in
       `examples/010_extern.mx`
+- [x] Variadic declarations (`extern fn i32 printf(fmt: str, ...);`), with the
+      ABI's default argument promotions at the call site, as in
+      `examples/011_variadics.mx`; a *definition* may not be variadic
+      (`va_start` does not exist yet)
 - [x] Block statements and `return`
 - [x] `//` line comments
 - [x] `let` bindings are **mutable**, with a colon type annotation or

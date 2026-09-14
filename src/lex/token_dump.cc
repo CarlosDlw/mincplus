@@ -25,7 +25,9 @@ constexpr const char* kOperatorColor = "\x1b[33m";
 constexpr const char* kIdentifierColor = "\x1b[36m";
 constexpr const char* kEndColor = "\x1b[1;37m";
 constexpr const char* kFlagColor = "\x1b[1;31m";
-constexpr const char* kEllipsis = "...";
+// The mark a truncated spelling ends with. Named for what it is rather than for
+// its spelling, now that `...` is a token kind of its own.
+constexpr const char* kTruncationMark = "...";
 
 [[nodiscard]] char hexDigit(unsigned value) {
   return static_cast<char>(value < 10U ? ('0' + value) : ('A' + (value - 10U)));
@@ -144,7 +146,7 @@ constexpr const char* kEllipsis = "...";
     --cut;
   }
   std::string out = escapeSpelling(lexeme.substr(0, cut));
-  out += kEllipsis;
+  out += kTruncationMark;
   return out;
 }
 

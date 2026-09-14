@@ -106,6 +106,52 @@ TypeId Checker::checkOperand(ast::AstId consumer, std::uint8_t operand, ast::Ast
   return from;
 }
 
+TypeId Checker::checkVariadicArgument(ast::AstId consumer, std::uint8_t operand, ast::AstId child) {
+  // No parameter to check against: the argument is checked by itself, and the
+  // only rule left is what the ABI does with it.
+  (void)checkExpr(child, kInvalidType);
+  // `decideAt` with nothing to decide by is not a shortcut: a deferred literal
+  // that reaches a variadic argument has exactly one meaning (`1` is an `i32`,
+  // `1.0` is an `f64`), which is `defaultOf`, and that is the same answer the
+  // language gives anywhere else nothing decides the type.
+  const TypeId from = decideAt(child, kInvalidType);
+  const TypeId to = promotedArgument(from);
+  // A conversion that changes nothing is not recorded, and for most arguments
+  // the promotion *is* nothing: `i32`, `i64`, a pointer and a `str` pass as they
+  // are. The record exists for the ones that move -- `i8` to `i32`, `f32` to
+  // `f64` -- which is exactly the pair the lowering has to emit an instruction
+  // for.
+  recordConversion(consumer, operand, child, from, to);
+  return from;
+}
+
+// The default argument promotions (C 6.5.2.2), which is the rule a variadic
+// call's un-specified arguments obey. It is not a language conversion the reader
+// can rely on in an expression -- it exists only at the boundary, and only here.
+TypeId Checker::promotedArgument(TypeId type) const {
+  if (!type.valid() || types_.isError(type) || types_.isDeferred(type)) {
+    return type;
+  }
+  const Type& declared = types_.get(type);
+  switch (declared.kind) {
+  case TypeKind::Bool:
+  case TypeKind::Char:
+    // Both are narrower than `int` and both fit in one, so both become `i32`.
+    return kTypeI32;
+  case TypeKind::Int:
+    // `u8`/`u16` promote to `i32` too: `int` holds every value they have, which
+    // is why C's rule is about rank and not about signedness.
+    return declared.bits < 32 ? kTypeI32 : type;
+  case TypeKind::Float:
+    // `float` to `double`, and `f80` stays: `long double` is passed as itself.
+    return declared.bits < 64 ? kTypeF64 : type;
+  default:
+    // Pointers, `str`, and everything else the language can pass are already the
+    // shape the ABI wants.
+    return type;
+  }
+}
+
 void Checker::recordOperationOperand(ast::AstId consumer, std::uint8_t operand, ast::AstId node,
                                      TypeId opType) {
   // A deferred operation type (`1 + 2`, nothing constraining it) is decided by

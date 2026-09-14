@@ -126,6 +126,8 @@ const char* toString(TokenKind kind) {
     return "Dot";
   case TokenKind::Arrow:
     return "Arrow";
+  case TokenKind::Ellipsis:
+    return "Ellipsis";
   case TokenKind::Hash:
     return "Hash";
   case TokenKind::HashHash:

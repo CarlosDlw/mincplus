@@ -6,11 +6,13 @@ form is
 
 ```minc+
 extern fn i32 puts(s: str);
+extern fn i32 printf(fmt: str, ...);
 ```
 
 and the whole design is one sentence: **`extern` is the declaration form of a
 function, `fn` is its definition form, and the two are one function.** Everything
-below is the consequence of taking that seriously.
+below is the consequence of taking that seriously, including the second line: a
+declaration's parameter list may end in `...`, and only a declaration's may.
 
 What this record does *not* own is the ABI: the layout of an aggregate that
 crosses the boundary, the calling convention, the C type mapping, and the
@@ -104,6 +106,108 @@ may name a function defined further down (the same reason `sema` has a signature
 pass at all). A body-less `fn` would therefore have exactly one use — declaring a
 function defined in a *different* file — which is what `extern` says out loud.
 The rule costs nothing and removes a class of "the body is missing" mistakes.
+
+## Variadic declarations
+
+The moment a C library is reachable, `printf` is the first thing anyone writes,
+and `printf` cannot be declared with a fixed parameter list. So a declaration's
+parameter list may end in `...`:
+
+```
+ExternDecl  ::= 'extern' 'fn' Type Name '(' ParamList ')' ';'
+ParamList   ::= Param (',' Param)* (',' '...')?
+```
+
+A list whose *only* item is the marker is refused by the rule below, not by the
+production, because it is a rule about calls and not a shape.
+
+The marker is a **node of its own** (`VariadicParam`, holding the `Ellipsis`
+token) and not a flag anywhere, for the same reason `ElseClause` is a node: a
+consumer asks "is this list variadic" by looking at the tree rather than by
+remembering a bit somebody set. It is *not* a `Param`, so the arity a signature
+has is the count of `Param` children and nothing else has to subtract one.
+
+### Only a declaration may be variadic
+
+Reading the arguments of a variadic function needs `va_start`/`va_arg`, or an
+equivalent builtin, and neither exists. A *definition* written with `...` would
+be a function with no way to reach the arguments it was given, so the grammar
+refuses it (`parse-variadic-definition`) rather than accepting code that cannot
+work. Rust's `c_variadic` makes the same call: variadic functions may be declared
+and called, and defining one is a feature of its own. Zig can define them because
+it has `@cVaStart`; that builtin is what this form will grow if and when
+`minc+` needs to *write* one, and it is not a grammar change (the production is
+already there -- the rule would move from the parser to `sema`, which is where a
+question about `va_start` belongs).
+
+The other two rules are about position, and both are grammar too:
+
+| What was written | Code | Why |
+| --- | --- | --- |
+| `extern fn i32 f(...);` | `parse-variadic-position` | a call would have nothing to check any argument against |
+| `extern fn i32 f(a: i32, ..., b: i32);` | `parse-variadic-position` | the marker is what makes the arguments after the named ones un-specified, so it ends the list |
+
+Both leave the marker in the tree and consume the tail as an error node, so one
+slip costs one diagnostic instead of a second "expected `)`".
+
+### The marker is part of the *type*
+
+`f(i32)` and `f(i32, ...)` are different functions, so `sema::Type` carries a
+`variadic` bit and it takes part in the store's interning key and in the
+spelling (`fn i32(i32, ...)`). Interned together, the two would share one type
+and therefore one LLVM `FunctionType` -- and the second half of that pair is a
+call that passes more arguments than the callee can read. It also means a
+variadic declaration and a fixed definition **disagree**, which `sema` reports as
+`sema-signature-mismatch` with both spellings in the message. LLVM's
+`FunctionType` carries `isVarArg` for exactly this reason; the bit is here
+because the type is where a distinction belongs, and a distinction the type does
+not make is one every consumer has to remember.
+
+### What happens to the extra arguments
+
+There is no parameter to check them against, so the argument is typed by itself
+and the only rule left is the ABI's **default argument promotion** (C 6.5.2.2):
+
+| Written type | Passed as | 
+| --- | --- |
+| `bool`, `char`, `i8`, `i16`, `u8`, `u16` | `i32` |
+| `f32` | `f64` |
+| `i32`/`u32`, `i64`/`u64`, `isize`/`usize`, `f64`, `f80`, `*T`, `str` | as they are |
+
+`u8`/`u16` promote to `i32` and not to `u32` because `int` holds every value they
+have, which is what C's rule is about; `f80` stays because it is `long double`.
+
+The promotion is recorded as a **conversion** in the artifact `sema` already
+publishes, so `ir` materialises it like any other conversion: `sext` for the
+narrow signed ones, `zext` for the narrow unsigned ones, `fpext` for `f32`. This
+is the part that is silently wrong when it is wrong -- `printf("%d", x)` with an
+`i8` prints the wrong integer, and nothing else in the pipeline notices -- so both
+halves are asserted: the promotion rule in `sema` and the instruction in `ir`.
+
+It is not a *language* conversion: nothing in the source can rely on it away from
+a call boundary, which is why the rule lives in the checker's call path and not in
+`convert.h`.
+
+The call itself is one line of IR, and it has to name the variadic type:
+
+```llvm
+declare i32 @printf(ptr, ...)
+
+  %sext = sext i8 %load to i32
+  %fpext = fpext float %load2 to double
+  %call = call i32 (ptr, ...) @printf(ptr @str, i32 %sext, i64 %wide, double %fpext)
+```
+
+Stating the type at the call site is what tells the backend the trailing
+arguments are un-specified, and on x86-64 it is also what sets the count of used
+vector registers in `%al` -- which is how a variadic callee knows how many
+`double`s to read. Get the argument types wrong and the callee reads from the
+wrong place, with no diagnostic anywhere: the promotion above is what makes that
+line correct.
+
+Finally, the *un-specified* arguments of a variadic call are the only place a
+`minc+` type reaches the boundary without the boundary asking for it. Aggregates
+by value, and the calling convention for them, are still `src/cinterop`'s.
 
 ## One function, one identity
 

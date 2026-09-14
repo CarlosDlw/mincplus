@@ -272,6 +272,16 @@ private:
   // `recordOperationOperand` itself.
   [[nodiscard]] TypeId checkOperand(ast::AstId consumer, std::uint8_t operand, ast::AstId child,
                                     TypeId expected);
+  // An argument past the last declared parameter of a variadic function. There
+  // is no parameter to check it against, so the argument is typed by itself and
+  // what is recorded is the ABI's **default argument promotion** -- `f32` to
+  // `f64`, anything of rank below `int` to `i32` -- because that is what the
+  // callee will read. Getting this wrong is silent: `printf("%d", x)` with an
+  // `i8` prints the wrong integer, and nothing else notices.
+  [[nodiscard]] TypeId checkVariadicArgument(ast::AstId consumer, std::uint8_t operand,
+                                             ast::AstId child);
+  // What the ABI passes for a value of this type as an un-specified argument.
+  [[nodiscard]] TypeId promotedArgument(TypeId type) const;
   // The operation type of `a op b` is derived from both operands, so the
   // operator computes it and then records each operand's conversion to it. One
   // function rather than two `recordConversion` calls, because the `decideAt`

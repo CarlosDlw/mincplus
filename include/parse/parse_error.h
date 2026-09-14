@@ -45,6 +45,14 @@ enum class ParseErrorCode : std::uint8_t {
   // `extern fn` with a body. `extern` says the definition lives in another unit,
   // so a body here contradicts the word rather than being an extra detail.
   ExternWithBody,
+  // `...` in a function that has a body. *Reading* a variadic argument needs
+  // `va_start`, which the language does not have, so only a declaration may be
+  // variadic -- the marker in a definition would be a function nobody can write.
+  VariadicDefinition,
+  // `...` somewhere other than the end of a parameter list, or with no parameter
+  // before it. The marker ends the list, so a list with anything after it has no
+  // meaning to give the arguments that follow.
+  VariadicPosition,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

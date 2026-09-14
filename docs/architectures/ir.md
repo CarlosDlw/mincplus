@@ -1133,9 +1133,15 @@ other stages' artifacts are.
 - **A middle end.** There is no new IR between the typed tree and LLVM's:
   `alloca` + `mem2reg` is where a middle end would go, and LLVM's is the one that
   is there.
-- **Aggregates, variadics and the C calling convention**, which belong to
+- **Aggregates and the C calling convention for them**, which belong to
   `src/cinterop` with their own record (§ *`str`, globals, and the ABI
-  question*).
+  question*). A *scalar* variadic call, on the other hand, is built here already:
+  the function type's marker becomes `FunctionType::get(..., isVarArg)`, the call
+  site states the same type (`call i32 (ptr, ...) @printf(...)`), and the
+  argument promotions arrive as ordinary recorded conversions — which is also
+  what sets the used-vector-register count on x86-64, since the backend reads it
+  from the argument types it is handed ([`extern.md`](extern.md)). What is left
+  for cinterop is an aggregate crossing the boundary.
 - **The shadow-memory half of the checked build.** This stage emits the guards a
   *module* can state (null, alignment, an `object`-provenance extent) and keeps
   the object live so the rest stays observable; the write map, the liveness map

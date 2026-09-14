@@ -96,6 +96,13 @@ private:
   // pointee is *the same* node the pointee has on its own. Keyed on the store's
   // id, which is the only thing that makes two spellings one type.
   [[nodiscard]] llvm::DIType* debugType(const sema::TypeStore& types, sema::TypeId id);
+  // The element list of a `DISubroutineType`: element 0 is the return type, the
+  // rest are the parameters, and a variadic function ends with a null entry --
+  // DWARF's marker for `...`. One function because two call sites build it (a
+  // function's own signature and a function *type* like a pointer's pointee) and
+  // a second copy is a second chance to forget the marker.
+  [[nodiscard]] llvm::SmallVector<llvm::Metadata*, 8>
+  subroutineElements(const sema::TypeStore& types, sema::TypeId functionType);
 
   // Keyed on `TypeId::index` rather than on the id: the id is a struct with a
   // defaulted `operator==` and no `std::hash`, and adding one to `sema` so a

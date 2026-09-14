@@ -43,6 +43,12 @@ enum class SyntaxKind : std::uint16_t {
   FnDecl,
   ParamList,
   Param,
+  // The `...` of a parameter list, as a node rather than as a loose token, so
+  // "this list is variadic" is a *child* and not a flag a later stage has to
+  // remember -- the same reason the `else` arm is an `ElseClause`. It is not a
+  // `Param`: it has no name and no type, and the arity a signature has must not
+  // count it.
+  VariadicParam,
   Block,
 
   // Statements.

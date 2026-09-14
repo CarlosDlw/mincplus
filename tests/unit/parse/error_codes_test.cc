@@ -60,6 +60,12 @@ constexpr CodeCase kCases[] = {
     {"body-less function with no `extern`", "fn i32 main();\n", ParseErrorCode::MissingExtern},
     {"`extern` with a body", "extern fn i32 main() { return 0; }\n",
      ParseErrorCode::ExternWithBody},
+    // The variadic marker, in the two positions the grammar does not have. Both
+    // are about *where* it is, and both name where it goes.
+    {"`...` in a definition", "fn i32 f(a: i32, ...) { return a; }\n",
+     ParseErrorCode::VariadicDefinition},
+    {"`...` with no parameter before it", "extern fn i32 f(...);\n",
+     ParseErrorCode::VariadicPosition},
 };
 
 [[nodiscard]] std::string deepInput() {

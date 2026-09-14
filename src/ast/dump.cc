@@ -46,6 +46,9 @@ namespace {
     // span, which may point into a header or a macro body.
     out += file.spellingOf(file.childOfKind(AstId{item.node}, NodeKind::Name));
     out += "  params=" + std::to_string(item.paramCount);
+    if (item.variadic) {
+      out += ",...";
+    }
     out += item.hasBody ? "  body" : "  no-body";
     out += "  ";
     out += rangeText(item.span);

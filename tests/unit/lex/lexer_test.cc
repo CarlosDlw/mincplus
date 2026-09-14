@@ -467,6 +467,31 @@ TEST(LexerTest, NonAsciiCharacterIsOneToken) {
   EXPECT_EQ(lexOne("\xC3\xC3", 0).length, 1u);
 }
 
+TEST(LexerTest, ThreeDotsAreOneTokenAndSpacedOnesAreThree) {
+  // The variadic marker, and the same spelling a variadic *macro* uses. The rule
+  // is one token kind here and nowhere else: the preprocessor used to rebuild it
+  // from three adjacent `Dot`s, and `. . .` was never an ellipsis to either
+  // reader -- so the rule was stated twice and agreed by luck.
+  const Token marker = lexFirst("...");
+  EXPECT_EQ(marker.kind, TokenKind::Ellipsis);
+  EXPECT_EQ(marker.length, 3u);
+  EXPECT_EQ(spellingOf("...", marker), "...");
+
+  EXPECT_EQ(
+      significantKinds("a..."),
+      (std::vector<TokenKind>{TokenKind::Identifier, TokenKind::Ellipsis, TokenKind::EndOfFile}));
+  // A spaced form is three tokens, and a fourth dot is a second token: longest
+  // match, the same rule every punctuator follows.
+  EXPECT_EQ(significantKinds(". . ."),
+            (std::vector<TokenKind>{TokenKind::Dot, TokenKind::Dot, TokenKind::Dot,
+                                    TokenKind::EndOfFile}));
+  EXPECT_EQ(significantKinds("...."),
+            (std::vector<TokenKind>{TokenKind::Ellipsis, TokenKind::Dot, TokenKind::EndOfFile}));
+  // A leading dot is still a number, which is why the marker cannot be confused
+  // with one: `.5` is scanned before the punctuator table is consulted.
+  EXPECT_EQ(lexFirst(".5").kind, TokenKind::FloatLiteral);
+}
+
 TEST(LexerTest, EveryTokenAdvances) {
   // The one property a caller looping on lexOne depends on: progress.
   const std::string_view text = "fn i32 main() { let x = 0x; }/*\"'\\\xC3\xA9 \xC3";

@@ -210,6 +210,67 @@ TEST(IrLowerTest, ADeclarationNothingCallsIsStillADeclaration) {
   EXPECT_EQ(text.find("define i32 @unused"), std::string::npos) << text;
 }
 
+TEST(IrLowerTest, AVariadicDeclarationIsAVarArgsSignature) {
+  // The type carries the marker all the way to LLVM's `FunctionType`, which is
+  // what makes the call site below able to hand it more arguments than it
+  // declares -- and, on x86-64, what makes the backend set the vector-register
+  // count in `%al` from the argument types it is given.
+  test::IrFixture fixture;
+  fixture.source("extern fn i32 printf(fmt: str, ...);\n"
+                 "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("declare i32 @printf(ptr, ...)"), std::string::npos) << text;
+  EXPECT_EQ(fixture.violations(), 0U);
+}
+
+TEST(IrLowerTest, AVariadicArgumentIsPromotedTheWayTheAbiPromises) {
+  // The promotions are the part that is silently wrong when it is wrong:
+  // `printf("%d", x)` with an `i8` prints the wrong integer, and nothing in the
+  // pipeline notices. So the instructions are asserted, not the behaviour alone:
+  // a `sext` for anything narrower than `int`, an `fpext` for `float`, and no
+  // conversion at all for what is already the shape the ABI wants.
+  test::IrFixture fixture;
+  fixture.source("extern fn i32 printf(fmt: str, ...);\n"
+                 "fn i32 main() {\n"
+                 "  let small: i8 = 65;\n"
+                 "  let wide: i64 = 9000000000;\n"
+                 "  let ratio: f32 = 0.5;\n"
+                 "  printf(\"%d %lld %f\\n\", small, wide, ratio);\n"
+                 "  return 0;\n"
+                 "}\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("sext i8 %"), std::string::npos) << text;
+  EXPECT_NE(text.find("to i32"), std::string::npos) << text;
+  EXPECT_NE(text.find("fpext float %"), std::string::npos) << text;
+  EXPECT_NE(text.find("to double"), std::string::npos) << text;
+  // The call names the variadic signature, which is what tells LLVM the trailing
+  // arguments are un-specified.
+  EXPECT_NE(text.find("call i32 (ptr, ...) @printf("), std::string::npos) << text;
+  // `i64` is passed as itself: `long long` is not promoted.
+  EXPECT_NE(text.find(", i64 %"), std::string::npos) << text;
+  EXPECT_EQ(fixture.violations(), 0U);
+}
+
+TEST(IrLowerTest, ADebugBuildOfAVariadicFunctionDoesNotBreakTheDebugTypes) {
+  // A variadic *definition* is refused by the parser (`va_start` does not
+  // exist), and this fixture lowers through errors on purpose. What is checked
+  // here is that the DWARF path survives it: the subroutine type of a variadic
+  // function ends with DWARF's null marker, and a debugger reading a fixed-arity
+  // signature for it would show the wrong arguments for every frame inside.
+  test::IrFixture fixture;
+  fixture.debugInfo(true);
+  fixture.source("fn i32 f(a: i32, ...) { return a; }\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+  EXPECT_EQ(fixture.violations(), 0U);
+}
+
 TEST(IrLowerTest, EveryExampleLowers) {
   namespace fs = std::filesystem;
   std::vector<std::string> files;

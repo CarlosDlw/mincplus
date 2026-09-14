@@ -382,7 +382,8 @@ which also records the reversal.
       unreachable-code precision inside loops (the per-block warning is exact
       for the statement after a `return`, less so after a `break`)
 - [x] `extern fn Type Name(...);` — the **declaration** form: a function defined
-      elsewhere, with no body, whose identity is shared with its definition
+      elsewhere, with no body, whose identity is shared with its definition — and
+      `extern fn Type Name(first: T, ...);` for the variadic ones
       ([`architectures/extern.md`](architectures/extern.md)). `extern` is a
       declaration word and not a storage class, which is why the rest of this
       item is still open
@@ -563,7 +564,12 @@ come first.
       and Windows x64 first): INTEGER/SSE/MEMORY, aggregates by value, and the
       alignments that follow from the triple
 - [ ] Aggregates by value: struct passing/returning, unions, alignments
-- [ ] Variadic calls (`va_list` conventions); bitfields `[?]`
+- [x] Variadic calls, for the scalar and pointer types the language has:
+      `extern fn i32 printf(fmt: str, ...);` declares, calls promote their extra
+      arguments the way the ABI does, and `examples/011_variadics.mx` runs
+      ([`architectures/extern.md`](architectures/extern.md))
+- [ ] Reading variadic arguments (`va_start`/`va_arg`, or the builtin that would
+      replace them), which is what a variadic *definition* needs; and bitfields `[?]`
 - [x] Calling into C: a declaration resolved against real libc, for the scalar
       and pointer types the language has today (`extern fn i32 puts(s: str);`,
       and `examples/010_extern.mx` runs)

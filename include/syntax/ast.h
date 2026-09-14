@@ -120,6 +120,10 @@ private:
 [[nodiscard]] std::optional<SyntaxNode> nameOf(const FnDecl& decl);
 [[nodiscard]] std::optional<SyntaxNode> parameterListOf(const FnDecl& decl);
 [[nodiscard]] std::optional<SyntaxNode> bodyOf(const FnDecl& decl);
+// True when the parameter list ends in `...`. A property of the declaration and
+// not of the body, so it stays true for a declaration with no body at all --
+// which is the only kind the grammar lets be variadic today.
+[[nodiscard]] bool isVariadic(const FnDecl& decl);
 
 // Name, annotation, and initializer of a `let`/`const`.
 [[nodiscard]] std::optional<SyntaxNode> variableName(const VariableStmt& stmt);

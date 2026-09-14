@@ -77,6 +77,13 @@ enum class TokenKind : std::uint8_t {
   Question,
   Dot,
   Arrow,
+  // `...`. The variadic marker of a parameter list, and the same spelling a
+  // variadic *macro* uses -- one token, one spelling, so the preprocessor no
+  // longer has to reconstruct it from three `Dot`s and the parser never sees
+  // three tokens where the language means one. The rule that the marker is only
+  // legal in a declaration is a *grammar* rule and lives in the parser, which is
+  // the same place every other "only here" rule lives.
+  Ellipsis,
 
   // The preprocessor's operators. `#` and `##` are punctuators of the lexical
   // grammar -- Clang spells them `tok::hash` and `tok::hashhash`, GCC's cpplib
@@ -274,6 +281,7 @@ enum class TokenKind : std::uint8_t {
   case TokenKind::Question:
   case TokenKind::Dot:
   case TokenKind::Arrow:
+  case TokenKind::Ellipsis:
     return true;
   default:
     return false;

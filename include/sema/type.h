@@ -80,6 +80,13 @@ struct Type {
   TypeId returnType;
   std::uint32_t firstParam = 0;
   std::uint32_t paramCount = 0;
+  // Function: the parameter list ends in `...`, so a call may pass more
+  // arguments than `paramCount`. Part of the *type* and not a flag beside it,
+  // because `f(i32)` and `f(i32, ...)` are different functions -- the same
+  // reason LLVM's `FunctionType` carries `isVarArg`: a distinction the type does
+  // not make is one every consumer has to remember, and a function pointer is
+  // where forgetting it would be silent.
+  bool variadic = false;
   // Reserved: a named type (`struct S`, a typedef).
   support::SymId name = support::kInvalidSym;
 };

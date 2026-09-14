@@ -341,6 +341,62 @@ TEST(ParserTest, ADeclarationStopsTheRecoveryTheWayADefinitionDoes) {
   EXPECT_EQ(fixture.tree().root().nodeChildren().size(), 2u) << fixture.dump(false);
 }
 
+TEST(ParserTest, AVariadicMarkerIsTheLastChildOfTheParameterList) {
+  // `...` is a *node* of its own and not a flag anywhere: a list that ends in
+  // one says so structurally, and the arity a signature has does not count it --
+  // which is why it is not a `Param`.
+  const ParseFixture fixture("extern fn i32 printf(fmt: str, ...);\n");
+  ASSERT_TRUE(fixture.built());
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  EXPECT_TRUE(fixture.tree().validate());
+  EXPECT_EQ(fixture.reconstruct(), fixture.source());
+
+  const syntax::SyntaxNode root = fixture.tree().root();
+  const auto decl = syntax::FnDecl::cast(root.childOfKind(SyntaxKind::FnDecl).value());
+  ASSERT_TRUE(decl.has_value());
+  EXPECT_TRUE(decl->isExtern());
+  EXPECT_TRUE(syntax::isVariadic(*decl));
+
+  const syntax::SyntaxNode params = *syntax::parameterListOf(*decl);
+  EXPECT_TRUE(params.childOfKind(SyntaxKind::VariadicParam).has_value());
+  // One `Param` and one marker: the count of parameters is the count of `Param`
+  // children, and the marker is not one of them.
+  EXPECT_EQ(params.childOfKind(SyntaxKind::Param).has_value(), true);
+  EXPECT_TRUE(params.nodeChildren().back().kind() == SyntaxKind::VariadicParam);
+}
+
+TEST(ParserTest, ADefinitionIsNeverVariadic) {
+  const ParseFixture fixture(fnBody("return 0;"));
+  ASSERT_TRUE(fixture.built());
+  const auto decl =
+      syntax::FnDecl::cast(fixture.tree().root().childOfKind(SyntaxKind::FnDecl).value());
+  ASSERT_TRUE(decl.has_value());
+  EXPECT_FALSE(syntax::isVariadic(*decl));
+}
+
+TEST(ParserTest, TheVariadicMarkerInTheWrongPlaceIsOneDiagnostic) {
+  // Three ways to get the marker wrong, and each costs exactly one message with
+  // every byte still in the tree -- including the extra parameters, which are
+  // consumed as junk rather than left for `)` to complain about a second time.
+  struct Case {
+    const char* source;
+    const char* code;
+  };
+  const Case cases[] = {
+      {"extern fn i32 f(...);\n", "parse-variadic-position"},
+      {"extern fn i32 f(a: i32, ..., b: i32);\n", "parse-variadic-position"},
+      {"fn i32 f(a: i32, ...) { return a; }\n", "parse-variadic-definition"},
+  };
+  for (const Case& testCase : cases) {
+    const ParseFixture fixture(testCase.source);
+    ASSERT_TRUE(fixture.built()) << testCase.source;
+    EXPECT_EQ(fixture.errorCount(), 1u) << testCase.source << ": " << fixture.errorMessages();
+    EXPECT_NE(fixture.errorMessages().find(testCase.code), std::string::npos)
+        << testCase.source << ": " << fixture.errorMessages();
+    EXPECT_EQ(fixture.reconstruct(), fixture.source()) << testCase.source;
+  }
+}
+
 TEST(ParserTest, EverySingleByteParsesWithoutCrashing) {
   // The parser must be total on arbitrary input: an editor will hand it a file
   // that is one keystroke long, and a fuzzer will hand it worse.

@@ -17,12 +17,13 @@ struct NodeKindInfo {
   const char* name;
 };
 
-constexpr std::array<NodeKindInfo, 35> kNodeKindInfos{{
+constexpr std::array<NodeKindInfo, 36> kNodeKindInfos{{
     {SyntaxKind::File, "File"},
     {SyntaxKind::Error, "Error"},
     {SyntaxKind::FnDecl, "FnDecl"},
     {SyntaxKind::ParamList, "ParamList"},
     {SyntaxKind::Param, "Param"},
+    {SyntaxKind::VariadicParam, "VariadicParam"},
     {SyntaxKind::Block, "Block"},
     {SyntaxKind::LetStmt, "LetStmt"},
     {SyntaxKind::ConstStmt, "ConstStmt"},

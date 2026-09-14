@@ -161,7 +161,13 @@ llvm::Type* Lowering::llvmFunctionType(sema::TypeId id) {
   if (result == nullptr) {
     return nullptr;
   }
-  return llvm::FunctionType::get(result, params, /*isVarArg=*/false);
+  // `isVarArg` comes from the type and not from a second flag beside it: `sema`
+  // already decided that `f(i32)` and `f(i32, ...)` are two types, and this is
+  // the one place that decision reaches LLVM. A variadic *call* states the same
+  // `FunctionType` at the call site (`expr.cc`), which is what tells the backend
+  // the extra arguments are un-specified -- and, on x86-64, what makes it set the
+  // vector-register count in `%al` from the argument types it is handed.
+  return llvm::FunctionType::get(result, params, types_.isVariadic(id));
 }
 
 std::uint64_t Lowering::alignmentOf(sema::TypeId type) const {

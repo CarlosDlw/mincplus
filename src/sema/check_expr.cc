@@ -1141,9 +1141,20 @@ TypeId Checker::checkCall(ast::AstId expr, ExprInfo& info) {
   }
 
   const std::span<const TypeId> params = types_.paramsOf(calleeType);
-  if (args.size() != params.size()) {
+  // A variadic function accepts *at least* its declared parameters; everything
+  // past them is an un-specified argument. A non-variadic one takes exactly
+  // them, which is what makes the two counts one condition instead of two.
+  const bool variadic = types_.isVariadic(calleeType);
+  const bool countOk = variadic ? args.size() >= params.size() : args.size() == params.size();
+  if (!countOk) {
     std::string message = "this function takes ";
-    message += params.empty() ? "no arguments" : std::to_string(params.size()) + " argument(s)";
+    if (variadic) {
+      // "at least", because the sentence is about a *minimum* here: telling the
+      // reader the count is wrong when they passed too few is the whole point.
+      message += "at least " + std::to_string(params.size()) + " argument(s)";
+    } else {
+      message += params.empty() ? "no arguments" : std::to_string(params.size()) + " argument(s)";
+    }
     message += ", but " + std::to_string(args.size()) + " were given";
     error(expr, SemaErrorCode::ArgumentCount, std::move(message));
     // The arguments are still checked: a wrong count must not hide a wrong
@@ -1164,6 +1175,13 @@ TypeId Checker::checkCall(ast::AstId expr, ExprInfo& info) {
   // one: the conversion of argument `i` to parameter `i` is the pair the callee's
   // own parameter list would have to be read again to recover.
   for (std::size_t i = 0; i < args.size(); ++i) {
+    if (i >= params.size()) {
+      // Past the declared parameters there is nothing to check *against*: the
+      // argument is what it is, and the only rule left is the promotion the ABI
+      // applies on the way out.
+      (void)checkVariadicArgument(expr, static_cast<std::uint8_t>(i + 1), args[i]);
+      continue;
+    }
     const TypeId argumentType =
         checkOperand(expr, static_cast<std::uint8_t>(i + 1), args[i], params[i]);
     checkAssignable(argumentType, params[i], args[i], SemaErrorCode::InvalidAssignment,

@@ -32,7 +32,7 @@ void Parser::parseFnDecl(bool isExtern) {
   expect(lex::TokenKind::KwFn);
   parseTypeAndName();
   expect(lex::TokenKind::LParen);
-  parseParamList();
+  parseParamList(/*allowVariadic=*/isExtern);
   expect(lex::TokenKind::RParen);
   parseFunctionTail(isExtern);
   decl.complete(SyntaxKind::FnDecl);
@@ -89,10 +89,21 @@ void Parser::parseFunctionTail(bool isExtern) {
 // guess. Everything between it and the `,`/`)` is the type, which is also what
 // makes a future declarator (`x: *i32`, `buf: [8]u8`) delimited by the same two
 // tokens instead of becoming a C declarator puzzle.
-void Parser::parseParamList() {
+void Parser::parseParamList(bool allowVariadic) {
   Marker params = start();
+  bool hasParameter = false;
   while (!at(lex::TokenKind::RParen) && !atEnd() && !bailedOut_) {
+    if (at(lex::TokenKind::Ellipsis)) {
+      parseVariadicMarker(allowVariadic, hasParameter);
+      // `...` *ends* the list by definition, so the loop stops here whether or
+      // not the reader wrote more after it. Anything that follows was already
+      // reported as the marker being in the wrong place, and the marker's own
+      // recovery consumed it, which is what keeps `)` from adding a second
+      // diagnostic about the same slip.
+      break;
+    }
     parseParam();
+    hasParameter = true;
     if (!at(lex::TokenKind::Comma)) {
       break;
     }
@@ -101,6 +112,50 @@ void Parser::parseParamList() {
     // ends the list instead of starting another parameter.
   }
   params.complete(SyntaxKind::ParamList);
+}
+
+// `...`, the variadic marker.
+//
+// Three rules, all of them grammar, and all of them reported here because this
+// is the stage holding the token and the word:
+//
+//   * only a declaration may be variadic (`extern fn`), because *reading* the
+//     arguments needs `va_start`, which the language does not have;
+//   * at least one parameter has to come before it, so a call has something to
+//     check its arguments against;
+//   * it comes last, because it is what makes the arguments after the named ones
+//     un-specified.
+//
+// The marker is built whatever happened, so the tree says the list is variadic
+// even when the words around it were wrong: one mistake, one diagnostic, and
+// every byte still in a node.
+void Parser::parseVariadicMarker(bool allowVariadic, bool hasParameter) {
+  Marker marker = start();
+  bump(); // `...`
+
+  if (!allowVariadic) {
+    error("`...` needs a declaration: reading a variadic argument needs `va_start`, so only "
+          "`extern fn` can be variadic",
+          ParseErrorCode::VariadicDefinition);
+  } else if (!hasParameter) {
+    error("`...` needs a parameter before it, so a call has something to check its arguments "
+          "against",
+          ParseErrorCode::VariadicPosition);
+  } else if (at(lex::TokenKind::Comma)) {
+    error("`...` must be the last thing in the parameter list", ParseErrorCode::VariadicPosition);
+  }
+
+  if (at(lex::TokenKind::Comma)) {
+    // The tail belongs to no parameter, and leaving it for `)` would report one
+    // slip twice. It is consumed as junk for that reason and not for tidiness.
+    Marker junk = start();
+    while (!at(lex::TokenKind::RParen) && !atEnd() && !bailedOut_) {
+      bump();
+    }
+    junk.complete(SyntaxKind::Error);
+  }
+
+  marker.complete(SyntaxKind::VariadicParam);
 }
 
 void Parser::parseParam() {

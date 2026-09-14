@@ -155,6 +155,33 @@ TEST(LowerTest, ItemTreeDescribesTheSignature) {
   EXPECT_LE(items.items[0].span.begin, items.items[0].span.end);
 }
 
+TEST(LowerTest, TheVariadicMarkerIsPartOfTheSignature) {
+  // `f(i32)` and `f(i32, ...)` are different functions, so the item tree -- the
+  // thing the editor keys reuse on -- has to tell them apart. It is a field of
+  // the item and a term in the comparison and the hash, and this is what fails
+  // if any of those three is forgotten.
+  ResolveFixture fixed;
+  fixed.source("extern fn i32 f(a: i32);\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(fixed.build());
+
+  ResolveFixture variadic;
+  variadic.source("extern fn i32 f(a: i32, ...);\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(variadic.build());
+
+  const ast::ItemTree& plain = fixed.lowered().items();
+  const ast::ItemTree& marker = variadic.lowered().items();
+  ASSERT_GE(plain.items.size(), 1u);
+  ASSERT_GE(marker.items.size(), 1u);
+  EXPECT_FALSE(plain.items[0].variadic);
+  EXPECT_TRUE(marker.items[0].variadic);
+  // Same name, same arity, same body-less shape -- and still a different
+  // signature, which is the whole point of recording the marker.
+  EXPECT_EQ(plain.items[0].paramCount, marker.items[0].paramCount);
+  EXPECT_NE(plain.items[0], marker.items[0]);
+  EXPECT_NE(plain, marker);
+  EXPECT_NE(plain.hash, marker.hash);
+}
+
 TEST(LowerTest, ItemTreeIsStableUnderABodyEdit) {
   ResolveFixture before;
   before.source("fn i32 main()\n{\n  return 1;\n}\n");

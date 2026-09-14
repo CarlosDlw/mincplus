@@ -149,8 +149,14 @@ public:
   // `extern` declaration, and a diagnostic for either of the two wrong
   // combinations.
   void parseFunctionTail(bool isExtern);
-  void parseParamList();
+  // `allowVariadic` is the enclosing declaration's form, which is what decides
+  // whether `...` is legal: only a declaration may be variadic, because reading
+  // the arguments needs `va_start`, which the language does not have.
+  void parseParamList(bool allowVariadic);
   void parseParam();
+  // The `...` of a parameter list, which ends it. `hasParameter` is whether a
+  // parameter was written before the marker.
+  void parseVariadicMarker(bool allowVariadic, bool hasParameter);
   void parseBlock();
   void parseStmt();
   void parseLetStmt(bool isConst);

@@ -1,0 +1,30 @@
+// A declaration may be variadic: `...` after the named parameters says the call
+// may pass more arguments than the declaration names, which is how `printf` and
+// every other C function of that shape is reached.
+//
+// The extra arguments have no parameter to be checked against, so what happens
+// to them is the **default argument promotion** the ABI applies -- anything
+// narrower than `int` becomes `i32`, and `f32` becomes `f64` -- and the compiler
+// records it as a conversion, so the call passes what the callee will read.
+// That is not a detail: `printf("%d", x)` with an `i8` prints the wrong integer
+// if the promotion is missed, and nothing else in the pipeline notices.
+//
+// Only a *declaration* may be variadic. Reading the arguments of a variadic
+// function needs `va_start`, which the language does not have, so a definition
+// written with `...` is reported rather than accepted.
+
+extern fn i32 printf(fmt: str, ...);
+extern fn i32 putchar(c: i32);
+
+fn i32 main() {
+    let letter: i8 = 109;      // promoted to `i32` on the way out
+    let big: i64 = 9000000000; // passed as it is: `long long` does not promote
+    let half: f32 = 0.5;       // promoted to `f64`
+
+    // `%d` reads an `i32`, `%lld` an `i64`, `%.3f` a `double`: the three cases,
+    // in the order the promotions turn them into one.
+    printf("%d %lld %.3f\n", letter, big, half);
+    putchar(letter); // a fixed parameter, converted by the ordinary rule
+    putchar(10);     // '\n': the language has no escape for a char literal yet
+    return 0;
+}

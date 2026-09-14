@@ -91,6 +91,11 @@ std::optional<SyntaxNode> parameterListOf(const FnDecl& decl) {
   return decl.syntax().childOfKind(parse::SyntaxKind::ParamList);
 }
 
+bool isVariadic(const FnDecl& decl) {
+  const std::optional<SyntaxNode> params = parameterListOf(decl);
+  return params.has_value() && params->childOfKind(parse::SyntaxKind::VariadicParam).has_value();
+}
+
 std::optional<SyntaxNode> bodyOf(const FnDecl& decl) {
   return decl.syntax().childOfKind(parse::SyntaxKind::Block);
 }

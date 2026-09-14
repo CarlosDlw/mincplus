@@ -133,14 +133,7 @@ void DebugInfo::enterFunction(llvm::Function& function, std::string_view name,
 
   // The function's own type: element 0 of a subroutine type is its return type and
   // the rest are the parameters, which is DWARF's convention and not a choice.
-  llvm::SmallVector<llvm::Metadata*, 8> elements;
-  elements.push_back(
-      types.known(functionType) ? debugType(types, types.get(functionType).returnType) : nullptr);
-  if (types.known(functionType)) {
-    for (const sema::TypeId param : types.paramsOf(functionType)) {
-      elements.push_back(debugType(types, param));
-    }
-  }
+  llvm::SmallVector<llvm::Metadata*, 8> elements = subroutineElements(types, functionType);
   llvm::DISubroutineType* const signature =
       builder_.createSubroutineType(builder_.getOrCreateTypeArray(elements));
 
@@ -151,6 +144,28 @@ void DebugInfo::enterFunction(llvm::Function& function, std::string_view name,
       file_, std::string(name), std::string(linkageName), file_, position.line, signature,
       position.line, llvm::DINode::FlagPrototyped, llvm::DISubprogram::SPFlagDefinition);
   function.setSubprogram(subprogram_);
+}
+
+llvm::SmallVector<llvm::Metadata*, 8> DebugInfo::subroutineElements(const sema::TypeStore& types,
+                                                                    sema::TypeId functionType) {
+  llvm::SmallVector<llvm::Metadata*, 8> elements;
+  // Element 0 is the return type and the rest are the parameters, which is
+  // DWARF's convention and not a choice.
+  elements.push_back(
+      types.known(functionType) ? debugType(types, types.get(functionType).returnType) : nullptr);
+  if (!types.known(functionType)) {
+    return elements;
+  }
+  for (const sema::TypeId param : types.paramsOf(functionType)) {
+    elements.push_back(debugType(types, param));
+  }
+  if (types.isVariadic(functionType)) {
+    // DWARF's marker for `...`: a null entry after the parameters. Without it a
+    // debugger reads a variadic function as a fixed-arity one and shows the
+    // wrong arguments for a frame inside `printf`.
+    elements.push_back(nullptr);
+  }
+  return elements;
 }
 
 void DebugInfo::leaveFunction() {
@@ -206,11 +221,7 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
                                       std::nullopt, std::string(types.spelling(id)));
     break;
   case sema::TypeKind::Function: {
-    llvm::SmallVector<llvm::Metadata*, 8> params;
-    params.push_back(debugType(types, type.returnType)); // element 0 is the return type
-    for (const sema::TypeId param : types.paramsOf(id)) {
-      params.push_back(debugType(types, param));
-    }
+    llvm::SmallVector<llvm::Metadata*, 8> params = subroutineElements(types, id);
     node = builder_.createSubroutineType(builder_.getOrCreateTypeArray(params));
     // Reached through the `DISubprogram` that names it, so it needs no retain of
     // its own -- the subprogram is the anchor.

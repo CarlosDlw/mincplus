@@ -55,6 +55,8 @@ std::string_view tokenSpelling(lex::TokenKind kind) {
     return ".";
   case lex::TokenKind::Arrow:
     return "->";
+  case lex::TokenKind::Ellipsis:
+    return "...";
   case lex::TokenKind::Equal:
     return "=";
   case lex::TokenKind::EqualEqual:
