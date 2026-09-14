@@ -215,8 +215,16 @@ TypeId Checker::checkLiteral(ast::AstId expr, TypeId expected, ExprInfo& info) {
       // is wider than the core), so the decision is made here, against the type
       // the context asked for -- and a literal with no context is defaulted to
       // `i32` by `adaptTo`, which this must refuse before that happens.
-      const Type& shape = types_.get(expected);
-      const bool wideEnough = expected.valid() && shape.kind == TypeKind::Int && shape.bits > 64;
+      //
+      // `expected` is invalid when the literal is an operand of a binary
+      // expression whose operation type has not been decided yet (the checker
+      // decides the operands *after* the operation type), so the validity
+      // check must come first: `types_.get(kInvalidType)` is a vector
+      // out-of-bounds access.
+      const bool wideEnough = expected.valid() && [&] {
+        const Type& shape = types_.get(expected);
+        return shape.kind == TypeKind::Int && shape.bits > 64;
+      }();
       if (wideEnough) {
         return kTypeIntLiteral;
       }
