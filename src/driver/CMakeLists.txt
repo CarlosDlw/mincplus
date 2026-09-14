@@ -4,7 +4,10 @@
 minc_add_library(minc_driver
   SOURCES
     cli.cc
+    command_spec.cc
+    help_render.cc
     help_text.cc
+    suggest.cc
     error_report.cc
     input_source.cc
     lex_command.cc

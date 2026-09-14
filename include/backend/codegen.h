@@ -39,6 +39,21 @@
 
 namespace minc::backend {
 
+// --- the build environment ------------------------------------------------------
+//
+// Two facts `--version -v` prints and nothing else decides with. They live here
+// because they are LLVM's answers (`getDefaultTargetTriple`, the version this
+// library was built from) and this is the module allowed to ask.
+
+// The triple LLVM considers this machine to be. Deliberately *not* the same
+// question as "what does this compiler target by default" -- see the note in
+// `docs/architectures/cli.md` about the two being able to differ, and being
+// printed side by side when they do.
+[[nodiscard]] std::string hostTriple();
+
+// The LLVM this compiler was built against, as its own version string.
+[[nodiscard]] std::string llvmVersion();
+
 // What to write. LLVM's own enumeration is `llvm::CodeGenFileType` --
 // `AssemblyFile`, `ObjectFile`, `Null` -- and `None` is the third one with the
 // name the command line uses.

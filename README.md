@@ -35,7 +35,15 @@ that runs comes out. `mincc check` runs
 `mincc ir` carries that typed tree to an `llvm::Module`, and `mincc build` and
 `mincc run` carry that module through codegen and a link, so a file that starts
 with `#define` is type-checked, lowered, emitted and executed as a translation
-unit. `--help` and `--version` are functional.
+unit.
+
+The command line is finished: every spelling of help a CLI of this kind is
+expected to answer works (`mincc`, `-h`, `--help`, `help`, `mincc help <command>`,
+`mincc <command> --help`), each command has its own grouped page, the parser and
+that page are generated from **one table** so they cannot disagree, a misspelled
+command or option gets a `did you mean`, `--color` overrides the terminal
+detection, and `-vV` prints the block a bug report needs. The design record is
+[`docs/architectures/cli.md`](docs/architectures/cli.md).
 
 What is left is *language surface*, not pipeline: `extern` declarations and
 linkage, arrays, aggregates, casts, `sizeof`, `switch`, the checked-build guards
@@ -604,11 +612,17 @@ which is where the algorithm that depends on them lives.
 - `src/lex/` — the raw lexer: a pure `lexOne`, the lossless `TokenStream`, the
   token dump, and the flag-to-diagnostic reporting split into a separate
   library (`minc_lex_report`) so the lexer itself links no diagnostics.
-- `src/driver/` — `mincc` entry point: `cli` (parsing), `help_text` (help and
-  version output), `error_report` (the one error format), `input_source` (the
-  one way an input path or `-` is loaded), `lex_command`, `parse_command` (the
-  subcommands), `exit_code`. The version header is generated from
-  `cmake/version.h.in`; the source tree holds no second copy.
+- `src/driver/` — `mincc` entry point. `command_spec` is the command line *as
+  data*: one statement of every option, read by `cli` (parsing) and by
+  `help_render` (the width-aware pages) both, so a name or a description lives in
+  exactly one place. `suggest` is the nearest-name search behind `did you mean`,
+  `help_text` is the I/O side of help (which stream, which exit code),
+  `error_report` is the one error format, `input_source` is the one way an input
+  path or `-` is loaded, and `lex_command`, `parse_command`, `pp_command`,
+  `resolve_command`, `check_command`, `ir_command` and `build_command` are the
+  subcommands sharing one `frontend` and one `stage_report`. `exit_code` is the
+  process contract. The version header is generated from `cmake/version.h.in`;
+  the source tree holds no second copy.
 - `src/parse/` — the parser: a recursive-descent grammar over a token *source*,
   emitting events and error values. It links no diagnostics and no tree, so a
   grammar change is testable without a `Session`; `minc_parse_report` is the

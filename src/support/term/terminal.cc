@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <string_view>
 
+#include <cctype>
+
 #if defined(_WIN32)
 // windows.h is included after our own headers so it cannot shadow anything we
 // declare, and lean-and-mean keeps the translation unit fast to compile.
@@ -20,6 +22,7 @@
 #include <io.h>
 #include <windows.h>
 #else
+#include <sys/ioctl.h>
 #include <unistd.h>
 #endif
 
@@ -70,6 +73,69 @@ namespace {
 
 #endif
 
+// `COLUMNS`, or nothing. The value is only believed when it is a number the
+// terminal could actually be: an empty string, a word, and `0` are all ignored
+// rather than clamped, because a caller that set `COLUMNS=0` meant "no opinion"
+// far more often than it meant "one column".
+[[nodiscard]] std::optional<unsigned> columnsFromEnvironment(const char* value) {
+  if (value == nullptr || *value == '\0') {
+    return std::nullopt;
+  }
+  unsigned width = 0;
+  for (const char* digit = value; *digit != '\0'; ++digit) {
+    if (std::isdigit(static_cast<unsigned char>(*digit)) == 0) {
+      return std::nullopt;
+    }
+    // A number long enough to overflow is not a terminal width; refuse rather
+    // than wrap around into a small one.
+    if (width > 1000000U) {
+      return std::nullopt;
+    }
+    width = width * 10U + static_cast<unsigned>(*digit - '0');
+  }
+  if (width == 0U) {
+    return std::nullopt;
+  }
+  return width;
+}
+
+#if defined(_WIN32)
+
+[[nodiscard]] std::optional<unsigned> terminalWidthOf(std::FILE* stream) {
+  const auto handle =
+      reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(_get_osfhandle(_fileno(stream))));
+  if (handle == INVALID_HANDLE_VALUE) {
+    return std::nullopt;
+  }
+  CONSOLE_SCREEN_BUFFER_INFO info{};
+  if (GetConsoleScreenBufferInfo(handle, &info) == 0) {
+    return std::nullopt;
+  }
+  // The *window*, not the buffer: a buffer is often wider than the window that
+  // shows part of it, and wrapping to the buffer produces lines the user cannot
+  // see the end of. A window with no width (a hidden console) is no answer.
+  const int columns = info.srWindow.Right - info.srWindow.Left + 1;
+  if (columns <= 0) {
+    return std::nullopt;
+  }
+  return static_cast<unsigned>(columns);
+}
+
+#else
+
+[[nodiscard]] std::optional<unsigned> terminalWidthOf(std::FILE* stream) {
+  if (!isTerminal(stream)) {
+    return std::nullopt;
+  }
+  ::winsize size{};
+  if (::ioctl(::fileno(stream), TIOCGWINSZ, &size) != 0 || size.ws_col == 0) {
+    return std::nullopt;
+  }
+  return static_cast<unsigned>(size.ws_col);
+}
+
+#endif
+
 [[nodiscard]] bool supportsColor(std::FILE* stream) {
   if (colorDisabledByEnvironmentValue(environmentValue("NO_COLOR")) ||
       terminalIsDumbForValue(environmentValue("TERM"))) {
@@ -94,6 +160,45 @@ bool stdoutSupportsColor() {
 
 bool stderrSupportsColor() {
   return supportsColor(stderr);
+}
+
+std::optional<ColorChoice> colorChoiceFromName(std::string_view name) {
+  if (name == "auto") {
+    return ColorChoice::Auto;
+  }
+  if (name == "always") {
+    return ColorChoice::Always;
+  }
+  if (name == "never") {
+    return ColorChoice::Never;
+  }
+  return std::nullopt;
+}
+
+const char* toString(ColorChoice choice) {
+  switch (choice) {
+  case ColorChoice::Auto:
+    return "auto";
+  case ColorChoice::Always:
+    return "always";
+  case ColorChoice::Never:
+    return "never";
+  }
+  return "auto";
+}
+
+unsigned terminalWidth(std::FILE* stream) {
+  // The terminal first and `COLUMNS` second would be the other order and it is
+  // the wrong one: a user who exported a width did it precisely because the
+  // program's guess was not what they wanted.
+  if (const std::optional<unsigned> fromEnvironment =
+          columnsFromEnvironment(environmentValue("COLUMNS"))) {
+    return *fromEnvironment;
+  }
+  if (const std::optional<unsigned> fromTerminal = terminalWidthOf(stream)) {
+    return *fromTerminal;
+  }
+  return kDefaultTerminalWidth;
 }
 
 } // namespace minc::support

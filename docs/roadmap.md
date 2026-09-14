@@ -600,11 +600,25 @@ the two cannot disagree about what the pipeline means.
 - [x] tty detection and `NO_COLOR` (and `TERM=dumb`) in `support/term`, with the
       renderer's colors wired to it per stream, so a pipe or a log file gets
       plain text and no command has to ask
-- [ ] The `--color` **override flag** (`auto`/`always`/`never`): the detection is
-      shipped, the way to contradict it is not
+- [x] The `--color` **override flag** (`auto`/`always`/`never`). The precedence
+      is stated once and tested: `never` beats everything, `always` beats
+      `NO_COLOR` and `TERM=dumb`, and `auto` is the detection above
 - [ ] `-ferror-limit` and a "too many errors" path using `kMaxDiagnostics`
-- [ ] `--version` printing version, host, and target triple: today it prints
-      `mincc 0.1.0` and stops there
+- [x] `-vV` printing version, host, default target triple and the LLVM version
+      compiled against — the block a bug report needs. `-V` alone stays one line,
+      because that is what a script parses
+- [x] **The command line as data** (`driver/command_spec.*`), read by the parser
+      and by the help renderer both, with a test that walks the table in both
+      directions: every option a page lists is accepted, and every option the
+      parser accepts is on a page. The class of bug it kills is the hand-written
+      help beside the hand-written parser, drifting one option at a time
+- [x] **Help per command** (`driver/help_render.*`, `driver/help_text.*`): all six
+      spellings (`mincc`, `-h`, `--help`, `help`, `help <cmd>`, `<cmd> --help`),
+      a page that is grouped and width-aware (`COLUMNS` → `ioctl`/console → 80)
+      rather than pre-aligned, and `did you mean` for a misspelled command or
+      option (`driver/suggest.*`). An option passed to a command that does not
+      take it names the command that does, and points at its page
+- [x] Reference for all of it written down in `docs/architectures/cli.md`
 - [ ] `[?]` Incremental compilation / on-disk cache
 
 ## 10. Language extras

@@ -399,7 +399,8 @@ namespace {
   request.warnConversion = options.warnConversion;
   request.warnUnused = options.warnUnused;
   request.warnShadow = options.warnShadow;
-  request.diagnosticColor = support::colorModeFrom(support::stderrSupportsColor());
+  request.diagnosticColor =
+      support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
   request.kind = *kind;
   request.level = *level;
   request.output = options.output;

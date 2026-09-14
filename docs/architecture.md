@@ -8,8 +8,9 @@ callers, and what it is allowed to depend on.
 
 ```
 mincc                      driver: argv -> exit code
-  └── minc_driver          cli / help_text / error_report / input_source
-        │                  lex / pp / parse / resolve commands
+  └── minc_driver          command_spec / cli / help_render / help_text
+        │                  suggest / error_report / input_source
+        │                  lex / pp / parse / resolve / check / ir / build
         ├── minc_support
         ├── minc_lex
         ├── minc_lex_report
@@ -432,19 +433,47 @@ Design record: [`architectures/parser.md`](architectures/parser.md).
 
 ### `driver`
 
-- `cli.h`: `parseArgs` is pure — it never prints, exits, or throws. The first
-  positional argument names the subcommand, `--` ends option parsing, `-` is a
-  file rather than an option, and one shared command table feeds the parser,
-  the error messages, and the help text so they cannot disagree. Each row also
-  says whether the command is implemented, and the help derives its
-  "Implemented"/"Scaffolded" lists from that, so help can never advertise a
-  command the dispatch still refuses.
+- `command_spec.h` / `.cc`: **the command line as data**, and the reason the help
+  and the parser cannot drift. `OptionSpec` rows state a name, a short letter,
+  whether a value is taken, the one-line description, the default and the
+  permitted values; `OptionGroup`s hold *ids*, so a group is a list of rows read
+  from the other side; `CommandSpec` carries the usage lines, the paragraphs, the
+  examples and the option set; `ProgramSpec` carries the overview. `cli.cc` reads
+  it to decide what it is looking at and `help_render.cc` reads it to print a
+  page, so a name or a description exists once. The relationships are **total in
+  both directions**: the parser's `switch` over `OptionId` has no `default`, so
+  the compiler proves every row is handled (`-Wswitch`, and CI builds warnings as
+  errors), and a test walks the table the other way — every option a command's
+  groups name is accepted by that command, every option the command accepts is in
+  its groups, and every name in a `See also` is a command that exists. Design
+  record: [`architectures/cli.md`](architectures/cli.md).
+- `cli.h`: `parseArgs` is pure — it never prints, exits, or throws — and is
+  **dirigido pela tabela**: no option is understood that is not a row, and an
+  option of another command is refused rather than ignored. The first positional
+  names the subcommand, `--` ends option parsing, `-` is a file, and `-h`/`-V`
+  outrank any other problem on the line so `mincc --nosuch -h` still prints the
+  page. The `help` command is deliberately *not* covered by that rule: it is an
+  ordinary command that took an argument, so `mincc help buidl` is a usage error
+  and not a page. Each row also says whether its command is implemented, and the
+  overview derives the "(not implemented yet)" marker from that rather than
+  naming commands in prose.
+- `help_render.h` / `.cc`: the renderer, pure and width-aware. One function
+  serves the overview and one a single command's page, from `COLUMNS` →
+  `ioctl`/`GetConsoleScreenBufferInfo` → 80 (in `support/term`, not here), so
+  text is wrapped rather than pre-aligned by hand. ASCII-only, and the alignment
+  is derived from the rows it is about to print.
+- `suggest.h` / `.cc`: the nearest name to an unknown command or option, for the
+  `did you mean` note. Bounded edit distance over the spellings the table lists,
+  so the suggestion can only name something that exists.
 - `error_report.h`: the one way a driver-level error is written. Every
-  subcommand uses it, so the prefix, the hint, and the exit code are identical
-  whichever command hit the problem. Each function also has a stream-taking
-  form, which is what pins the exact text in a test and lets a command that is
-  handed its streams report through the same code path.
-- `help_text.h`: ASCII-only output, built from that same table.
+  subcommand uses it, so the prefix, the optional suggestion, the hint and the
+  exit code are identical whichever command hit the problem. Each function also
+  has a stream-taking form, which is what pins the exact text in a test and lets
+  a command that is handed its streams report through the same code path.
+- `help_text.h`: the I/O side of help — which stream and which exit code. It
+  dispatches the six spellings a CLI of this kind has to answer (`mincc`,
+  `--help`, `-h`, `help`, `help <cmd>`, `<cmd> --help`) onto the two renderings.
+  Diagnostics go to stderr and pages to stdout.
 - `exit_code.h`: the process contract — `0` success, `1` failure, `2` usage.
 - `lex_command.h`: the `lex` subcommand. Token dump on stdout, diagnostics on
   stderr, and each stream picks its own `ColorMode`, so a redirected stdout

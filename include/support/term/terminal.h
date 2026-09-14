@@ -10,6 +10,9 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
+#include <optional>
+#include <string_view>
 
 namespace minc::support {
 
@@ -34,7 +37,7 @@ enum class ColorMode : std::uint8_t {
 [[nodiscard]] bool stdoutSupportsColor();
 [[nodiscard]] bool stderrSupportsColor();
 
-// The two environment rules as pure predicates, so the behavior is testable
+// The environment rules as pure predicates, so the behavior is testable
 // without a terminal and without mutating the process environment.
 //
 // `noColorValue` is the value of NO_COLOR, or nullptr when it is unset. Per the
@@ -53,5 +56,42 @@ enum class ColorMode : std::uint8_t {
 [[nodiscard]] constexpr ColorMode colorModeFrom(bool supportsColor) {
   return supportsColor ? ColorMode::Ansi : ColorMode::Plain;
 }
+
+// What the *user* asked for, before the environment and the stream have a say.
+// `--color=auto|always|never`, in the spelling every tool uses.
+enum class ColorChoice : std::uint8_t {
+  Auto,   // the stream decides
+  Always, // an explicit yes, and it beats NO_COLOR: the only way to color a file
+  Never,  // an explicit no, and nothing beats it
+};
+
+[[nodiscard]] std::optional<ColorChoice> colorChoiceFromName(std::string_view name);
+[[nodiscard]] const char* toString(ColorChoice choice);
+
+// The precedence, in one place, in the order it applies: an explicit `never`
+// wins over everything, an explicit `always` wins over the environment, and
+// `auto` is what the stream and the environment already answered.
+[[nodiscard]] constexpr ColorMode colorModeFrom(bool supportsColor, ColorChoice choice) {
+  switch (choice) {
+  case ColorChoice::Never:
+    return ColorMode::Plain;
+  case ColorChoice::Always:
+    return ColorMode::Ansi;
+  case ColorChoice::Auto:
+    break;
+  }
+  return colorModeFrom(supportsColor);
+}
+
+// The width help output may use, in columns.
+//
+// `COLUMNS` first: an explicit answer from the user or the shell beats a guess,
+// and it is the only way to make output deterministic in a test or a pipe. Then
+// the terminal itself -- `ioctl(TIOCGWINSZ)` on POSIX, `GetConsoleScreenBufferInfo`
+// on Windows -- which is asked here so no other module has to know how. A
+// stream that is not a terminal, a query that fails and a value of zero all
+// fall back to `kDefaultTerminalWidth`, because a width of zero is not a width.
+inline constexpr unsigned kDefaultTerminalWidth = 80;
+[[nodiscard]] unsigned terminalWidth(std::FILE* stream);
 
 } // namespace minc::support

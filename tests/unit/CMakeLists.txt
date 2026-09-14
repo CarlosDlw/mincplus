@@ -100,6 +100,9 @@ minc_add_executable(minc_unit_tests
     ir/invariants_test.cc
     ir/llvm_isolation_test.cc
     driver/cli_test.cc
+    driver/command_spec_test.cc
+    driver/help_render_test.cc
+    driver/suggest_test.cc
     driver/error_report_test.cc
     driver/lex_command_test.cc
     driver/parse_command_test.cc

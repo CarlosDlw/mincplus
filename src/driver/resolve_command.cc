@@ -292,7 +292,8 @@ int runResolve(const CliOptions& options) {
   request.warnUnused = options.warnUnused;
   request.warnShadow = options.warnShadow;
   request.at = options.at;
-  request.diagnosticColor = support::colorModeFrom(support::stderrSupportsColor());
+  request.diagnosticColor =
+      support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
   return resolveInputs(request, std::cout, std::cerr);
 }
 

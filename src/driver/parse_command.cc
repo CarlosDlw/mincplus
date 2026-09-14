@@ -129,8 +129,9 @@ int runParse(const CliOptions& options) {
   request.showTrivia = !options.hideTrivia;
   // Color is decided per stream: a redirected stdout must stay clean even when
   // the terminal the user is watching can render colors on stderr.
-  request.dumpColor = support::colorModeFrom(support::stdoutSupportsColor());
-  request.diagnosticColor = support::colorModeFrom(support::stderrSupportsColor());
+  request.dumpColor = support::colorModeFrom(support::stdoutSupportsColor(), options.colorChoice);
+  request.diagnosticColor =
+      support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
   return parseInputs(request, std::cout, std::cerr);
 }
 

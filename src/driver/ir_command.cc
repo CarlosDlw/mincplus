@@ -103,7 +103,8 @@ int runIr(const CliOptions& options) {
   request.warnConversion = options.warnConversion;
   request.warnUnused = options.warnUnused;
   request.warnShadow = options.warnShadow;
-  request.diagnosticColor = support::colorModeFrom(support::stderrSupportsColor());
+  request.diagnosticColor =
+      support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
   request.debugInfo = options.debugInfo;
   return irInputs(request, std::cout, std::cerr);
 }

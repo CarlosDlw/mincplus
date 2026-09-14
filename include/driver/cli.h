@@ -1,51 +1,57 @@
 // Copyright (c) 2026 minc+ contributors.
 // SPDX-License-Identifier: MIT
-// Command-line parsing for `mincc`.
+// Command-line parsing for `mincc`, which is a reader of the spec table.
 //
-// parseArgs is pure: it never prints, never exits, and never throws. I/O and
-// exit codes live in help_text.h/main.cc so the parser stays trivially
-// testable and reusable.
+// `parseArgs` is pure: it never prints, never exits, and never throws. It also
+// never *decides* what a command accepts -- `command_spec.h` does, and this file
+// reads it. I/O and exit codes live in `help_text.h` and `main.cc`, so the
+// parser stays trivially testable and reusable.
+//
+// Three of its rules are worth stating because they are deliberate and a test
+// pins each one:
+//
+//  - **Anything `-h`/`--help` can be found in, it is found in**, before any
+//    other argument can become an error, and a `--` stops that search: the
+//    guide every CLI follows asks that `-h` work at the end of a broken command
+//    line. `-h` is never overloaded to mean something else.
+//  - **An option that belongs to another command is an error, not a no-op.**
+//    `mincc lex --emit obj` was silently ignored before; an option accepted and
+//    then ignored is worse than one refused, because the user believes it did
+//    something.
+//  - **A value is taken from the next argument only when the spec says the value
+//    is required.** `-O` is the case that makes this matter: `-O` alone is one
+//    level and must not eat the file name after it.
 #pragma once
 
-#include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "driver/command_spec.h"
+#include "support/term/terminal.h"
+
 namespace minc::driver {
 
-// Subcommands the driver understands. Anything else is a usage error.
-enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp, Resolve, Ir };
-
-// Name, argument shape, and one-line description of a subcommand. Kept in one
-// table so the parser, error messages, and help text cannot drift apart.
-struct CommandInfo {
-  Command command;
-  std::string_view name;
-  std::string_view args;
-  std::string_view summary;
-  // Whether the command does anything yet. Help derives its "implemented" list
-  // from this instead of naming commands in prose, so a command cannot be
-  // advertised as working while the dispatch still refuses it.
-  bool implemented;
-};
-
-[[nodiscard]] std::span<const CommandInfo> allCommands();
-[[nodiscard]] const char* toString(Command command);
-[[nodiscard]] std::optional<Command> commandFromName(std::string_view name);
-
 struct CliOptions {
+  // `--help`/`-h`, or the `help` command. `helpTopic` is the command the topic
+  // was about, when one was named and it exists.
   bool showHelp = false;
+  std::optional<Command> helpTopic;
   bool showVersion = false;
+  // Nothing but the program name was given. Not the same as "help was asked
+  // for": the text is the same and the stream and exit code are not.
+  bool emptyCommandLine = false;
+  // `--color=auto|always|never`.
+  support::ColorChoice colorChoice = support::ColorChoice::Auto;
+
   // `--no-trivia`: leave whitespace and comments out of dump output. It is a
   // display filter, not a lexer mode -- the token stream keeps every byte
-  // either way -- so it is a global option rather than a per-command one.
+  // either way -- so it is an option of the commands that print tokens.
   bool hideTrivia = false;
   std::optional<Command> command;
-  std::vector<std::string> inputs; // files and pass-through arguments
+  std::vector<std::string> inputs; // files, and standard input as `-`
   // Preprocessor inputs, in the order they were written: order is meaning, both
   // for `-D`/`-U` (a later one wins) and for `-I` (the search order).
   std::vector<std::string> defines;
@@ -64,21 +70,18 @@ struct CliOptions {
   // meaningful (every use, with the unresolved ones marked), so not one enum.
   bool showRefs = false;
   bool showUnresolved = false;
-  // `--ast`: print the lowered AST instead of the scope/def tables. For `check`
-  // it is the *typed* tree, which has a type on every node.
+  // `--ast`: print the tree instead of the tables. For `check` it is the *typed*
+  // tree, which has a type on every node.
   bool showAst = false;
   // `--types`: print only the type table.
   bool showTypes = false;
-  // `--stats`: one summary line per input, and no tables. `check` prints
-  // nothing on success without it.
+  // `--stats`: one summary line per input, and no tables. `check` prints nothing
+  // on success without it.
   bool stats = false;
-  // `--target`: the ABI the C type spellings and the layout are read against.
-  // A triple, resolved through `sema/target.h`, so a target can only mean the row
-  // that table states for it. The spelling here is the default triple, and the
-  // parser deliberately does not include `sema` for one constant -- a test
-  // asserts this string equals `sema::kDefaultTriple`, so the duplication is
-  // checked rather than trusted.
-  std::string target = "x86_64-unknown-linux-gnu";
+  // `--target`: the ABI the C type spellings and the layout are read against. A
+  // triple, resolved through `sema/target.h`, so a target can only mean the row
+  // that table states for it.
+  std::string target;
   // `-Wunused`, `-Wshadow`. Off by default, like every other warning here: a
   // compiler that warns about ordinary code teaches people to ignore it.
   bool warnUnused = false;
@@ -97,13 +100,14 @@ struct CliOptions {
   // `-g`. Debug information; see `codegen.md` § *Debug information*.
   bool debugInfo = false;
   // `-v`. Print the exact commands the build runs, which is the first thing a
-  // reader wants after a link failure.
+  // reader wants after a link failure. With `--version`, the version becomes the
+  // block a bug report needs.
   bool verbose = false;
   // `-o PATH`. Empty means the command's default, which differs per emit kind, so
   // the choice is made where the emit kind is known and not here.
   std::string output;
-  // `-O`. Stored as the letter(s) after the `-O` (`"2"`, `"s"`, `"z"`), because
-  // the spelling and its meaning are one thing and `backend` validates it.
+  // `-O`. Stored as the letters after the `-O` (`"2"`, `"s"`, `"z"`), because the
+  // spelling and its meaning are one thing and `backend` validates it.
   std::string optLevel = "0";
   // `--emit KIND`: `exe`, `obj`, `asm`. Validated by the command, which is where
   // the sentence for an unknown kind can name the ones that exist.
@@ -125,9 +129,15 @@ struct CliOptions {
   bool sawDoubleDash = false;
 
   std::string error; // non-empty => usage error; ignore the rest
+  // A spelling to offer with the error, empty when nothing was close enough.
+  std::string suggestion;
 };
 
 // Parses argv[1..argc). Accepts a possibly-null argv[i] (some CRTs allow it).
+//
+// `target` is filled with the compiler's default triple when no `--target` was
+// given, which is the same constant `sema` validates against -- one spelling,
+// read from that table rather than restated here.
 [[nodiscard]] CliOptions parseArgs(int argc, const char* const* argv);
 
 // `-D name[=body]`, written as one string, split into the pairs the preprocessor

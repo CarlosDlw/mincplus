@@ -6,11 +6,12 @@
 #include <gtest/gtest.h>
 
 #include "driver/cli.h"
+#include "driver/command_spec.h"
 #include "driver/exit_code.h"
 #include "driver/help_text.h"
 #include "driver/version.h"
-// Only for `kDefaultTriple`: the parser does not include `sema` for one
-// constant, and this test is what keeps the two spellings equal.
+// For `kDefaultTriple`: the parser fills `--target`'s default from that table,
+// and this test is what keeps the two from drifting.
 #include "sema/target.h"
 
 namespace minc::driver {
@@ -21,6 +22,8 @@ CliOptions parse(std::vector<const char*> argv) {
   return parseArgs(static_cast<int>(argv.size()), argv.data());
 }
 
+// --- the shape of a command line --------------------------------------------
+
 TEST(CliTest, DefaultsEmpty) {
   const CliOptions opts = parse({});
   EXPECT_FALSE(opts.showHelp);
@@ -28,6 +31,13 @@ TEST(CliTest, DefaultsEmpty) {
   EXPECT_FALSE(opts.command.has_value());
   EXPECT_TRUE(opts.inputs.empty());
   EXPECT_TRUE(opts.error.empty());
+}
+
+TEST(CliTest, AnEmptyCommandLineIsRecordedAsSuch) {
+  // The text printed for `mincc` and for `mincc --help` is the same; the stream
+  // and the exit code are not, and this is the flag that tells them apart.
+  EXPECT_TRUE(parse({}).emptyCommandLine);
+  EXPECT_FALSE(parse({"--help"}).emptyCommandLine);
 }
 
 TEST(CliTest, HelpAndVersionFlags) {
@@ -48,11 +58,11 @@ TEST(CliTest, CommandTakesFollowingInputs) {
 }
 
 TEST(CliTest, EveryCommandNameParses) {
-  for (const CommandInfo& info : allCommands()) {
-    const CliOptions opts = parse({std::string(info.name).c_str()});
-    ASSERT_TRUE(opts.command.has_value()) << info.name;
-    EXPECT_EQ(*opts.command, info.command);
-    EXPECT_STREQ(toString(info.command), std::string(info.name).c_str());
+  for (const CommandSpec& spec : allCommands()) {
+    const CliOptions opts = parse({std::string(spec.name).c_str()});
+    ASSERT_TRUE(opts.command.has_value()) << spec.name;
+    EXPECT_EQ(*opts.command, spec.command);
+    EXPECT_STREQ(toString(spec.command), std::string(spec.name).c_str());
   }
 }
 
@@ -60,16 +70,135 @@ TEST(CliTest, UnknownCommandIsAnError) {
   const CliOptions opts = parse({"bulid"});
   EXPECT_FALSE(opts.command.has_value());
   EXPECT_NE(opts.error.find("unknown command 'bulid'"), std::string::npos);
+  // The spelling is one edit from a command that exists, so it is offered.
+  EXPECT_EQ(opts.suggestion, "build");
 }
 
-TEST(CliTest, UnknownOptionIsAnError) {
-  const CliOptions opts = parse({"--nope"});
-  EXPECT_NE(opts.error.find("unrecognized option '--nope'"), std::string::npos);
+TEST(CliTest, AFileWhereACommandBelongsSuggestsTheCommand) {
+  // `mincc main.mx` is the mistake this catches, and the useful answer is a whole
+  // command line rather than a command name.
+  const CliOptions opts = parse({"main.mx"});
+  EXPECT_NE(opts.error.find("unknown command 'main.mx'"), std::string::npos);
+  EXPECT_NE(opts.suggestion.find("run"), std::string::npos);
+  EXPECT_NE(opts.suggestion.find("main.mx"), std::string::npos);
 }
 
-// `-isystem` keeps its own list rather than joining `-I`: the two have different
-// search order and the files found in the second are system headers, so merging
-// them would lose the distinction the flag exists to make.
+TEST(CliTest, UnknownOptionIsAnErrorAndSuggestsTheNearest) {
+  const CliOptions opts = parse({"build", "--targt", "x", "a.mx"});
+  EXPECT_NE(opts.error.find("unrecognized option '--targt'"), std::string::npos);
+  EXPECT_EQ(opts.suggestion, "--target");
+}
+
+TEST(CliTest, UnknownOptionWithoutANearNeighbourSuggestsNothing) {
+  const CliOptions opts = parse({"build", "--completely-unrelated", "a.mx"});
+  EXPECT_TRUE(opts.suggestion.empty());
+}
+
+TEST(CliTest, HelpWinsOverEverythingAfterIt) {
+  // The rule from the CLI guidelines: `-h` works at the end of a broken line.
+  for (const std::vector<const char*>& argv : std::vector<std::vector<const char*>>{
+           {"build", "--nosuch", "-h"}, {"--nosuch", "--help"}, {"lex", "--emit", "obj", "-h"}}) {
+    const CliOptions opts = parse(argv);
+    EXPECT_TRUE(opts.error.empty()) << argv[0];
+    EXPECT_TRUE(opts.showHelp);
+  }
+}
+
+TEST(CliTest, HelpWinsOverCommand) {
+  const CliOptions opts = parse({"build", "--help", "foo.mx"});
+  EXPECT_TRUE(opts.showHelp);
+  ASSERT_TRUE(opts.command.has_value());
+  EXPECT_EQ(*opts.command, Command::Build);
+}
+
+TEST(CliTest, MissingCommandIsNotAParserError) {
+  const CliOptions opts = parse({});
+  EXPECT_TRUE(opts.error.empty());
+  EXPECT_FALSE(opts.command.has_value());
+}
+
+TEST(CliTest, NullArgumentIsSkipped) {
+  const CliOptions opts = parse({"build", nullptr, "foo.mx"});
+  ASSERT_TRUE(opts.command.has_value());
+  ASSERT_EQ(opts.inputs.size(), 1u);
+  EXPECT_EQ(opts.inputs[0], "foo.mx");
+}
+
+// --- the `help` command ------------------------------------------------------
+
+TEST(CliTest, HelpCommandTakesAnOptionalTopic) {
+  const CliOptions bare = parse({"help"});
+  EXPECT_TRUE(bare.showHelp);
+  EXPECT_TRUE(bare.error.empty());
+  EXPECT_FALSE(bare.helpTopic.has_value());
+  EXPECT_FALSE(bare.command.has_value());
+
+  const CliOptions topic = parse({"help", "build"});
+  EXPECT_TRUE(topic.showHelp);
+  EXPECT_TRUE(topic.error.empty());
+  ASSERT_TRUE(topic.helpTopic.has_value());
+  EXPECT_EQ(*topic.helpTopic, Command::Build);
+}
+
+TEST(CliTest, HelpCommandWithAnUnknownTopicIsAnError) {
+  const CliOptions opts = parse({"help", "buidl"});
+  EXPECT_NE(opts.error.find("unknown command 'buidl'"), std::string::npos);
+  EXPECT_EQ(opts.suggestion, "build");
+}
+
+TEST(CliTest, HelpCommandRefusesASecondName) {
+  const CliOptions opts = parse({"help", "build", "check"});
+  EXPECT_NE(opts.error.find("one command name"), std::string::npos);
+}
+
+// --- options and the command that owns them ---------------------------------
+
+TEST(CliTest, AnOptionOfAnotherCommandIsRefusedRatherThanIgnored) {
+  // `mincc lex --emit obj` used to be accepted and silently dropped.
+  const CliOptions opts = parse({"lex", "--emit", "obj", "a.mx"});
+  EXPECT_NE(opts.error.find("'--emit' is not an option of 'lex'"), std::string::npos);
+  EXPECT_NE(opts.error.find("build"), std::string::npos);
+}
+
+TEST(CliTest, ACommandOptionBeforeTheCommandIsAccepted) {
+  // The option set is checked once the command is known, so the order on the
+  // line is free -- which is what makes `mincc -g build a.mx` work.
+  const CliOptions opts = parse({"-g", "build", "a.mx"});
+  EXPECT_TRUE(opts.error.empty());
+  EXPECT_TRUE(opts.debugInfo);
+  ASSERT_TRUE(opts.command.has_value());
+  EXPECT_EQ(*opts.command, Command::Build);
+}
+
+TEST(CliTest, ACommandOptionWithNoCommandNamesTheCommandsThatHaveIt) {
+  const CliOptions opts = parse({"--emit", "obj"});
+  EXPECT_NE(opts.error.find("name the command first"), std::string::npos);
+  EXPECT_NE(opts.error.find("build"), std::string::npos);
+}
+
+TEST(CliTest, LexTakesNoOptions) {
+  const CliOptions opts = parse({"lex", "--tokens-only"});
+  EXPECT_NE(opts.error.find("unrecognized option '--tokens-only'"), std::string::npos);
+}
+
+TEST(CliTest, TheWarningAFrontEndCommandDoesNotTakeIsRefused) {
+  // `resolve` lints names and does not type-check, so `-Wconversion` is not one
+  // of its options; `check` is where it means something.
+  const CliOptions resolve = parse({"resolve", "-Wconversion", "a.mx"});
+  EXPECT_NE(resolve.error.find("-Wconversion"), std::string::npos);
+  const CliOptions check = parse({"check", "-Wconversion", "a.mx"});
+  EXPECT_TRUE(check.error.empty());
+  EXPECT_TRUE(check.warnConversion);
+}
+
+TEST(CliTest, UnknownWarningOptionIsItsOwnMessage) {
+  const CliOptions opts = parse({"check", "-Wshadoww", "a.mx"});
+  EXPECT_NE(opts.error.find("unknown warning option '-Wshadoww'"), std::string::npos);
+  EXPECT_EQ(opts.suggestion, "-Wshadow");
+}
+
+// --- values -----------------------------------------------------------------
+
 TEST(CliTest, IsystemTakesItsValueJoinedOrSeparate) {
   const CliOptions joined = parse({"pp", "-isystem/sys", "a.mx"});
   ASSERT_TRUE(joined.error.empty());
@@ -98,6 +227,96 @@ TEST(CliTest, IncludeAndSystemListsKeepTheirOwnOrder) {
   EXPECT_EQ(opts.systemDirs[0], "two");
 }
 
+TEST(CliTest, TheOptimisationLevelIsOptionalAndNeverEatsTheNextArgument) {
+  // `-O` is the one option whose value is optional, and the distinction matters:
+  // a `-O` that took the next argument would compile `a.mx` at level "a.mx".
+  const CliOptions bare = parse({"build", "-O", "a.mx"});
+  ASSERT_TRUE(bare.error.empty());
+  EXPECT_EQ(bare.optLevel, "1");
+  ASSERT_EQ(bare.inputs.size(), 1u);
+  EXPECT_EQ(bare.inputs[0], "a.mx");
+
+  EXPECT_EQ(parse({"build", "-O2", "a.mx"}).optLevel, "2");
+  EXPECT_EQ(parse({"build", "-Oz", "a.mx"}).optLevel, "z");
+}
+
+TEST(CliTest, JoinedAndSeparateValuesAgree) {
+  const CliOptions joined = parse({"build", "-DFOO=1", "-Iinc", "-oout", "a.mx"});
+  ASSERT_TRUE(joined.error.empty());
+  ASSERT_EQ(joined.defines.size(), 1u);
+  EXPECT_EQ(joined.defines[0], "FOO=1");
+  EXPECT_EQ(joined.includeDirs[0], "inc");
+  EXPECT_EQ(joined.output, "out");
+
+  const CliOptions separate = parse({"build", "-D", "FOO=1", "-I", "inc", "-o", "out", "a.mx"});
+  ASSERT_TRUE(separate.error.empty());
+  EXPECT_EQ(separate.defines[0], "FOO=1");
+  EXPECT_EQ(separate.includeDirs[0], "inc");
+  EXPECT_EQ(separate.output, "out");
+}
+
+TEST(CliTest, ALongOptionRefusesAValueItDoesNotTake) {
+  const CliOptions opts = parse({"build", "--help=yes", "a.mx"});
+  EXPECT_NE(opts.error.find("does not take a value"), std::string::npos);
+}
+
+// --- clusters ---------------------------------------------------------------
+
+TEST(CliTest, TheVersionClusterSetsBothFlags) {
+  for (const char* spelling : {"-vV", "-Vv", "-vvV"}) {
+    const CliOptions opts = parse({spelling});
+    EXPECT_TRUE(opts.showVersion) << spelling;
+    EXPECT_TRUE(opts.verbose) << spelling;
+    EXPECT_TRUE(opts.error.empty()) << spelling;
+  }
+}
+
+TEST(CliTest, TheVersionFlagBesideVerboseAlsoGivesTheBlock) {
+  // `-V -v` is not a cluster, but `-V` is a flag that outranks the command
+  // rules, so the `-v` beside it is carried instead of being refused for
+  // belonging to `build` and `run`.
+  const CliOptions opts = parse({"-V", "-v"});
+  EXPECT_TRUE(opts.showVersion);
+  EXPECT_TRUE(opts.verbose);
+  EXPECT_TRUE(opts.error.empty());
+}
+
+TEST(CliTest, AClusterOfValueLessFlagsIsAccepted) {
+  const CliOptions opts = parse({"build", "-vg", "a.mx"});
+  ASSERT_TRUE(opts.error.empty());
+  EXPECT_TRUE(opts.verbose);
+  EXPECT_TRUE(opts.debugInfo);
+}
+
+TEST(CliTest, AClusterThatWouldNeedAValueIsRefused) {
+  // `-vo out`: which letter takes the value is a guess, and a CLI that guesses
+  // is inventing grammar.
+  const CliOptions opts = parse({"build", "-vo", "out", "a.mx"});
+  EXPECT_FALSE(opts.error.empty());
+}
+
+// --- colour -----------------------------------------------------------------
+
+TEST(CliTest, ColourDefaultsToAutoAndIsCarried) {
+  EXPECT_EQ(parse({"check", "a.mx"}).colorChoice, support::ColorChoice::Auto);
+
+  const CliOptions never = parse({"--color=never", "check", "a.mx"});
+  ASSERT_TRUE(never.error.empty());
+  EXPECT_EQ(never.colorChoice, support::ColorChoice::Never);
+
+  const CliOptions always = parse({"check", "--color", "always", "a.mx"});
+  ASSERT_TRUE(always.error.empty());
+  EXPECT_EQ(always.colorChoice, support::ColorChoice::Always);
+}
+
+TEST(CliTest, AnInvalidColourNamesTheValuesItTakes) {
+  const CliOptions opts = parse({"--color=maybe", "check", "a.mx"});
+  EXPECT_NE(opts.error.find("invalid value 'maybe'"), std::string::npos);
+  EXPECT_NE(opts.error.find("auto, always, never"), std::string::npos);
+}
+
+// --- positionals, `--`, and the program's own arguments ---------------------
+
 TEST(CliTest, LoneDashIsAFileNotAnOption) {
   const CliOptions opts = parse({"build", "-"});
   ASSERT_TRUE(opts.command.has_value());
@@ -113,65 +332,89 @@ TEST(CliTest, DoubleDashEndsOptionParsing) {
   EXPECT_TRUE(opts.error.empty());
 }
 
-TEST(CliTest, HelpWinsOverCommand) {
-  const CliOptions opts = parse({"build", "--help", "foo.mx"});
-  EXPECT_TRUE(opts.showHelp);
-  ASSERT_TRUE(opts.command.has_value());
-}
-
-TEST(CliTest, MissingCommandIsNotAParserError) {
-  const CliOptions opts = parse({});
-  EXPECT_TRUE(opts.error.empty());
-  EXPECT_FALSE(opts.command.has_value());
-}
-
-TEST(CliTest, NullArgumentIsSkipped) {
-  const CliOptions opts = parse({"build", nullptr, "foo.mx"});
-  ASSERT_TRUE(opts.command.has_value());
+TEST(CliTest, ADoubleDashInARunSendsEverythingAfterItToTheProgram) {
+  const CliOptions opts = parse({"run", "p.mx", "--", "-o", "--emit", "x"});
+  ASSERT_TRUE(opts.error.empty());
   ASSERT_EQ(opts.inputs.size(), 1u);
-  EXPECT_EQ(opts.inputs[0], "foo.mx");
+  EXPECT_EQ(opts.inputs[0], "p.mx");
+  ASSERT_EQ(opts.programArgs.size(), 3u);
+  EXPECT_EQ(opts.programArgs[0], "-o");
+  EXPECT_EQ(opts.programArgs[1], "--emit");
+  EXPECT_EQ(opts.programArgs[2], "x");
 }
 
-TEST(CliExitCodeTest, ValuesAreStable) {
-  EXPECT_EQ(exitCode(ExitCode::Ok), 0);
-  EXPECT_EQ(exitCode(ExitCode::Failure), 1);
-  EXPECT_EQ(exitCode(ExitCode::Usage), 2);
+TEST(CliTest, AProgramArgumentThatLooksLikeHelpIsNotHelp) {
+  // `mincc run p.mx -- -h` runs a program that is passed `-h`; the pre-scan stops
+  // at the separator for exactly this reason.
+  const CliOptions opts = parse({"run", "p.mx", "--", "-h"});
+  EXPECT_FALSE(opts.showHelp);
+  ASSERT_EQ(opts.programArgs.size(), 1u);
+  EXPECT_EQ(opts.programArgs[0], "-h");
 }
 
-TEST(HelpTextTest, ListsEveryCommand) {
+// --- the target --------------------------------------------------------------
+
+TEST(CliTest, TheTargetOptionIsCarriedAndDefaultsToTheDefaultTriple) {
+  const CliOptions defaults = parse({"check", "a.mx"});
+  EXPECT_EQ(defaults.target, std::string(sema::kDefaultTriple));
+
+  const CliOptions separate = parse({"check", "--target", "x86_64-pc-windows-msvc", "a.mx"});
+  ASSERT_TRUE(separate.error.empty());
+  EXPECT_EQ(separate.target, "x86_64-pc-windows-msvc");
+
+  const CliOptions joined = parse({"check", "--target=x86_64-pc-windows-msvc", "a.mx"});
+  ASSERT_TRUE(joined.error.empty());
+  EXPECT_EQ(joined.target, "x86_64-pc-windows-msvc");
+
+  // The *name* is validated by the command, which knows the table; the parser
+  // only guarantees it got a value.
+  const CliOptions nonsense = parse({"check", "--target", "nonsense", "a.mx"});
+  ASSERT_TRUE(nonsense.error.empty());
+  EXPECT_EQ(nonsense.target, "nonsense");
+
+  const CliOptions missing = parse({"check", "--target"});
+  EXPECT_FALSE(missing.error.empty());
+}
+
+// --- help text ---------------------------------------------------------------
+
+TEST(HelpTextTest, TheOverviewListsEveryCommand) {
   const std::string help = helpText();
-  for (const CommandInfo& info : allCommands()) {
-    EXPECT_NE(help.find(std::string(info.name)), std::string::npos) << info.name;
-    EXPECT_NE(help.find(std::string(info.summary)), std::string::npos) << info.name;
+  for (const CommandSpec& spec : allCommands()) {
+    EXPECT_NE(help.find(spec.brief), std::string::npos) << spec.name;
+    EXPECT_NE(help.find(spec.summary), std::string::npos) << spec.name;
   }
-  EXPECT_NE(help.find(usageLine()), std::string::npos);
 }
 
-TEST(HelpTextTest, StatesHostAndInteropPlatforms) {
+TEST(HelpTextTest, EveryCommandPageMentionsItsOwnOptions) {
+  for (const CommandSpec& spec : allCommands()) {
+    const std::string page = helpText(spec.command);
+    EXPECT_NE(page.find(spec.usage.front()), std::string::npos) << spec.name;
+    for (const OptionGroup& group : spec.groups) {
+      for (const OptionId id : group.ids) {
+        EXPECT_NE(page.find(optionById(id).name), std::string::npos)
+            << spec.name << " / " << optionById(id).name;
+      }
+    }
+  }
+}
+
+TEST(HelpTextTest, TheOverviewNamesTheTwoUsefulNextSteps) {
   const std::string help = helpText();
-  for (const char* host : {"Linux", "macOS", "Windows"}) {
-    EXPECT_NE(help.find(host), std::string::npos) << host;
-  }
-  for (const char* toolchain : {"Clang", "GCC", "MSVC"}) {
-    EXPECT_NE(help.find(toolchain), std::string::npos) << toolchain;
-  }
-  // The interop statement is about *how* C is reached, not about a promise to
-  // reproduce one ABI by hand: the link is driven by a C compiler driver.
-  EXPECT_NE(help.find("C interop"), std::string::npos);
-  EXPECT_NE(help.find("clang/cc/gcc"), std::string::npos);
-  // Every target the compiler states is named, so a reader does not have to run
-  // `--target nonsense` to learn the list.
-  for (const char* arch : {"x86_64", "aarch64", "riscv64", "i386"}) {
-    EXPECT_NE(help.find(arch), std::string::npos) << arch;
-  }
+  EXPECT_NE(help.find("mincc help <command>"), std::string::npos);
+  EXPECT_NE(help.find("Usage:"), std::string::npos);
 }
 
 TEST(HelpTextTest, IsAsciiOnly) {
-  // Windows consoles render non-ASCII poorly; keep this output plain.
-  for (const char c : helpText()) {
-    const auto byte = static_cast<unsigned char>(c);
-    EXPECT_TRUE(c == '\n' || (byte >= 0x20u && byte <= 0x7Eu))
-        << "non-printable byte 0x" << std::hex << static_cast<int>(byte);
+  // A Windows console with a legacy code page renders UTF-8 unpredictably, and a
+  // help page is the wrong place to find out.
+  for (const std::string& text :
+       {helpText(), helpText(Command::Build), versionLine(), usageLine(), versionBlock()}) {
+    for (const char c : text) {
+      const auto byte = static_cast<unsigned char>(c);
+      EXPECT_TRUE(c == '\n' || c == '\t' || (byte >= 0x20U && byte <= 0x7EU))
+          << "non-ASCII byte " << static_cast<int>(byte);
+    }
   }
 }
 
@@ -181,160 +424,20 @@ TEST(HelpTextTest, VersionLineNamesProgramAndVersion) {
   EXPECT_NE(line.find(kVersion), std::string::npos);
 }
 
-TEST(CliTest, LexTakesFilesAsInputs) {
-  const CliOptions opts = parse({"lex", "a.mx", "b.mx"});
-  ASSERT_TRUE(opts.command.has_value());
-  EXPECT_EQ(*opts.command, Command::Lex);
-  ASSERT_EQ(opts.inputs.size(), 2u);
-  EXPECT_EQ(opts.inputs[0], "a.mx");
-  EXPECT_EQ(opts.inputs[1], "b.mx");
-  EXPECT_TRUE(opts.error.empty());
+TEST(HelpTextTest, TheVersionBlockIsTheOneABugReportNeeds) {
+  const std::string block = versionBlock();
+  for (const char* key : {"binary:", "host:", "default target:", "LLVM:"}) {
+    EXPECT_NE(block.find(key), std::string::npos) << key;
+  }
+  // The host is LLVM's answer and it is never empty; a build that could not ask
+  // would print an empty value, which is the failure this pins.
+  EXPECT_NE(block.find(std::string(sema::kDefaultTriple)), std::string::npos);
 }
 
-TEST(CliTest, LexAcceptsStandardInputAsADash) {
-  const CliOptions opts = parse({"lex", "-"});
-  ASSERT_TRUE(opts.command.has_value());
-  ASSERT_EQ(opts.inputs.size(), 1u);
-  EXPECT_EQ(opts.inputs[0], "-");
-}
-
-TEST(CliTest, LexTakesNoOptions) {
-  // A flag the driver does not know is a usage error, not silently ignored.
-  const CliOptions opts = parse({"lex", "--tokens-only"});
-  EXPECT_NE(opts.error.find("unrecognized option '--tokens-only'"), std::string::npos);
-}
-
-// Reads the comma-separated command names listed after `label`.
-std::vector<std::string> namesAfter(const std::string& help, const std::string& label) {
-  std::vector<std::string> names;
-  const std::size_t at = help.find(label);
-  if (at == std::string::npos) {
-    return names;
-  }
-  std::size_t i = at + label.size();
-  std::string current;
-  for (; i < help.size() && help[i] != '\n'; ++i) {
-    if (help[i] == ',') {
-      names.push_back(current);
-      current.clear();
-      if (i + 1 < help.size() && help[i + 1] == ' ') {
-        ++i; // skip the space after the comma
-      }
-      continue;
-    }
-    current.push_back(help[i]);
-  }
-  names.push_back(current);
-  return names;
-}
-
-// Help derives the two lists from the command table, so a command cannot be
-// advertised as working while the dispatch still refuses it.
-TEST(HelpTextTest, ImplementedAndScaffoldedListsAreExact) {
-  const std::string help = helpText();
-  std::vector<std::string> implemented;
-  std::vector<std::string> scaffolded;
-  for (const CommandInfo& info : allCommands()) {
-    (info.implemented ? implemented : scaffolded).emplace_back(info.name);
-  }
-
-  EXPECT_EQ(namesAfter(help, "Implemented: "), implemented);
-  // Not one name is written in the text: the list starts with the first
-  // implemented command in the table's order, whatever that turns out to be.
-  ASSERT_FALSE(implemented.empty());
-  EXPECT_NE(help.find("Implemented: " + implemented.front()), std::string::npos);
-  // The scaffolded list is *derived*, so it may legitimately be empty -- every
-  // command is implemented today. An empty list prints as the literal `(none)`
-  // rather than as a trailing space, which is the regression this pins: a help
-  // text that ends a label with nothing after it reads as a truncated line.
-  if (scaffolded.empty()) {
-    EXPECT_NE(help.find("Scaffolded:  (none)"), std::string::npos);
-    EXPECT_EQ(help.find("Scaffolded commands"), std::string::npos);
-  } else {
-    EXPECT_EQ(namesAfter(help, "Scaffolded:  "), scaffolded);
-    EXPECT_NE(help.find("Scaffolded commands"), std::string::npos);
-  }
-}
-
-TEST(CliTest, TheTargetOptionIsCarriedAndDefaultsToTheDefaultTriple) {
-  {
-    const char* argv[] = {"mincc", "check", "a.mx"};
-    const CliOptions opts = parseArgs(3, argv);
-    EXPECT_EQ(opts.error, "");
-    // The parser spells the default itself and does not include `sema` for one
-    // constant; this is the test that keeps the two spellings equal.
-    EXPECT_EQ(opts.target, std::string(sema::kDefaultTriple));
-  }
-  {
-    const char* argv[] = {"mincc", "check", "--target", "x86_64-pc-windows-msvc", "a.mx"};
-    const CliOptions opts = parseArgs(5, argv);
-    EXPECT_EQ(opts.error, "");
-    EXPECT_EQ(opts.target, "x86_64-pc-windows-msvc");
-  }
-  {
-    // `--target=name` is the same thing, because half the world writes it that
-    // way and a CLI that accepts only one spelling is a paper cut.
-    const char* argv[] = {"mincc", "check", "--target=x86_64-pc-windows-msvc", "a.mx"};
-    const CliOptions opts = parseArgs(4, argv);
-    EXPECT_EQ(opts.error, "");
-    EXPECT_EQ(opts.target, "x86_64-pc-windows-msvc");
-  }
-  {
-    const char* argv[] = {"mincc", "check", "--target", "nonsense", "a.mx"};
-    const CliOptions opts = parseArgs(5, argv);
-    // The *name* is validated by the command, which knows the table; the parser
-    // only guarantees it got a value.
-    EXPECT_EQ(opts.error, "");
-    EXPECT_EQ(opts.target, "nonsense");
-  }
-  {
-    const char* argv[] = {"mincc", "check", "--target"};
-    const CliOptions opts = parseArgs(3, argv);
-    EXPECT_FALSE(opts.error.empty());
-  }
-}
-
-TEST(CliTest, TheConversionWarningIsOptInLikeTheOthers) {
-  {
-    const char* argv[] = {"mincc", "check", "a.mx"};
-    const CliOptions opts = parseArgs(3, argv);
-    EXPECT_FALSE(opts.warnConversion);
-  }
-  {
-    const char* argv[] = {"mincc", "check", "-Wconversion", "a.mx"};
-    const CliOptions opts = parseArgs(4, argv);
-    EXPECT_EQ(opts.error, "");
-    EXPECT_TRUE(opts.warnConversion);
-  }
-  {
-    const char* argv[] = {"mincc", "check", "--types", "a.mx"};
-    const CliOptions opts = parseArgs(4, argv);
-    EXPECT_EQ(opts.error, "");
-    EXPECT_TRUE(opts.showTypes);
-    EXPECT_FALSE(opts.stats);
-  }
-  {
-    // `--stats` is opt-in: `check` prints nothing on success without it.
-    const char* argv[] = {"mincc", "check", "a.mx"};
-    const CliOptions opts = parseArgs(3, argv);
-    EXPECT_FALSE(opts.stats);
-  }
-  {
-    const char* argv[] = {"mincc", "check", "--stats", "a.mx"};
-    const CliOptions opts = parseArgs(4, argv);
-    EXPECT_EQ(opts.error, "");
-    EXPECT_TRUE(opts.stats);
-  }
-}
-
-TEST(CliTest, LexIsMarkedImplementedInTheTable) {
-  const std::optional<Command> command = commandFromName("lex");
-  ASSERT_TRUE(command.has_value());
-  for (const CommandInfo& info : allCommands()) {
-    if (info.command == *command) {
-      EXPECT_TRUE(info.implemented);
-    }
-  }
+TEST(CliExitCodeTest, ValuesAreStable) {
+  EXPECT_EQ(exitCode(ExitCode::Ok), 0);
+  EXPECT_EQ(exitCode(ExitCode::Failure), 1);
+  EXPECT_EQ(exitCode(ExitCode::Usage), 2);
 }
 
 } // namespace

@@ -12,6 +12,7 @@
 # links `DiagBag`.
 minc_add_library(minc_backend
   SOURCES
+    build_info.cc
     diagnostics.cc
     target.cc
     codegen.cc

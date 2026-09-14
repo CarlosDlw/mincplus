@@ -2,77 +2,480 @@
 // SPDX-License-Identifier: MIT
 #include "driver/cli.h"
 
-#include <array>
+#include <cstddef>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "driver/suggest.h"
+#include "sema/target.h"
 
 namespace minc::driver {
 namespace {
 
-constexpr std::array<CommandInfo, 8> kCommands{{
-    // The first two commands that produce something other than a diagnostic, and
-    // the first that hand work to a linker: `build` emits objects and drives a C
-    // linker driver, `run` is `build` plus an `exec` (`codegen.md`).
-    {Command::Build, "build", "[options] <files...>",
-     "Compile and link an executable; -o, -O, -g, --emit, --target, -L, -l", true},
-    {Command::Run, "run", "[options] <files...> [-- args...]",
-     "Build a program and run it; everything after `--` goes to the program", true},
-    {Command::Check, "check", "[options] <files...>",
-     "Check only: type-check every unit; silent on success, no code is emitted", true},
-    // The three stages, each with the view it is responsible for, and the
-    // pipeline written out where a reader looks for it: `lex` is the raw bytes
-    // of one file (which is why a `#` is an error there), `pp` is the token
-    // stream of the translation unit, `parse` is the tree over that stream.
-    {Command::Lex, "lex", "<files...>", "Lex one file; raw tokens, no preprocessing", true},
-    {Command::Parse, "parse", "[options] <files...>",
-     "Preprocess and parse each file; print its syntax tree", true},
-    {Command::Pp, "pp", "[options] <files...>",
-     "Preprocess each file; -D/-U/-I, --defines, --includes, --deps, --at", true},
-    // `resolve` is the first command that looks at *meaning*: it lowers the tree,
-    // resolves every name, and prints the scopes and definitions. It is also the
-    // first consumer of the two stages after the parser, and the command that
-    // proves them.
-    {Command::Resolve, "resolve", "[options] <files...>",
-     "Resolve names; scopes/defs/refs, --ast, --refs, --unresolved, --at", true},
-    // `ir` is the first command past the front end: it lowers each checked unit
-    // to LLVM IR and prints the module, which is what makes the lowering
-    // reviewable and `make examples` a test of it.
-    {Command::Ir, "ir", "[options] <files...>",
-     "Lower each file to LLVM IR; print the module, --target selects the ABI", true},
-}};
+// One option the user typed, in the order it was typed. Collected first and
+// applied afterwards, because whether an option is even *allowed* depends on the
+// command, and the command may be named after it on the line.
+struct Occurrence {
+  OptionId id;
+  std::string value;
+};
 
-// A lone "-" and any argument not starting with '-' are positional. Doing this
-// by hand (instead of relying on getopt) keeps behaviour identical on every
-// platform, including Windows where getopt is absent.
-[[nodiscard]] bool isPositional(std::string_view arg) {
-  return arg.empty() || arg == "-" || arg.front() != '-';
+// The two flags that outrank everything else on the line, found before the parse
+// proper can turn any other argument into an error.
+//
+// This is `clig.dev`'s rule -- "you should be able to add -h to the end of
+// anything and it should show help" -- and it is a separate pass for one reason:
+// `mincc --nosuch -h` must print help, and a single pass that reports the first
+// problem it meets cannot.
+struct PreScan {
+  bool help = false;
+  bool version = false;
+  // `help` as the first positional: `mincc help build`, the git-like spelling the
+  // guide asks for, and the reason `help` is not a command of the table (it takes
+  // a command *name*, not a file).
+  bool helpCommand = false;
+  int helpWordIndex = -1;
+  // Whether help or version was asked for as a *flag*. This is the one thing that
+  // outranks a problem elsewhere on the line, and it is deliberately not the same
+  // as `showHelp`: `mincc --nosuch -h` prints the page because the flag outranks
+  // the unknown option, but `mincc help buidl` names a topic that does not exist
+  // and that is the whole answer. The `help` *command* is an ordinary command; its
+  // line still has to be valid.
+  bool flagForm = false;
+};
+
+// `-vV` and `-Vv`: a cluster of one-letter flags, accepted as a unit because
+// `rustc` made that spelling muscle memory for "the version block, verbose". A
+// general cluster rule lives in the parse proper; this one exists so the pre-scan
+// can see the version request before anything else can fail.
+[[nodiscard]] bool isVersionCluster(std::string_view arg) {
+  if (arg.size() < 3 || arg[0] != '-' || arg[1] == '-') {
+    return false;
+  }
+  bool sawVersion = false;
+  for (std::size_t index = 1; index < arg.size(); ++index) {
+    if (arg[index] == 'V') {
+      sawVersion = true;
+    } else if (arg[index] != 'v') {
+      return false;
+    }
+  }
+  return sawVersion;
+}
+
+// The words a positional could have been meant as, for the suggestion: the
+// options the command being typed actually accepts, or every option when no
+// command has been named yet.
+[[nodiscard]] std::span<const std::string_view> suggestionCandidates(const CliOptions& opts) {
+  return opts.command.has_value() ? optionNamesOf(*opts.command) : allOptionNames();
+}
+
+[[nodiscard]] std::string quoted(std::string_view text) {
+  return "'" + std::string(text) + "'";
+}
+
+// The owners of an option, as a phrase: "build and run", "check", "ir and build".
+[[nodiscard]] std::string ownersPhrase(OptionId id) {
+  std::vector<std::string_view> names;
+  for (const Command owner : ownersOf(id)) {
+    names.push_back(toString(owner));
+  }
+  std::string phrase;
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    if (index != 0) {
+      phrase += index + 1 == names.size() ? " and " : ", ";
+    }
+    phrase += names[index];
+  }
+  return phrase;
+}
+
+// The first owner, for a suggestion that names one page to read.
+[[nodiscard]] std::string firstOwner(OptionId id) {
+  const std::span<const Command> owners = ownersOf(id);
+  return owners.empty() ? std::string{} : std::string(toString(owners.front()));
+}
+
+void failUnknownOption(CliOptions& opts, std::string_view spelling) {
+  opts.error = "unrecognized option " + quoted(spelling);
+  if (const std::optional<std::string_view> near =
+          nearestName(suggestionCandidates(opts), spelling)) {
+    opts.suggestion = std::string(*near);
+  }
+}
+
+void failUnknownCommand(CliOptions& opts, std::string_view spelling) {
+  opts.error = "unknown command " + quoted(spelling);
+  if (const std::optional<std::string_view> near = nearestName(commandNames(), spelling)) {
+    opts.suggestion = std::string(*near);
+    return;
+  }
+  // A file where a command belongs is the mistake this catches: `mincc main.mx`.
+  // The guide's advice is to suggest the corrected command line rather than to run
+  // it, and there is only one sensible command to name here.
+  if (spelling.find('.') != std::string_view::npos) {
+    opts.suggestion = std::string(programSpec().name) + " run " + std::string(spelling);
+  }
+}
+
+[[nodiscard]] PreScan preScanArgs(int argc, const char* const* argv) {
+  PreScan prescan;
+  for (int i = 1; i < argc; ++i) {
+    const char* raw = argv != nullptr ? argv[i] : nullptr;
+    if (raw == nullptr || *raw == '\0') {
+      continue;
+    }
+    const std::string_view arg(raw);
+    if (arg == "--") {
+      // A program argument is not this compiler's: `mincc run p.mx -- -h` runs a
+      // program that is passed `-h`.
+      break;
+    }
+    if (arg == "-h" || arg == "--help") {
+      prescan.help = true;
+      prescan.flagForm = true;
+      continue;
+    }
+    if (arg == "-V" || arg == "--version" || isVersionCluster(arg)) {
+      prescan.version = true;
+      prescan.flagForm = true;
+      continue;
+    }
+    // `help` is only the help command as the *first* positional; anywhere else it
+    // is a file name, and the scan keeps looking for `-h` either way.
+    if (arg.front() != '-' && prescan.helpWordIndex < 0) {
+      if (arg == "help") {
+        prescan.help = true;
+        prescan.helpCommand = true;
+        prescan.helpWordIndex = i;
+      }
+      continue;
+    }
+  }
+  return prescan;
+}
+
+// The parse proper: everything except the two flags that outrank it.
+void parseInto(CliOptions& opts, const PreScan& prescan, int argc, const char* const* argv) {
+  const auto argumentAt = [argc, argv](int index) -> std::string_view {
+    if (argv == nullptr || index >= argc || argv[index] == nullptr) {
+      return std::string_view{};
+    }
+    return argv[index];
+  };
+  const auto hasValueAt = [&argumentAt](int index) { return !argumentAt(index).empty(); };
+
+  std::vector<Occurrence> occurrences;
+  bool optionsEnded = false;
+  bool topicSeen = false;
+
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg = argumentAt(i);
+    if (arg.empty()) {
+      continue;
+    }
+
+    if (!optionsEnded) {
+      if (arg == "--") {
+        optionsEnded = true;
+        opts.sawDoubleDash = true;
+        continue;
+      }
+      // A lone `-` is standard input, which is a file and not an option.
+      if (arg.front() == '-' && arg != "-") {
+        // --- `--name`, and `--name=value` ----------------------------------
+        if (arg.rfind("--", 0) == 0) {
+          const std::size_t equals = arg.find('=');
+          const std::string_view name =
+              equals == std::string_view::npos ? arg : arg.substr(0, equals);
+          const std::string_view joined =
+              equals == std::string_view::npos ? std::string_view{} : arg.substr(equals + 1);
+          const OptionSpec* spec = findOptionByName(name);
+          if (spec == nullptr) {
+            failUnknownOption(opts, name);
+            return;
+          }
+          if (!spec->takesValue()) {
+            if (equals != std::string_view::npos) {
+              opts.error = "option " + quoted(name) + " does not take a value";
+              return;
+            }
+            occurrences.push_back({spec->id, {}});
+            continue;
+          }
+          if (equals != std::string_view::npos) {
+            if (joined.empty()) {
+              opts.error = "option " + quoted(name) + " needs a value";
+              return;
+            }
+            occurrences.push_back({spec->id, std::string(joined)});
+            continue;
+          }
+          if (!hasValueAt(i + 1)) {
+            opts.error = "option " + quoted(name) + " needs a value";
+            return;
+          }
+          occurrences.push_back({spec->id, std::string(argumentAt(++i))});
+          continue;
+        }
+
+        // --- the exact single-dash spelling: -o, -O, -g, -v, -Wshadow --------
+        if (const OptionSpec* spec = findOptionByName(arg)) {
+          if (!spec->takesValue() || spec->value == ValueKind::Optional) {
+            // A bare `-O` is a level of its own and never takes the next
+            // argument: `mincc build -O main.mx` compiles `main.mx` at -O1.
+            occurrences.push_back({spec->id, {}});
+            continue;
+          }
+          if (!hasValueAt(i + 1)) {
+            opts.error = "option " + quoted(arg) + " needs a value";
+            return;
+          }
+          occurrences.push_back({spec->id, std::string(argumentAt(++i))});
+          continue;
+        }
+
+        // --- a joined value on a single-dash name: -DFOO, -Ipath, -o/path ----
+        if (const OptionSpec* spec = findJoinedValueOption(arg)) {
+          occurrences.push_back({spec->id, std::string(arg.substr(spec->name.size()))});
+          continue;
+        }
+
+        // --- a single letter: -h, -V ----------------------------------------
+        if (arg.size() == 2) {
+          if (const OptionSpec* spec = findOptionByShortName(arg[1])) {
+            occurrences.push_back({spec->id, {}});
+            continue;
+          }
+        }
+
+        // --- a cluster of one-letter flags: -vV, -vh -------------------------
+        if (arg.size() > 2) {
+          std::vector<OptionId> clustered;
+          bool cluster = true;
+          for (std::size_t index = 1; index < arg.size(); ++index) {
+            const OptionSpec* spec = findOptionByShortName(arg[index]);
+            // Only options that take no value may be clustered: `-vo out` is not
+            // a spelling this compiler accepts, and guessing which letter owns the
+            // value is how a CLI starts inventing grammar.
+            if (spec == nullptr || spec->takesValue()) {
+              cluster = false;
+              break;
+            }
+            clustered.push_back(spec->id);
+          }
+          if (cluster) {
+            for (const OptionId id : clustered) {
+              occurrences.push_back({id, {}});
+            }
+            continue;
+          }
+        }
+
+        // --- the warning family, which has a sentence of its own -------------
+        if (arg.rfind("-W", 0) == 0) {
+          opts.error = "unknown warning option " + quoted(arg);
+          std::vector<std::string_view> warnings;
+          for (const std::string_view name : allOptionNames()) {
+            if (name.rfind("-W", 0) == 0) {
+              warnings.push_back(name);
+            }
+          }
+          if (const std::optional<std::string_view> near = nearestName(warnings, arg)) {
+            opts.suggestion = std::string(*near);
+          }
+          return;
+        }
+
+        failUnknownOption(opts, arg);
+        return;
+      }
+    }
+
+    // --- positionals ---------------------------------------------------------
+    if (i == prescan.helpWordIndex) {
+      continue; // the word `help` itself, not a command
+    }
+    if (!opts.command.has_value()) {
+      // `mincc help build`: the topic is the next positional.
+      if (prescan.helpCommand && !topicSeen) {
+        topicSeen = true;
+        const std::optional<Command> topic = commandFromName(arg);
+        if (!topic.has_value()) {
+          failUnknownCommand(opts, arg);
+          return;
+        }
+        opts.helpTopic = topic;
+        continue;
+      }
+      if (prescan.helpCommand) {
+        opts.error =
+            "the help command takes one command name, and " + quoted(arg) + " is a second one";
+        return;
+      }
+      const std::optional<Command> command = commandFromName(arg);
+      if (!command.has_value()) {
+        failUnknownCommand(opts, arg);
+        return;
+      }
+      opts.command = command;
+      continue;
+    }
+    // After a `--` in a `run`, a positional is the *program's*, not the
+    // compiler's. Nothing here looks at it -- it is copied and handed to `exec`
+    // -- which is what makes `-- -o --emit` two ordinary arguments.
+    if (opts.sawDoubleDash && opts.command == Command::Run) {
+      opts.programArgs.emplace_back(arg);
+      continue;
+    }
+    opts.inputs.emplace_back(arg);
+  }
+
+  // --- who may say what -----------------------------------------------------
+  //
+  // Help and version outrank the rest of the line, so an option from the wrong
+  // command is not an error on a line that asked for help: `mincc lex --emit obj
+  // -h` prints the page, which is what `parseArgs` below relies on.
+  if (!opts.showHelp && !opts.showVersion) {
+    for (const Occurrence& occurrence : occurrences) {
+      const OptionSpec& spec = optionById(occurrence.id);
+      if (!opts.command.has_value()) {
+        if (!isGlobalOption(spec.id)) {
+          opts.error = quoted(spec.name) + " is an option of " + ownersPhrase(spec.id) +
+                       "; name the command first";
+          return;
+        }
+        continue;
+      }
+      if (!optionAppliesTo(spec.id, *opts.command)) {
+        const std::string owners = ownersPhrase(spec.id);
+        opts.error = quoted(spec.name) + " is not an option of " + quoted(toString(*opts.command)) +
+                     (owners.empty() ? std::string{} : "; it belongs to " + owners);
+        // The page that documents it is a better answer than a spelling
+        // neighbour, and one line away.
+        const std::string owner = firstOwner(spec.id);
+        if (!owner.empty()) {
+          opts.suggestion = "mincc help " + owner;
+        }
+        return;
+      }
+    }
+  }
+
+  // --- applying -------------------------------------------------------------
+  for (const Occurrence& occurrence : occurrences) {
+    const OptionSpec& spec = optionById(occurrence.id);
+    switch (occurrence.id) {
+    case OptionId::Help:
+      opts.showHelp = true;
+      break;
+    case OptionId::Version:
+      opts.showVersion = true;
+      break;
+    case OptionId::Color:
+      if (const std::optional<support::ColorChoice> choice =
+              support::colorChoiceFromName(occurrence.value)) {
+        opts.colorChoice = *choice;
+      } else {
+        // The alternatives are read from the spec, so the sentence cannot list a
+        // value the option does not take.
+        std::string values;
+        for (std::size_t index = 0; index < spec.values.size(); ++index) {
+          values += index == 0 ? "" : ", ";
+          values += spec.values[index];
+        }
+        opts.error = "invalid value " + quoted(occurrence.value) + " for " + quoted(spec.name) +
+                     "; the values are " + values;
+        return;
+      }
+      break;
+    case OptionId::Define:
+      opts.defines.push_back(occurrence.value);
+      break;
+    case OptionId::Undefine:
+      opts.undefines.push_back(occurrence.value);
+      break;
+    case OptionId::Include:
+      opts.includeDirs.push_back(occurrence.value);
+      break;
+    case OptionId::Isystem:
+      opts.systemDirs.push_back(occurrence.value);
+      break;
+    case OptionId::Target:
+      opts.target = occurrence.value;
+      break;
+    case OptionId::NoTrivia:
+      opts.hideTrivia = true;
+      break;
+    case OptionId::Ast:
+      opts.showAst = true;
+      break;
+    case OptionId::Types:
+      opts.showTypes = true;
+      break;
+    case OptionId::Stats:
+      opts.stats = true;
+      break;
+    case OptionId::Refs:
+      opts.showRefs = true;
+      break;
+    case OptionId::Unresolved:
+      opts.showUnresolved = true;
+      break;
+    case OptionId::ListDefines:
+      opts.showDefines = true;
+      break;
+    case OptionId::ListIncludes:
+      opts.showIncludes = true;
+      break;
+    case OptionId::ListDeps:
+      opts.showDeps = true;
+      break;
+    case OptionId::At:
+      opts.at = occurrence.value;
+      break;
+    case OptionId::Output:
+      opts.output = occurrence.value; // last one wins, as every C compiler does
+      break;
+    case OptionId::OptLevel:
+      opts.optLevel = occurrence.value.empty() ? "1" : occurrence.value;
+      break;
+    case OptionId::DebugInfo:
+      opts.debugInfo = true;
+      break;
+    case OptionId::Verbose:
+      opts.verbose = true;
+      break;
+    case OptionId::Emit:
+      opts.emit = occurrence.value;
+      break;
+    case OptionId::LibraryDir:
+      opts.libraryDirs.push_back(occurrence.value);
+      break;
+    case OptionId::Library:
+      opts.libraries.push_back(occurrence.value);
+      break;
+    case OptionId::Linker:
+      opts.linker = occurrence.value;
+      break;
+    case OptionId::Sysroot:
+      opts.sysroot = occurrence.value;
+      break;
+    case OptionId::WarnUnused:
+      opts.warnUnused = true;
+      break;
+    case OptionId::WarnShadow:
+      opts.warnShadow = true;
+      break;
+    case OptionId::WarnConversion:
+      opts.warnConversion = true;
+      break;
+    }
+  }
 }
 
 } // namespace
-
-std::span<const CommandInfo> allCommands() {
-  return kCommands;
-}
-
-const char* toString(Command command) {
-  switch (command) {
-  case Command::Build:
-    return "build";
-  case Command::Run:
-    return "run";
-  case Command::Check:
-    return "check";
-  case Command::Lex:
-    return "lex";
-  case Command::Parse:
-    return "parse";
-  case Command::Pp:
-    return "pp";
-  case Command::Resolve:
-    return "resolve";
-  case Command::Ir:
-    return "ir";
-  }
-  return "unknown";
-}
 
 std::vector<std::pair<std::string, std::string>>
 splitDefines(const std::vector<std::string>& defines) {
@@ -89,258 +492,30 @@ splitDefines(const std::vector<std::string>& defines) {
   return out;
 }
 
-std::optional<Command> commandFromName(std::string_view name) {
-  for (const CommandInfo& info : kCommands) {
-    if (info.name == name) {
-      return info.command;
-    }
-  }
-  return std::nullopt;
-}
-
 CliOptions parseArgs(int argc, const char* const* argv) {
   CliOptions opts;
-  bool optionsEnded = false;
+  opts.emptyCommandLine = argc <= 1;
+  opts.target = std::string(sema::kDefaultTriple);
 
-  for (int i = 1; i < argc; ++i) {
-    const std::string_view arg = argv != nullptr && argv[i] != nullptr ? argv[i] : "";
-    if (arg.empty()) {
-      continue;
-    }
+  const PreScan prescan = preScanArgs(argc, argv);
+  opts.showHelp = prescan.help;
+  opts.showVersion = prescan.version;
 
-    if (!optionsEnded) {
-      if (arg == "--") {
-        optionsEnded = true;
-        opts.sawDoubleDash = true;
-        continue;
-      }
-      if (arg == "-h" || arg == "--help") {
-        opts.showHelp = true;
-        continue;
-      }
-      if (arg == "-V" || arg == "--version") {
-        opts.showVersion = true;
-        continue;
-      }
-      if (arg == "--no-trivia") {
-        opts.hideTrivia = true;
-        continue;
-      }
-      // `-isystem dir` (or `-isystemdir`, which GCC also accepts). It has to be
-      // matched before the single-letter options below: `-i` is not one of them,
-      // so without this it would be an unrecognized option.
-      if (arg == "-isystem" || arg.rfind("-isystem", 0) == 0) {
-        std::string value(arg.substr(8));
-        if (value.empty()) {
-          if (i + 1 < argc) {
-            value = argv[i + 1] != nullptr ? argv[++i] : "";
-          }
-        }
-        if (value.empty()) {
-          opts.error = "option '-isystem' needs a value";
-          return opts;
-        }
-        opts.systemDirs.push_back(std::move(value));
-        continue;
-      }
-      // `-D`/`-U`/`-I` take a value, joined or separate. Both spellings are
-      // accepted because half the world writes `-DFOO=1` and the other half
-      // `-D FOO=1`, and a compiler that accepts only one is a paper cut.
-      if (arg.size() >= 2 && arg[0] == '-' && (arg[1] == 'D' || arg[1] == 'U' || arg[1] == 'I')) {
-        std::string value(arg.substr(2));
-        if (value.empty()) {
-          if (i + 1 < argc) {
-            value = argv[i + 1] != nullptr ? argv[++i] : "";
-          }
-        }
-        if (value.empty()) {
-          opts.error = "option '" + std::string(arg) + "' needs a value";
-          return opts;
-        }
-        switch (arg[1]) {
-        case 'D':
-          opts.defines.push_back(std::move(value));
-          break;
-        case 'U':
-          opts.undefines.push_back(std::move(value));
-          break;
-        default:
-          opts.includeDirs.push_back(std::move(value));
-          break;
-        }
-        continue;
-      }
-      if (arg == "--defines" || arg == "--includes" || arg == "--deps") {
-        opts.showDefines = opts.showDefines || arg == "--defines";
-        opts.showIncludes = opts.showIncludes || arg == "--includes";
-        opts.showDeps = opts.showDeps || arg == "--deps";
-        continue;
-      }
-      if (arg == "--refs" || arg == "--unresolved" || arg == "--ast" || arg == "--types" ||
-          arg == "--stats") {
-        opts.showRefs = opts.showRefs || arg == "--refs";
-        opts.showUnresolved = opts.showUnresolved || arg == "--unresolved";
-        opts.showAst = opts.showAst || arg == "--ast";
-        opts.showTypes = opts.showTypes || arg == "--types";
-        opts.stats = opts.stats || arg == "--stats";
-        continue;
-      }
-      // `--target NAME`. The name is validated by the command, not here, so the
-      // parser never has to know the table of targets -- and so the error names
-      // the ones that exist instead of just rejecting a string.
-      if (arg == "--target" || arg.rfind("--target=", 0) == 0) {
-        std::string value = arg == "--target" ? std::string{} : std::string(arg.substr(9));
-        if (value.empty()) {
-          if (i + 1 < argc) {
-            value = argv[i + 1] != nullptr ? argv[++i] : "";
-          }
-        }
-        if (value.empty()) {
-          opts.error = "option '--target' needs a name";
-          return opts;
-        }
-        opts.target = std::move(value);
-        continue;
-      }
-      // `-Wunused` / `-Wshadow`. Written the way every C compiler writes them,
-      // and an unknown `-W` is a usage error rather than a silent no-op: a
-      // warning somebody asked for and did not get is worse than a typo caught
-      // now.
-      if (arg.size() > 2 && arg[0] == '-' && arg[1] == 'W') {
-        const std::string_view name = arg.substr(2);
-        if (name == "unused") {
-          opts.warnUnused = true;
-        } else if (name == "shadow") {
-          opts.warnShadow = true;
-        } else if (name == "conversion") {
-          opts.warnConversion = true;
-        } else {
-          opts.error = "unknown warning option '" + std::string(arg) + "'";
-          return opts;
-        }
-        continue;
-      }
-      if (arg == "--at") {
-        if (i + 1 >= argc || argv[i + 1] == nullptr) {
-          opts.error = "option '--at' needs '[file:]line'";
-          return opts;
-        }
-        opts.at = argv[++i];
-        continue;
-      }
-      // `-g` and `-v`. Matched before the value-taking options below so a
-      // single-letter flag can never be mistaken for one whose value is joined.
-      if (arg == "-g") {
-        opts.debugInfo = true;
-        continue;
-      }
-      if (arg == "-v") {
-        opts.verbose = true;
-        continue;
-      }
-      // `-O LEVEL`. The level is the letter(s) after `-O`, and a bare `-O` means
-      // `-O1` -- both are what GCC and Clang do, and a compiler that accepts only
-      // one spelling is a paper cut in a build script.
-      if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'O') {
-        std::string level(arg.substr(2));
-        if (level.empty()) {
-          level = "1";
-        }
-        opts.optLevel = std::move(level);
-        continue;
-      }
-      // `-o PATH`, joined or separate. Last one wins, like every C compiler: a
-      // build script that appends `-o` means the appended one.
-      if (arg == "-o" || (arg.size() > 2 && arg.rfind("-o", 0) == 0)) {
-        std::string value = arg.size() > 2 ? std::string(arg.substr(2)) : std::string{};
-        if (value.empty()) {
-          if (i + 1 < argc) {
-            value = argv[i + 1] != nullptr ? argv[++i] : "";
-          }
-        }
-        if (value.empty()) {
-          opts.error = "option '-o' needs a file name";
-          return opts;
-        }
-        opts.output = std::move(value);
-        continue;
-      }
-      // `-L DIR` / `-l NAME`, joined or separate, and matched before the
-      // `-D`/`-U`/`-I` branch only because neither letter collides with those.
-      if (arg.size() >= 2 && arg[0] == '-' && (arg[1] == 'L' || arg[1] == 'l')) {
-        std::string value(arg.substr(2));
-        if (value.empty()) {
-          if (i + 1 < argc) {
-            value = argv[i + 1] != nullptr ? argv[++i] : "";
-          }
-        }
-        if (value.empty()) {
-          opts.error = "option '" + std::string(arg) + "' needs a value";
-          return opts;
-        }
-        if (arg[1] == 'L') {
-          opts.libraryDirs.push_back(std::move(value));
-        } else {
-          opts.libraries.push_back(std::move(value));
-        }
-        continue;
-      }
-      // `--emit KIND`, `--linker PATH`, `--sysroot DIR`. All three accept the
-      // joined and the separate spelling; the value is understood by the command,
-      // which is where the message can name the alternatives.
-      const auto valueOption = [&](std::string_view name, std::string& out) {
-        const std::string_view argView(arg);
-        if (argView == name) {
-          if (i + 1 >= argc || argv[i + 1] == nullptr) {
-            opts.error = "option '" + std::string(name) + "' needs a value";
-            return true;
-          }
-          out = argv[++i];
-          return true;
-        }
-        if (argView.size() > name.size() && argView.rfind(name, 0) == 0 &&
-            argView[name.size()] == '=') {
-          out = std::string(argView.substr(name.size() + 1));
-          if (out.empty()) {
-            opts.error = "option '" + std::string(name) + "' needs a value";
-          }
-          return true;
-        }
-        return false;
-      };
-      if (valueOption("--emit", opts.emit) || valueOption("--linker", opts.linker) ||
-          valueOption("--sysroot", opts.sysroot)) {
-        if (!opts.error.empty()) {
-          return opts;
-        }
-        continue;
-      }
-      if (!isPositional(arg)) {
-        opts.error = "unrecognized option '" + std::string(arg) + "'";
-        return opts;
-      }
-    }
+  parseInto(opts, prescan, argc, argv);
 
-    // The first positional argument names the subcommand; the rest are inputs.
-    if (!opts.command.has_value()) {
-      const std::optional<Command> command = commandFromName(arg);
-      if (!command.has_value()) {
-        opts.error = "unknown command '" + std::string(arg) + "'";
-        return opts;
-      }
-      opts.command = command;
-      continue;
-    }
-    // After a `--` in a `run`, a positional is the *program's*, not the
-    // compiler's. Nothing here looks at it -- it is copied and handed to `exec`
-    // -- which is what makes `-- -o --emit` two ordinary arguments.
-    if (opts.sawDoubleDash && opts.command == Command::Run) {
-      opts.programArgs.emplace_back(arg);
-      continue;
-    }
-    opts.inputs.emplace_back(arg);
+  // **The flags outrank a typo on the same line.** The parse stops at the first
+  // problem it meets, which is right for a line that meant one thing and wrong
+  // for a line that asked for help; clearing the error here is what makes
+  // `mincc --nosuch -h` print the page instead of complaining about `--nosuch`,
+  // and it is one place rather than a check at every early return.
+  //
+  // The `help` *command* is not covered on purpose: `mincc help buidl` is a line
+  // that asks about a command that does not exist, and swallowing that error
+  // would print the general index instead of saying so.
+  if (prescan.flagForm && !opts.error.empty()) {
+    opts.error.clear();
+    opts.suggestion.clear();
   }
-
   return opts;
 }
 

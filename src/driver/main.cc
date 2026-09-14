@@ -4,6 +4,16 @@
 // `main` is the only place that decides which subcommand runs. Everything it
 // needs comes from the parsed options: the parser does not print, the commands
 // do not exit, and the exit code is chosen here and nowhere else.
+//
+// The order of the first four steps is the contract `docs/architectures/cli.md`
+// states, and it is the order because each one outranks the ones below it:
+//
+//   1. a usage error, unless help or version was asked for -- in which case the
+//      parser already decided, and `opts.error` is empty;
+//   2. `--help`/`-h`/`help`, which print a page and exit 0;
+//   3. `--version`/`-V`, the same;
+//   4. an empty command line, which prints the overview on **stderr** and exits
+//      2: printing it is what happened, but nothing was done.
 #include <iostream>
 
 #include "driver/build_command.h"
@@ -23,13 +33,21 @@ int main(int argc, char** argv) {
   const minc::driver::CliOptions opts = minc::driver::parseArgs(argc, argv);
 
   if (!opts.error.empty()) {
-    return minc::driver::usageError(opts.error);
+    return minc::driver::usageError(opts.error, opts.suggestion, opts.command);
   }
   if (opts.showHelp) {
-    return minc::driver::runHelp();
+    // `mincc help build` and `mincc build --help` are the same page, and a
+    // command named anywhere on a help line is the topic of it.
+    if (opts.helpTopic.has_value()) {
+      return minc::driver::runHelp(opts.colorChoice, opts.helpTopic);
+    }
+    return minc::driver::runHelp(opts.colorChoice, opts.command);
   }
   if (opts.showVersion) {
-    return minc::driver::runVersion();
+    return minc::driver::runVersion(opts.colorChoice, opts.verbose);
+  }
+  if (opts.emptyCommandLine) {
+    return minc::driver::runBareInvocation(opts.colorChoice);
   }
   if (!opts.command.has_value()) {
     return minc::driver::usageError("missing command");

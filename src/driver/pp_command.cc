@@ -320,7 +320,7 @@ int runPp(const CliOptions& options) {
   request.showIncludes = options.showIncludes;
   request.showDeps = options.showDeps;
   request.at = options.at;
-  request.color = support::colorModeFrom(support::stdoutSupportsColor());
+  request.color = support::colorModeFrom(support::stdoutSupportsColor(), options.colorChoice);
   return ppInputs(request, std::cout, std::cerr);
 }
 
