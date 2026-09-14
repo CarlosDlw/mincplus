@@ -1,0 +1,56 @@
+// `!` is the bottom type: the type of an expression that never produces a value.
+// It is written where a return type goes, and nowhere else -- an object cannot
+// have it, because a program that never gets that far has no value to store.
+//
+// Everything else about it is the ordinary type system doing its job:
+//
+//   * a call to a function returning `!` *is* `!`, so the statement after it can
+//     never be reached, and a function whose body ends in one does not need a
+//     `return`;
+//   * `!` converts into every type, vacuously, so it can be an argument, an
+//     assigned value, or the arm of a `?:` -- the branch that cannot produce a
+//     value cannot be the branch that decides the type;
+//   * and the IR is unchanged: `!` is `void` on the ABI side, and the promise
+//     that it never comes back is derived from the type and handed to LLVM as
+//     the `noreturn` attribute.
+//
+// What the type cannot check by itself is the body it promises: `fn !` is a claim
+// about the implementation, so the compiler proves it -- a `return` that can run,
+// or a body that can reach its end, is reported.
+//
+//   $ mincc run examples/012_never.mx
+//   nothing to see here
+
+extern fn i32 puts(s: str);
+extern fn ! exit(code: i32);
+
+// `!` defined in terms of `!`: the body is a call that never comes back, which
+// is what keeps the promise. Nothing is transitive by accident -- a call to
+// `die` is divergent because *this* function is, not the other way round.
+fn ! die(msg: str) {
+    puts(msg);
+    exit(1);
+}
+
+// A function that cannot fail, written without a branch that does not exist:
+// `die` never produces a value, so the `else` arm can only be the one that does,
+// and the conditional is an `i32` because of it. An annotation beside the
+// signature could not have done this -- there would be no `i32` to give.
+fn i32 pick(c: bool) {
+    let chosen: i32 = c ? 1 : die("the impossible branch\n");
+    return chosen;
+}
+
+fn i32 main() {
+    let n: i32 = pick(true);
+
+    // `n` is 1 unless `pick` took the arm that never comes back.
+    if n != 1 {
+        die("pick is broken\n");
+    }
+
+    // `die` returns `!`, so control does not reach the line after it -- and this
+    // line is reachable only because the `if` above can fall through.
+    puts("nothing to see here\n");
+    return 0;
+}

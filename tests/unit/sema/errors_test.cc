@@ -449,6 +449,11 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       {"fn i32 main() { let x: i32 = 1; let p: *i32 = &x; let b: bool = p == 1; return 0; }\n",
        false},
       {"fn i32 main() { let x: i32 = 1; let p: *i32 = x; return 0; }\n", false},
+      // The two ways a `!` body can break its promise. They are here rather than
+      // only in `never_test.cc` for the same reason as every row above: this is
+      // the list that proves the *table* has no entry nobody can reach.
+      {"fn ! f() { return; }\n", false},
+      {"fn ! f() { }\n", false},
   };
 
   for (const Case& one : cases) {

@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
@@ -100,6 +101,17 @@ void Lowering::declareFunctions() {
     // `static` arrives, this reads the def's linkage instead of naming one.
     llvm::Function* function =
         llvm::Function::Create(type, llvm::GlobalValue::ExternalLinkage, name, module_);
+
+    // A `!` return type, told to LLVM in the one spelling it understands. The
+    // fact is *derived* from the type rather than declared beside it: a function
+    // whose return type is `!` never gives control back, so every call to it
+    // inherits that, every edge after one becomes unreachable, and a declaration
+    // and a definition of the same name (one `Function`, above) cannot disagree
+    // about it. `sema` has already checked that a body keeps the promise, so this
+    // is not a claim the compiler is taking on faith.
+    if (types_.isNever(info.returnType)) {
+      function->addFnAttr(llvm::Attribute::NoReturn);
+    }
 
     if (def.has_value()) {
       functions_.emplace(defKey(*def), function);

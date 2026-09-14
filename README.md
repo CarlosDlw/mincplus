@@ -293,6 +293,13 @@ first-class types; the examples use the primitive names.
 - [x] `str` — NUL-terminated, C-like; a scalar type, not `char*` yet
 - [x] `void` — a return type and (later) `void*`; never a value type: no
       object has it and no arithmetic is defined on it
+- [x] `!` — the bottom type, and a return type only: a function declared
+      `fn ! name(...)` never returns to its caller. A call to one *is* an
+      expression of type `!`, which converts into every other type, so it can be
+      an argument, an assigned value or the arm of a `?:`, and the code after it
+      is unreachable. The body is checked (a reachable `return`, or a body that
+      can reach its end, is an error) and the promise is never inferred. See
+      [`docs/architectures/never.md`](docs/architectures/never.md)
 - [ ] Pointers — deliberately complete and C-level, see
       [Pointers and raw memory](#pointers-and-raw-memory)
 - [ ] Fixed-size arrays

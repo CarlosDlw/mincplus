@@ -764,7 +764,11 @@ warnings inside them are dropped at the report step while errors are not.
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which
   error, and the decisions the language had to make with it. `mincc check` is
-  the command that proves it.
+  the command that proves it. [`never.md`](architectures/never.md) is the record
+  for the bottom type: `fn ! name(...)` returns no value *and* never comes back,
+  `!` converts into every other type because there is no value to be incompatible
+  with, and the one thing a type cannot check — a body that promises to diverge —
+  is proved rather than believed.
 - **ir** (`src/ir`) lowers the typed tree into an `llvm::Module`. It is
   the first stage that may include `llvm/*`, and the boundary that moves with it
   is the pipeline's own: everything up to and including `sema` stays LLVM-free,
@@ -774,7 +778,11 @@ warnings inside them are dropped at the report step while errors are not.
   asked of `sema` — the coercion record, the operation type of a compound
   assignment (without which `u16 <<= 9` lowers to an out-of-range shift), and the
   access record — is **shipped**, so the lowering starts from a contract instead
-  of waiting for one. Design record:
+  of waiting for one. A `!` return type is the case where the contract pays off
+  twice: it is `void` on the ABI side, `noreturn` is derived from the type rather
+  than declared beside it, and the value that does not exist is a `poison` of the
+  type the consumer asked for — the one named exception to the assumption list
+  (`never.md`, `architectures/ir.md`). Design record:
   [`architectures/ir.md`](architectures/ir.md) — the LLVM decision, the coercion
   and access records, the runtime contract `sema`'s integer table imposes, the
   **assumption list** the closed set of guarantees the optimiser may be given and

@@ -646,8 +646,21 @@ list, and it is short on purpose — every row is something this stage may
 | `nsw`, `nuw` | **never** | the language defines wrap; class one of § *The runtime contract* |
 | `dereferenceable`, `dereferenceable_or_null`, `!nonnull`, `!noundef`, `range`, `nnan`, `ninf` | **never** | each is a promise that something is well-formed; the language's rules are what make it so, and a promise on top of a proof is a promise that outlives the proof |
 | `fast`, `reassoc`, `nnan`, `ninf`, `nsz`, `arcp`, `contract` on float ops | **never** | the language defines its float results; a fast-math flag licenses reassociation of a value the language named |
-| `undef` and `poison` as values | **never** | `memory.md`, decision 13 — "uninitialized" is a violation, not a licence |
+| `undef` and `poison` as values | **never, with one named exception** | `memory.md`, decision 13 — "uninitialized" is a violation, not a licence. The exception is a value of the bottom type `!`, which no program can reach and which the consumer's type nevertheless demands: see below |
 | `align N` on `load`/`store`/`alloca` | **always present, and scanned for equality** | not an assumption but a *claim*, and an overestimated one is UB (LLVM's own words); the scan compares every one against the record |
+
+**The one `poison`, and why it is not a licence.** `sema` accepts an expression
+of type `!` wherever a value is expected — `c ? 1 : exit(1)`, `take(exit(1))`,
+`let x: i32 = exit(1);` — because the expression never produces a value, so
+there is nothing for a target type to be incompatible with (`never.md`). The
+consumer still has to name *a* value of its type: a `phi` incoming, a call
+operand, a stored value. So the lowering produces `poison` of exactly that type,
+and the rule that keeps this from being the licence decision 13 forbids is that
+it is **derived from the type, not chosen for convenience**: the child's recorded
+type must be `!` and the coercion record must name the target, both of which came
+from the checker. `lowerOperand` is the only place it is produced, and a value the
+source *could* read is never one: the edge it travels on was left by a call that
+does not return.
 
 **The `inbounds` row is the one that needs a mechanism rather than a ban.**
 `memory.md`, decision 10 says "no `inbounds` unless proved", and its § *How the

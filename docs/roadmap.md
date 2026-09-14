@@ -387,6 +387,14 @@ which also records the reversal.
       ([`architectures/extern.md`](architectures/extern.md)). `extern` is a
       declaration word and not a storage class, which is why the rest of this
       item is still open
+- [x] The bottom type `!`: `fn ! name(...)` never returns to its caller. The type
+      converts into every other type, so a call to one can be an argument, an
+      assigned value or the arm of a `?:`, and it makes the code after it
+      unreachable. The body is *proved* divergent — a reachable `return` or a body
+      that can reach its end is an error — and the promise is never inferred. The
+      lowering maps it to `void` and derives LLVM's `noreturn` from the return
+      type ([`architectures/never.md`](architectures/never.md),
+      `examples/012_never.mx`)
 - [ ] Storage classes and linkage: `static`, tentative definitions, and the
       visibility rules that go with them
 - [ ] Symbol table exported for the backend and C interop

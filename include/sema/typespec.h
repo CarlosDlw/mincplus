@@ -55,13 +55,23 @@ struct TypeSpecResult {
 // pointer is a prefix over the same run of words every other type is.
 struct TypePart {
   bool isStar = false;
-  // Empty for a `*`.
+  // A `!`, which is a type only on its own: `!` and nothing else, in a return
+  // position. It is a part of the run rather than a word because it is a
+  // punctuator -- it cannot be spelled by an identifier, which is the whole
+  // reason the bottom type is `!` and not a reserved word (`never.md`).
+  bool isBang = false;
+  // Empty for a `*` and for a `!`.
   std::string_view word;
 };
 
 // The whole type position. A `*` after the words is refused by name -- the one
 // spelling the language has is `*T`, and a reader who wrote `i32*` has one
 // character to move, which is exactly what the message says.
+//
+// `!` is accepted here and only here as the *whole* run. Whether it is legal in
+// the position it was written in is the caller's question, not this reader's:
+// the same `Type` node appears after `fn` and after `:`, and only the caller
+// knows which one it is holding (`never.md`, *Written where*).
 [[nodiscard]] TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types);
 
 // Every spelling the reader accepts, for a "did you mean ...?" suggestion.

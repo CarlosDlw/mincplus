@@ -18,6 +18,29 @@
 namespace minc::sema {
 namespace {
 
+TEST(ConvertTest, TheBottomTypeConvertsIntoEverything) {
+  TypeStore types;
+  const TypeId pointer = types.pointerTo(kTypeI32);
+  const TypeId fn = types.function(kTypeVoid, {}, /*variadic=*/false);
+
+  // `!` converts into every type there is, and the list is deliberately the
+  // *whole* list rather than the arithmetic ones: there is no value to be wrong
+  // about, so there is nothing for a target type to be incompatible with. This is
+  // what makes `let x: i32 = die();` legal and `c ? 1 : die()` an `i32`.
+  for (const TypeId target :
+       {kTypeI32, kTypeU8, kTypeF64, kTypeBool, kTypeStr, kTypeChar, kTypeVoid, pointer, fn}) {
+    EXPECT_TRUE(convertible(types, kTypeNever, target)) << types.spelling(target);
+  }
+  // And nothing converts *into* it: a type that admits no values cannot be
+  // arrived at, so a value that is not a `!` cannot become one.
+  for (const TypeId source : {kTypeI32, kTypeBool, kTypeStr, kTypeVoid, pointer}) {
+    EXPECT_FALSE(convertible(types, source, kTypeNever)) << types.spelling(source);
+  }
+  // `!` to `!` is the identity, and narrows nothing: there is no width to lose.
+  EXPECT_TRUE(convertible(types, kTypeNever, kTypeNever));
+  EXPECT_FALSE(narrows(types, kTypeNever, kTypeI32));
+}
+
 TEST(ConvertTest, PromotionWidensTheSmallIntegersToInt) {
   TypeStore types;
   EXPECT_EQ(promote(types, kTypeBool), kTypeI32);

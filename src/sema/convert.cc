@@ -141,6 +141,24 @@ bool convertible(const TypeStore& types, TypeId from, TypeId to) {
   }
   const TypeKind fromKind = types.get(from).kind;
   const TypeKind toKind = types.get(to).kind;
+  // The bottom type converts into everything, and nothing converts into it.
+  //
+  // That asymmetry is the whole of its meaning. "A value of type `!` becomes a
+  // value of type `T`" is vacuous rather than false: the expression never
+  // produces a value, so there is every value it will fail to produce, and the
+  // only thing a consumer can do with the fact is proceed -- `c ? 1 : die()` is
+  // an `i32`, `let x: i32 = die();` is legal, `return die();` is legal. The other
+  // direction has no reading at all: a value that is *not* a `!` cannot become
+  // one, and a type that admits no values cannot be arrived at.
+  //
+  // Rust states the same rule the same way -- `!` coerces into any other type,
+  // and is deliberately not a subtype (`RFC 1216`, `primitive.never`) -- and the
+  // difference matters here because this language has no subtyping to hang it on:
+  // a conversion is what `checkAssignable` already asks about, so the feature
+  // lands in the *existing* rule instead of adding a second relation.
+  if (fromKind == TypeKind::Never) {
+    return true;
+  }
   if (fromKind == TypeKind::Void || toKind == TypeKind::Void) {
     return false;
   }

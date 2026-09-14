@@ -122,6 +122,11 @@ public:
   // passed.
   [[nodiscard]] bool isScalar(TypeId id) const;
   [[nodiscard]] bool isVoid(TypeId id) const;
+  // The bottom type, `!`: the type of an expression that never produces a value.
+  // Every consumer that treats "produces nothing" as an error in a value position
+  // has to ask this separately, because `!` in a value position is not a mistake
+  // but a program that cannot reach it.
+  [[nodiscard]] bool isNever(TypeId id) const;
   [[nodiscard]] bool isError(TypeId id) const;
   // A pointer to anything, `*void` included.
   [[nodiscard]] bool isPointer(TypeId id) const;

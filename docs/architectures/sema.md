@@ -146,6 +146,7 @@ C spellings genuinely interchangeable instead of merely accepted.
 enum class TypeKind : std::uint8_t {
   Error,     // the poison type (below)
   Void,
+  Never,     // the bottom type `!`: no values at all (never.md)
   Bool,
   Char,      // distinct from i8/u8, always unsigned (README, decided)
   Int,       // signedness + width in bits
@@ -171,7 +172,9 @@ struct Type {
 
 - **Built-ins are pre-registered with stable ids** (`kTypeVoid`, `kTypeI32`,
   `kTypeF64`, …), so a dump is byte-stable across runs and the common compares
-  are against a constant.
+  are against a constant. The list is **append-only**: `!` is id 20, added last
+  rather than beside the `Void` its kind sits next to, because every constant
+  above it is a promise to the dumps and the tests.
 - **`Error` is a type, not a `nullopt`.** A type-checking failure must still
   leave behind a type that every later operation can consume silently.
 - **The store lives beside the compilation, not beside a file.** A type must be
@@ -179,6 +182,29 @@ struct Type {
   another). Today one `sema::Context` per run owns it; when translation units
   multiply it moves next to `TyCtxt`'s job — the session-level context — and
   nothing about this design changes.
+
+### The bottom type
+
+`TypeKind::Never`, written `!`, is the type of an expression that never produces
+a value — a call to a function that does not return. It is not `void`, and the
+difference is exactly what the two words say: `void` is "produces nothing and
+comes back", `!` is "never comes back". At every consumer that means a *value*
+where a value is expected, and the two types are refused for different reasons:
+`void` cannot be stored because there is nothing there, `!` cannot be stored
+because the store is never reached.
+
+The rule is one arm of `convertible`: **`!` converts into every type, and nothing
+converts into `!`.** A value of type `!` is never produced, so "it becomes a `T`"
+is vacuous rather than false; the other direction has no reading at all. That one
+arm is what makes `c ? 1 : die()` an `i32` and `return die();` legal in a `void`
+function, and it is why flow needs no second mechanism: `diverges(expr)` is
+`typeOf(expr) == !`, the answer the checker already wrote down.
+
+`!` is *written* only where a return type goes — `let x: !` and `f(x: !)` are
+refused — and a body that claims it is **proved** divergent rather than believed
+(a reachable `return`, or a body that can reach its end, is `sema-never-returns` /
+`sema-never-body-completes`). Full record:
+[`never.md`](never.md).
 
 ### The poison type
 

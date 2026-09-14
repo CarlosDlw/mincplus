@@ -963,6 +963,22 @@ TypeId Checker::checkConditional(ast::AstId expr, TypeId expected, ExprInfo& inf
   TypeId result = kTypeError;
   if (thenType == elseType) {
     result = thenType;
+  } else if (types_.isNever(thenType) != types_.isNever(elseType)) {
+    // One arm never produces a value, so the other arm is the only one that can:
+    // the expression's type is that arm's, and the `!` arm converts into it like
+    // any other conversion. This is the case a word beside the signature could
+    // not do at all -- `c ? 1 : die()` is an `i32` because the branch that cannot
+    // produce a value cannot be the branch that decides the type.
+    //
+    // Both arms `!` is the arm above, and it is right for the same reason: a
+    // conditional whose every path never produces a value never produces one.
+    //
+    // The surviving arm is *decided* rather than merely taken, because `!`
+    // converts into a concrete type and a deferred literal is not one: the
+    // coercion the lowering reads is recorded at the type the other arm will
+    // have, so a `1` here becomes an `i32` on the spot -- exactly what
+    // `never`-fallback means in every language that has this type.
+    result = decideAt(types_.isNever(thenType) ? elseExpr : thenExpr, expected);
   } else if (types_.isArithmetic(thenType) && types_.isArithmetic(elseType)) {
     result = usualArithmetic(types_, thenType, elseType);
   } else if (types_.isPointer(thenType) && types_.isPointer(elseType) &&

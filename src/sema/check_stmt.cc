@@ -30,6 +30,24 @@ namespace {
   return (static_cast<std::uint64_t>(file) << 32U) | begin;
 }
 
+// The word that makes a type unfit for an object, or empty when the type is fit.
+//
+// Two words, one rule. `void` names no value at all, `!` names a value that
+// never arrives, and either way there is nothing for an object to hold -- so both
+// are refused in the two positions that make an object (a parameter and a
+// binding) with the word in the sentence, because the reader wrote one of the
+// two and has to know which. The rule lives here rather than at either call site
+// so the two cannot come to different answers about the same type.
+[[nodiscard]] std::string_view notAnObjectWord(const TypeStore& types, TypeId type) {
+  if (types.isVoid(type)) {
+    return "void";
+  }
+  if (types.isNever(type)) {
+    return "!";
+  }
+  return {};
+}
+
 } // namespace
 
 Checker::Checker(const ast::LoweredFile& file, const resolve::DefMap& defs,
@@ -337,14 +355,26 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
     // (leaves and interior nodes share one tag space), so asking "is it a token"
     // first would throw every word away.
     if (file_.at(child).is(kIdentifierNode)) {
-      parts.push_back(TypePart{/*isStar=*/false, file_.spellingOf(child)});
+      TypePart word;
+      word.word = file_.spellingOf(child);
+      parts.push_back(word);
       continue;
     }
-    // Only `*` and the words are part of a type. Anything else the builder left
-    // inside the type node is not, and the grammar accepted nothing else here
-    // either -- so it is skipped rather than guessed at.
-    if (file_.at(child).isToken() && tagOf(kindOf(child)) == kTokStar) {
-      parts.push_back(TypePart{/*isStar=*/true, {}});
+    // The two punctuators a type position can hold: `*` and `!`. Anything else
+    // the builder left inside the type node is not part of a type, and the
+    // grammar accepted nothing else here either -- so it is skipped rather than
+    // guessed at.
+    if (!file_.at(child).isToken()) {
+      continue;
+    }
+    const Tag tag = tagOf(kindOf(child));
+    if (tag == kTokStar || tag == kTokBang) {
+      TypePart punctuation;
+      // Exactly one of the two, which is what `readType` reads them by: a `*` is
+      // a prefix over the words, and a `!` is a whole type on its own.
+      punctuation.isStar = tag == kTokStar;
+      punctuation.isBang = tag == kTokBang;
+      parts.push_back(punctuation);
     }
   }
   return parts;
@@ -578,12 +608,12 @@ void Checker::runSignatures() {
         }
         const ast::AstId paramType = childOf(param, ast::NodeKind::Type);
         TypeId declared = paramType.valid() ? resolveTypeNode(paramType) : kTypeError;
-        if (declared.valid() && types_.isVoid(declared)) {
-          // A parameter is an object, so `void` names nothing it can be. The
-          // message cannot be written by the type reader, which has no idea
-          // where the type was written.
+        // A parameter is an object, so neither of the two value-less types names
+        // anything it can be. The message cannot be written by the type reader,
+        // which has no idea where the type was written.
+        if (const std::string_view word = notAnObjectWord(types_, declared); !word.empty()) {
           error(paramType.valid() ? paramType : param, SemaErrorCode::TypeNotValue,
-                "`void` is not a type a parameter can have");
+                "`" + std::string(word) + "` is not a type a parameter can have");
           declared = kTypeError;
         }
         params.push_back(declared);
@@ -677,6 +707,7 @@ void Checker::checkFunction(const FunctionInfo& info) {
   if (!info.body.valid() || inError(info.body)) {
     return;
   }
+  const bool returnsNever = types_.isNever(info.returnType);
   currentReturn_ = info.returnType;
   currentFunctionName_ = info.name;
   checkBody(info.body, info.returnType);
@@ -687,12 +718,45 @@ void Checker::checkFunction(const FunctionInfo& info) {
   // separate pass and not a thread through the walk: see `check_flow.cc`.
   checkDefiniteAssignment(info.body);
 
-  if (!types_.isVoid(info.returnType) && !types_.isError(info.returnType) &&
+  const ast::AstId nameNode = childOf(info.decl, ast::NodeKind::Name);
+  const std::string name = info.name == support::kInvalidSym
+                               ? std::string("this function")
+                               : std::string(symbols_.lookup(info.name));
+
+  // The promise a `!` return type makes, checked against the one body that has
+  // to keep it. A declaration with no body has nothing to check -- its definition
+  // is elsewhere, and taking the promise on the caller's word is exactly what an
+  // `extern` prototype is for.
+  //
+  // This is the half of `!` that a type cannot check by itself. Everywhere else
+  // the type does the work: a call to a `!` function *is* `!`, and that is how
+  // control flow and conversions fall out of it. A body is the one place where a
+  // type has to be *proved*, and the proof is the two ways a body can end --
+  // reported separately because the fixes are different, and reported at the
+  // statement rather than at the signature, because a `return` is a thing the
+  // reader wrote.
+  if (returnsNever) {
+    const ast::AstId returning = reachableReturn(info.body);
+    if (returning.valid()) {
+      error(returning, SemaErrorCode::NeverReturns,
+            "`" + name +
+                "` returns `!`, so control never comes back to its caller, and a "
+                "`return` is control coming back");
+    } else if (!terminates(info.body)) {
+      // The message names both shapes that keep the promise, because neither is
+      // obvious from the type alone: a body cannot simply *stop* being divergent.
+      error(nameNode.valid() ? nameNode : info.decl, SemaErrorCode::NeverBodyCompletes,
+            "`" + name +
+                "` returns `!`, so its body cannot reach its end -- it has to loop "
+                "forever, or call another function that never returns");
+    }
+  }
+
+  // Skipped for a `!`-returning function: it has no value to return, so "falls
+  // off the end without returning a value" is not a second mistake on top of the
+  // promise -- it is the same one, already reported with a better sentence.
+  if (!returnsNever && !types_.isVoid(info.returnType) && !types_.isError(info.returnType) &&
       !terminates(info.body)) {
-    const ast::AstId nameNode = childOf(info.decl, ast::NodeKind::Name);
-    const std::string name = info.name == support::kInvalidSym
-                                 ? std::string("this function")
-                                 : std::string(symbols_.lookup(info.name));
     error(nameNode.valid() ? nameNode : info.decl, SemaErrorCode::MissingReturn,
           "`" + name + "` returns `" + types_.spelling(info.returnType) +
               "`, so it cannot reach the end without returning a value");
@@ -741,10 +805,109 @@ bool Checker::terminates(ast::AstId stmt) const {
   case ast::NodeKind::WhileStmt:
   case ast::NodeKind::ForStmt:
     return loopsForever(stmt);
+  case ast::NodeKind::ExprStmt: {
+    // The second way a statement fails to fall through, and the one that makes
+    // `!` worth having: an expression that never produces a value leaves control
+    // nowhere to go. Everything after it is unreachable, which is what the
+    // optimizer has to be told for such a call to be worth anything.
+    const std::vector<ast::AstId> operands = operandsOf(stmt);
+    return !operands.empty() && diverges(operands.front());
+  }
+  case ast::NodeKind::LetStmt:
+  case ast::NodeKind::ConstStmt:
+    // `let x: i32 = die();` never gets as far as the binding. The annotation is
+    // what makes that legal -- and the program does not run, so there is nothing
+    // after it either.
+    return diverges(initializerOf(stmt));
   default:
-    // An expression statement, a binding, an empty statement, a jump: control
-    // always reaches the next one.
+    // An empty statement, a jump: control always reaches the next one.
     return false;
+  }
+}
+
+bool Checker::diverges(ast::AstId expr) const {
+  // An expression that never produces a value is one whose *type* is `!`.
+  //
+  // There is no second rule and no table to consult: `!` reaches an expression
+  // exactly when the expression cannot finish, because that is what the type
+  // means. This line is the whole reason the bottom type is better than an
+  // annotation beside the signature -- `aborts()` had to know the callee, the
+  // shape of the call and the meaning of the extra word, and this knows the
+  // answer the checker already computed and wrote down.
+  return expr.valid() && types_.isNever(out_.typed.typeOf(expr));
+}
+
+ast::AstId Checker::initializerOf(ast::AstId stmt) const {
+  // A `let`/`const`'s operands are its name, its annotation and its value, in
+  // source order, so "neither of the first two" is the value. One reader for the
+  // two places that need it -- the declaration's own check and the flow rule
+  // above -- so they cannot come to different answers about the same statement.
+  const ast::AstId nameNode = childOf(stmt, ast::NodeKind::Name);
+  const ast::AstId typeNode = childOf(stmt, ast::NodeKind::Type);
+  ast::AstId init;
+  for (const ast::AstId operand : operandsOf(stmt)) {
+    if (operand != nameNode && operand != typeNode) {
+      init = operand;
+    }
+  }
+  return init;
+}
+
+ast::AstId Checker::reachableReturn(ast::AstId node) const {
+  if (!node.valid() || inError(node)) {
+    return ast::AstId{};
+  }
+  switch (kindOf(node)) {
+  case ast::NodeKind::ReturnStmt: {
+    const std::vector<ast::AstId> operands = operandsOf(node);
+    // `return die();` is not a return: the operand never produces a value, so
+    // control never gets as far as handing one back. The promise is kept by the
+    // same rule that decided the operand's type, one level down.
+    if (!operands.empty() && diverges(operands.front())) {
+      return ast::AstId{};
+    }
+    return node;
+  }
+  case ast::NodeKind::Block:
+    for (const ast::AstId child : file_.childrenOf(node)) {
+      if (file_.at(child).isToken()) {
+        continue;
+      }
+      if (const ast::AstId found = reachableReturn(child); found.valid()) {
+        return found;
+      }
+      // Nothing written after a statement that never completes can run, so the
+      // scan of this block is over -- including for a `return` below it, which
+      // is exactly the shape the promise allows.
+      if (terminates(child)) {
+        return ast::AstId{};
+      }
+    }
+    return ast::AstId{};
+  case ast::NodeKind::IfStmt:
+  case ast::NodeKind::ElseClause:
+    // Both arms are reachable -- which one runs is a runtime question -- so a
+    // `return` in either one is a `return` a caller can see.
+    for (const ast::AstId child : file_.childrenOf(node)) {
+      if (file_.at(child).isToken()) {
+        continue;
+      }
+      if (const ast::AstId found = reachableReturn(child); found.valid()) {
+        return found;
+      }
+    }
+    return ast::AstId{};
+  case ast::NodeKind::WhileStmt:
+  case ast::NodeKind::ForStmt:
+    // A `return` in the body is reachable even if the condition never goes
+    // false: the loop takes its first iteration, and that is enough. The
+    // statement *after* the loop is not asked about here -- a loop that cannot
+    // leave has already stopped the enclosing block's scan.
+    return reachableReturn(childOf(node, ast::NodeKind::Block));
+  default:
+    // A binding, an expression, an empty statement, a jump: none of them can
+    // return, and none of them hides a statement of its own.
+    return ast::AstId{};
   }
 }
 
@@ -958,23 +1121,19 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
     if (typeNode.valid()) {
       declared = resolveTypeNode(typeNode);
     }
-    // `void` is refused *before* the initializer is checked, and only once: a
-    // value that "cannot be assigned to `void`" would be a second sentence about
-    // the same mistake, and the mistake is the declaration, not the value.
+    // The two value-less types are refused *before* the initializer is checked,
+    // and only once: a value that "cannot be assigned to `void`" would be a
+    // second sentence about the same mistake, and the mistake is the declaration,
+    // not the value.
     bool voidDeclared = false;
-    if (declared.valid() && types_.isVoid(declared)) {
+    if (const std::string_view word = notAnObjectWord(types_, declared); !word.empty()) {
       error(typeNode.valid() ? typeNode : stmt, SemaErrorCode::TypeNotValue,
-            "`void` is not a type an object can have");
+            "`" + std::string(word) + "` is not a type an object can have");
       declared = kInvalidType;
       voidDeclared = true;
     }
 
-    ast::AstId init = ast::AstId{};
-    for (const ast::AstId operand : operandsOf(stmt)) {
-      if (operand != nameNode && operand != typeNode) {
-        init = operand;
-      }
-    }
+    const ast::AstId init = initializerOf(stmt);
     TypeId initType = kInvalidType;
     if (init.valid()) {
       // The initializer's conversion to the binding's type is recorded here:
@@ -991,12 +1150,21 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
                         " in this initializer");
       }
     } else if (initType.valid() && !voidDeclared) {
-      // A binding whose type is *inferred* can still turn out to be `void`:
+      // A binding whose type is *inferred* can still turn out to be value-less:
       // `let x = f();` where `f` returns nothing. It is the same mistake as
       // `let x: void`, caught one step later, and it is reported once.
+      //
+      // `!` is the same refusal with a different fix, so it gets a different
+      // sentence: an object of type `!` would be an object the program never
+      // gets to, and the reader almost certainly meant the type the call *would*
+      // have had -- which they can simply write (`never.md`, *Written where*).
       if (types_.isVoid(initType)) {
         error(init, SemaErrorCode::TypeNotValue,
               "this expression is `void`, so it is not a value an object can have");
+      } else if (types_.isNever(initType)) {
+        error(init, SemaErrorCode::TypeNotValue,
+              "this expression never produces a value, so there is nothing to bind; "
+              "write the type the value would have had, as in `let x: i32 = ...`");
       } else {
         binding = defaultValue(initType);
       }
@@ -1024,11 +1192,27 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
   case ast::NodeKind::ReturnStmt: {
     const std::vector<ast::AstId> operands = operandsOf(stmt);
     const ast::AstId expr = operands.empty() ? ast::AstId{} : operands.front();
+    // A function whose return type is `!` has nothing to return and no way to
+    // return it, so there is no type here to check a `return` against: the operand
+    // is typed as a value on its own, and the *body* walk owns the sentence about
+    // the statement itself (`never.md`, *The proof*). Without this the reader
+    // would be told `i32` cannot be used as `!`, which is true and useless.
+    if (types_.isNever(currentReturn_)) {
+      if (expr.valid()) {
+        (void)checkExpr(expr, kInvalidType);
+      }
+      return;
+    }
     if (expr.valid()) {
       if (types_.isVoid(currentReturn_)) {
-        error(stmt, SemaErrorCode::ReturnVoidValue,
-              "this function returns `void`, so `return` takes no value");
-        (void)checkExpr(expr, kInvalidType);
+        const TypeId type = checkExpr(expr, kInvalidType);
+        // `return die();` in a `void` function: the operand never produces a
+        // value, so `void` is exactly what comes back -- nothing. Anything else
+        // has a value, and a `void` function has nowhere to put it.
+        if (!types_.isNever(type)) {
+          error(stmt, SemaErrorCode::ReturnVoidValue,
+                "this function returns `void`, so `return` takes no value");
+        }
         return;
       }
       const TypeId type = checkOperand(stmt, 0, expr, currentReturn_);

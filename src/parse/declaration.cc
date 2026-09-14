@@ -217,7 +217,13 @@ void Parser::parseParam() {
 [[nodiscard]] static std::uint32_t typeRunLength(const Parser& parser) {
   std::uint32_t tokens = 0;
   while (parser.nth(tokens) == lex::TokenKind::Star ||
-         parser.nth(tokens) == lex::TokenKind::Identifier) {
+         parser.nth(tokens) == lex::TokenKind::Identifier ||
+         // `!`, the bottom type. It is a type *token* rather than a word, which
+         // is why it is listed beside the two the grammar already had: a run is
+         // still what a type position holds, and `!` takes part in it exactly
+         // where a word would -- `fn ! f()` is a return type and a name, and the
+         // reader below splits the run the same way it splits `fn i32 f()`.
+         parser.nth(tokens) == lex::TokenKind::Bang) {
     ++tokens;
   }
   return tokens;
@@ -258,7 +264,10 @@ void Parser::parseTypeAndName() {
     error(tokens == 0 ? "expected a return type and a function name" : "expected a function name",
           ParseErrorCode::ExpectedName);
     Marker type = start();
-    while (!atEnd() && at(lex::TokenKind::Star)) {
+    // Everything the run held goes into the `Type` node, `!` included: the run
+    // is what the reader below would have read, and dropping a token here is how
+    // a tree stops being lossless.
+    while (!atEnd() && (at(lex::TokenKind::Star) || at(lex::TokenKind::Bang))) {
       bump();
     }
     type.complete(SyntaxKind::Type);
@@ -286,8 +295,11 @@ void Parser::parseType() {
     return;
   }
   // In an annotation (`x: T`) there is no trailing name to separate, so the
-  // whole run is the type.
-  while (at(lex::TokenKind::Identifier) || at(lex::TokenKind::Star)) {
+  // whole run is the type. `!` is accepted here too, and refused one stage later
+  // where the position is known: this stage answers "what shape is written", and
+  // `let x: !` is a shape -- a wrong one, with a sentence about why, produced by
+  // the only stage that knows an object cannot have that type (`never.md`).
+  while (at(lex::TokenKind::Identifier) || at(lex::TokenKind::Star) || at(lex::TokenKind::Bang)) {
     bump();
   }
   type.complete(SyntaxKind::Type);

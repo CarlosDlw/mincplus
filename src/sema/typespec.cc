@@ -138,6 +138,23 @@ std::span<const std::string_view> typeNames() {
 }
 
 TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types) {
+  // `!` first, because it is the one accepted spelling that is not a run of
+  // words under some stars: it is a whole type on its own, and anything beside
+  // it is a spelling with no meaning to give.
+  //
+  // The two messages are different on purpose. `!` as the whole run is a type;
+  // `*!`, `!i32` and `! !` are attempts to combine it, and the fix is to stop
+  // combining -- usually by naming the type the expression would have had, or
+  // by calling the function for its effect and not for its value.
+  if (parts.size() == 1 && parts.front().isBang) {
+    return ok(kTypeNever);
+  }
+  for (const TypePart& part : parts) {
+    if (part.isBang) {
+      return fail("`!` is a type on its own: it cannot be combined with a type name or a `*`");
+    }
+  }
+
   std::vector<std::string_view> words;
   words.reserve(parts.size());
   std::size_t stars = 0;

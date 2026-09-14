@@ -70,6 +70,13 @@ llvm::Type* Lowering::llvmType(sema::TypeId id) {
   }
   switch (types_.get(id).kind) {
   case sema::TypeKind::Void:
+  case sema::TypeKind::Never:
+    // One branch because it is one answer: a function returning `!` returns
+    // nothing, and the promise that it also never *comes back* is a function
+    // attribute rather than a return type (`declarations.cc`). No object can have
+    // the bottom type -- `sema` refuses every position that would build one,
+    // which is what keeps "an alloca of `!`" from existing to be asked about
+    // here, and why mapping it to `void` cannot collide with a storage width.
     return llvm::Type::getVoidTy(context_);
   case sema::TypeKind::Bool:
     // `i1` and not `i8`: a comparison produces exactly this, so no conversion is
@@ -261,6 +268,30 @@ Value Lowering::convert(const Value& value, sema::TypeId to) {
 
 Value Lowering::lowerOperand(ast::AstId consumer, ast::AstId child) {
   Value value = lowerExpr(child);
+
+  // A child whose type is `!` produces no value, and *every* consumer that
+  // accepted one accepted it because of that: the call it ends in does not come
+  // back, so nothing downstream can read what is not there. What the consumer
+  // needs anyway -- a phi incoming, a call argument, a stored value -- is a
+  // poison of the type the consumer asked for, which is exactly "a value of that
+  // type that this program can never reach". The coercion record is where the
+  // asked-for type comes from, so this is one lookup and no second place has to
+  // know the special case.
+  //
+  // Asked about the *type* rather than about the value being null, because the
+  // call that never returns still returns an `llvm::CallInst` -- it is a real
+  // instruction with the `void` type, and handing that to a `phi` is the type
+  // error this exists to prevent.
+  if (types_.isNever(typeOf(child))) {
+    const sema::Coercion* coercion = coercionFor(consumer, child);
+    if (coercion != nullptr) {
+      if (llvm::Type* shape = llvmType(coercion->to); shape != nullptr && !shape->isVoidTy()) {
+        return Value{llvm::PoisonValue::get(shape), coercion->to};
+      }
+    }
+    return value;
+  }
+
   if (value.v == nullptr) {
     return value;
   }

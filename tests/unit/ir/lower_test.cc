@@ -210,6 +210,55 @@ TEST(IrLowerTest, ADeclarationNothingCallsIsStillADeclaration) {
   EXPECT_EQ(text.find("define i32 @unused"), std::string::npos) << text;
 }
 
+TEST(IrLowerTest, ANeverReturnTypeCutsTheEdgeAfterTheCall) {
+  // The promise is told to LLVM in the one spelling it understands, and the fact
+  // is *derived* from the return type rather than declared beside it: `!` maps to
+  // `void` on the ABI side, so a function returning it is an ordinary `void`
+  // function with an attribute on it. What the attribute buys is visible in the
+  // same module -- the code the source wrote after the call has no way back, and
+  // the terminator says so.
+  test::IrFixture fixture;
+  fixture.source("extern fn ! exit(code: i32);\n"
+                 "fn i32 f() { exit(1); }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("attributes #0 = { noreturn }"), std::string::npos) << text;
+  EXPECT_NE(text.find("declare void @exit(i32)"), std::string::npos) << text;
+  EXPECT_NE(text.find("unreachable"), std::string::npos) << text;
+  EXPECT_EQ(fixture.violations(), 0U);
+}
+
+TEST(IrLowerTest, ANeverArmOfAConditionalContributesPoison) {
+  // The arm never produces a value, so there is nothing for the `phi` to take
+  // from it -- and there is still an edge into the join from its block, because a
+  // `call` is not a terminator even when it never returns. Poison of the result
+  // type is the honest incoming value: it is never read, and it does not pretend
+  // to be something the program could have computed.
+  test::IrFixture fixture;
+  fixture.source("extern fn ! exit(code: i32);\n"
+                 "fn i32 pick(c: bool) { let v = c ? 1 : exit(2); return v; }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("phi i32"), std::string::npos) << text;
+  EXPECT_NE(text.find("poison"), std::string::npos) << text;
+  EXPECT_EQ(fixture.violations(), 0U);
+}
+
+TEST(IrLowerTest, OnlyANeverReturnTypeGetsTheNoreturnAttribute) {
+  // Pins the direction: an implementation that set the attribute on every
+  // function would still pass the test above, and one that set it on none would
+  // pass this one. Both are needed.
+  test::IrFixture fixture;
+  fixture.source("fn i32 f() { return 1; }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+  EXPECT_EQ(fixture.module().find("noreturn"), std::string::npos) << fixture.module();
+}
+
 TEST(IrLowerTest, AVariadicDeclarationIsAVarArgsSignature) {
   // The type carries the marker all the way to LLVM's `FunctionType`, which is
   // what makes the call site below able to hand it more arguments than it

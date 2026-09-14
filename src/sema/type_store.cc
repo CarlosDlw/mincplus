@@ -71,6 +71,10 @@ TypeStore::TypeStore(TargetInfo target, std::size_t maxTypes)
   for (const std::uint16_t bits : {std::uint16_t{32}, std::uint16_t{64}, std::uint16_t{80}}) {
     add(TypeKind::Float, false, bits);
   }
+
+  // The bottom type, last: the ids above are constants every dump and test
+  // names, so a new one is appended and never inserted (`type.h`).
+  add(TypeKind::Never, false, 0);
 }
 
 std::uint64_t TypeStore::hashOf(const Type& type) const {
@@ -276,6 +280,9 @@ TypeId TypeStore::pointeeOf(TypeId id) const {
 bool TypeStore::isVoid(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Void;
 }
+bool TypeStore::isNever(TypeId id) const {
+  return known(id) && get(id).kind == TypeKind::Never;
+}
 bool TypeStore::isError(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Error;
 }
@@ -293,6 +300,8 @@ std::string TypeStore::spelling(TypeId id) const {
     return "<error>";
   case TypeKind::Void:
     return "void";
+  case TypeKind::Never:
+    return "!";
   case TypeKind::Bool:
     return "bool";
   case TypeKind::Char:
@@ -358,6 +367,7 @@ std::size_t TypeStore::sizeOf(TypeId id) const {
     return target_.pointerBits / 8U;
   case TypeKind::Error:
   case TypeKind::Void:
+  case TypeKind::Never:
   case TypeKind::Function:
   case TypeKind::IntLiteral:
   case TypeKind::FloatLiteral:

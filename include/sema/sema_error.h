@@ -45,6 +45,17 @@ enum class SemaErrorCode : std::uint8_t {
   AssignToConst,
   // `++`/`--` on something that is not an lvalue.
   IncDecNotLvalue,
+  // A `return` that a function returning `!` can actually execute. The type
+  // promises the call never gives control back, and a `return` is precisely
+  // control coming back -- so this is the promise broken, reported at the
+  // statement that breaks it. Unreachable `return`s (after a `while true`, say)
+  // are not this.
+  NeverReturns,
+  // A function returning `!` whose body can complete normally. A `!` body has to
+  // *end* in something that does not end -- a loop that cannot leave, or another
+  // call that never comes back -- and this is the diagnostic for a body that
+  // simply runs out.
+  NeverBodyCompletes,
   // Calling a value whose type is not a function.
   NotAFunction,
   // Wrong number of arguments.

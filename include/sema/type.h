@@ -48,6 +48,18 @@ enum class TypeKind : std::uint8_t {
   // everything, silently, and never produces a second diagnostic.
   Error,
   Void,
+  // The bottom type, written `!`. It is the type of an expression that never
+  // produces a value -- a call to a function that never returns -- and so it has
+  // no values at all: it *converts* to every other type, vacuously, because
+  // every path that would have produced one is a path that never gets there.
+  //
+  // Deliberately not `Void`. `void` is "produces nothing and comes back"; this is
+  // "never comes back", and the two differ at every consumer: a `void` value is
+  // an error in a value position, while `!` in a value position is a program
+  // that cannot reach it. Rust states the same distinction with the same
+  // spelling, and refuses to write `!` outside a return type on stable
+  // (`primitive.never`), which is the rule `typespec.cc` enforces here.
+  Never,
   Bool,
   // Distinct from `i8`/`u8`, and always unsigned (README, decided).
   Char,
@@ -121,6 +133,12 @@ inline constexpr TypeId kTypeF32{17};
 inline constexpr TypeId kTypeF64{18};
 inline constexpr TypeId kTypeF80{19};
 
+// `!`. Last in the registration order rather than next to `void`, which is where
+// its kind sits: the id list is append-only, because every constant above is a
+// promise to the dumps and the tests, and inserting in the middle would renumber
+// `i32` to make a new type tidier.
+inline constexpr TypeId kTypeNever{20};
+
 // `isize`/`usize` are deliberately **not** here. They are pointer-sized, and on
 // LP64 the pointer-sized signed type *is* `i64`, so a distinct id would give two
 // ids to one type and break the identity this file is built on. The specifier
@@ -130,6 +148,6 @@ inline constexpr TypeId kTypeF80{19};
 
 // How many ids the store pre-registers. Everything past this was interned while
 // checking a unit.
-inline constexpr std::uint32_t kFirstInternedType = 20;
+inline constexpr std::uint32_t kFirstInternedType = 21;
 
 } // namespace minc::sema

@@ -397,6 +397,53 @@ TEST(ParserTest, TheVariadicMarkerInTheWrongPlaceIsOneDiagnostic) {
   }
 }
 
+TEST(ParserTest, ANeverReturnTypeIsATokenInTheRun) {
+  // `!` takes part in the type run exactly where a word would, so the run splits
+  // the same way `fn i32 f()` splits: everything before the last identifier is
+  // the type, and that identifier is the name. Nothing new had to be added to the
+  // grammar for this -- which is the whole argument for a punctuator over a
+  // reserved word.
+  const ParseFixture fixture("extern fn ! exit(code: i32);\n");
+  ASSERT_TRUE(fixture.built());
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  EXPECT_TRUE(fixture.tree().validate());
+  EXPECT_EQ(fixture.reconstruct(), fixture.source());
+
+  const auto decl =
+      syntax::FnDecl::cast(fixture.tree().root().childOfKind(SyntaxKind::FnDecl).value());
+  ASSERT_TRUE(decl.has_value());
+  EXPECT_TRUE(decl->isExtern());
+  const std::optional<syntax::SyntaxNode> returned = syntax::returnTypeOf(*decl);
+  ASSERT_TRUE(returned.has_value());
+  // The type node holds a `!` and *no word*: a `!` type is not a run of
+  // identifiers, which is exactly what `identifierText` would report.
+  EXPECT_TRUE(returned->tokenOfKind(parse::toSyntaxKind(lex::TokenKind::Bang)).has_value());
+  EXPECT_TRUE(syntax::identifierText(*returned).empty());
+  std::string text;
+  syntax::appendText(*returned, text);
+  EXPECT_NE(text.find('!'), std::string::npos) << text;
+  const std::optional<syntax::SyntaxNode> name = syntax::nameOf(*decl);
+  ASSERT_TRUE(name.has_value());
+  EXPECT_EQ(syntax::identifierText(*name), "exit");
+}
+
+TEST(ParserTest, ThePositionOfANeverTypeIsNotTheParsersQuestion) {
+  // `let x: !` is a shape the grammar has, and the *parser* accepts it: which
+  // position a type is legal in is a question about what a type means, and that
+  // belongs to the stage that has types. Both of these parse without a diagnostic
+  // and are refused one stage later, with a sentence that names the word.
+  const char* const kSources[] = {
+      "fn i32 main() { let x: ! = 1; return 0; }\n",
+      "fn i32 main() { let x: ! ! = 1; return 0; }\n",
+  };
+  for (const char* source : kSources) {
+    const ParseFixture fixture(source);
+    ASSERT_TRUE(fixture.built()) << source;
+    EXPECT_EQ(fixture.errorCount(), 0u) << source << ": " << fixture.errorMessages();
+    EXPECT_EQ(fixture.reconstruct(), fixture.source()) << source;
+  }
+}
+
 TEST(ParserTest, EverySingleByteParsesWithoutCrashing) {
   // The parser must be total on arbitrary input: an editor will hand it a file
   // that is one keystroke long, and a fuzzer will hand it worse.

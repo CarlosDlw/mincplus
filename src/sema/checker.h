@@ -120,6 +120,20 @@ private:
   // could leave it; and a region the parser already reported (where saying
   // "control falls off the end" would be a second sentence about one mistake).
   [[nodiscard]] bool terminates(ast::AstId stmt) const;
+  // Does this expression never produce a value? True exactly when its type is
+  // `!`, which is the whole flow rule for the bottom type: no table, no callee
+  // lookup, no second meaning of a word beside the signature (`never.md`).
+  [[nodiscard]] bool diverges(ast::AstId expr) const;
+  // The `return` this subtree can execute, or an invalid id when it cannot
+  // execute one. *Reachable* is the load-bearing word: a `return` after a
+  // statement that never completes is one a caller never sees, and reporting it
+  // would make `while true {} return;` an error for a promise it does not break.
+  // The scan stops wherever `terminates` says control cannot continue, which is
+  // what keeps the two answers in step. Returning the node rather than a bool is
+  // what lets the diagnostic point at the statement.
+  [[nodiscard]] ast::AstId reachableReturn(ast::AstId node) const;
+  // The value of a `let`/`const`, or an invalid id when it has none.
+  [[nodiscard]] ast::AstId initializerOf(ast::AstId stmt) const;
   // Is this loop guaranteed to leave only through a `return`? True for a
   // constant-true condition with no `break` aimed at *this* loop -- a `break`
   // inside a nested loop belongs to that loop and does not count.

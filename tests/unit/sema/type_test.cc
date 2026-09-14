@@ -38,6 +38,14 @@ TEST(TypeStoreTest, TheBuiltInsHaveTheConstantsIds) {
   EXPECT_EQ(types.spelling(kTypeI32), "i32");
   EXPECT_EQ(types.spelling(kTypeU8), "u8");
   EXPECT_EQ(types.spelling(kTypeF80), "f80");
+  // The bottom type, and the two questions about it that are different: its kind
+  // is `never` (for a reader of the implementation) and its spelling is `!` (for
+  // a reader of the source).
+  EXPECT_EQ(toString(types.get(kTypeNever).kind), "never");
+  EXPECT_EQ(types.spelling(kTypeNever), "!");
+  EXPECT_TRUE(types.isNever(kTypeNever));
+  EXPECT_FALSE(types.isNever(kTypeVoid));
+  EXPECT_FALSE(types.isVoid(kTypeNever));
 }
 
 TEST(TypeStoreTest, IdentityIsStructureAndNotSpelling) {
@@ -80,6 +88,7 @@ TEST(TypeStoreTest, SizesFollowTheTarget) {
   EXPECT_EQ(sysv.sizeOf(kTypeStr), 8u);  // a pointer
   EXPECT_EQ(sysv.sizeOf(kTypeVoid), 0u); // no object representation
   EXPECT_EQ(sysv.sizeOf(kTypeError), 0u);
+  EXPECT_EQ(sysv.sizeOf(kTypeNever), 0u); // and no values to have one
 
   const std::optional<TargetInfo> windowsTarget = targetFromName(kTripleWindowsAmd64);
   ASSERT_TRUE(windowsTarget.has_value());
@@ -88,6 +97,30 @@ TEST(TypeStoreTest, SizesFollowTheTarget) {
   // the specifier reader resolves, not the types themselves.
   EXPECT_EQ(windows.sizeOf(kTypeI64), 8u);
   EXPECT_EQ(windows.target().longBits, 32u);
+}
+
+TEST(TypeSpecTest, TheBottomTypeIsAWholeRunOfItsOwn) {
+  TypeStore types;
+  TypePart bang;
+  bang.isBang = true;
+  // Alone, it is a type: `fn ! f()` is a return type like any other, and the
+  // reader's answer is the one the rest of the pipeline keys on.
+  const TypeSpecResult alone = readType(std::span<const TypePart>(&bang, 1), types);
+  ASSERT_TRUE(alone.ok) << alone.message;
+  EXPECT_EQ(alone.type, kTypeNever);
+
+  // Combined with anything, it is a spelling with no meaning to give -- and the
+  // message says what to stop doing, because there is no `*!` and no `!i32` for
+  // the reader to fall back on.
+  TypePart star;
+  star.isStar = true;
+  const TypePart combined[] = {star, bang};
+  const TypeSpecResult bad = readType(combined, types);
+  EXPECT_FALSE(bad.ok);
+  // No `unknownWord`: both tokens are understood, and `!` is not a misspelling
+  // of anything to suggest.
+  EXPECT_TRUE(bad.unknownWord.empty());
+  EXPECT_NE(bad.message.find("`!` is a type on its own"), std::string::npos) << bad.message;
 }
 
 TEST(TypeSpecTest, ThePrimitivesAreWholeTypes) {

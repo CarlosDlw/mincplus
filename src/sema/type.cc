@@ -12,6 +12,11 @@ std::string_view toString(TypeKind kind) {
     return "error";
   case TypeKind::Void:
     return "void";
+  case TypeKind::Never:
+    // The kind's name, not its spelling: `spelling()` is what prints `!` in a
+    // diagnostic, and the two are different questions -- one is for a reader of
+    // the source, this one for a reader of the implementation.
+    return "never";
   case TypeKind::Bool:
     return "bool";
   case TypeKind::Char:
