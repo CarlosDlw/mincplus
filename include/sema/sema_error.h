@@ -90,6 +90,13 @@ enum class SemaErrorCode : std::uint8_t {
   // checked against and what the symbol's type comes from, so the two have to
   // name the same function for the program to mean anything.
   SignatureMismatch,
+  // An `extern` declaration with an array in its signature -- a parameter, or the
+  // return type. An array crosses this language's functions by *value*, and that
+  // shape is the compiler's own: no ABI promises it, so a definition compiled
+  // somewhere else cannot be called with it. Refused at the declaration, because
+  // the alternative is a symbol that links, runs, and reads the wrong bytes
+  // (`arrays.md` decision 11).
+  ExternAggregate,
   // `break` with no loop to break out of.
   BreakOutsideLoop,
   // `continue` with no loop to continue.

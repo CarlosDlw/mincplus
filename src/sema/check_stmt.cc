@@ -640,6 +640,11 @@ void Checker::runSignatures() {
     // call, which compares against the function's type -- sees a real type
     // rather than whatever the walk happened to reach first.
     std::vector<TypeId> params;
+    // Where each parameter's type was written, in the same order as `params`, so
+    // the `extern` rule below can point at the type instead of at the whole
+    // declaration -- and so it does not have to resolve a type node twice, which
+    // would be a second chance to report the same mistake.
+    std::vector<ast::AstId> paramTypeNodes;
     const ast::AstId paramList = childOf(decl, ast::NodeKind::ParamList);
     // `...` is part of the signature and not an extra: the marker is a child of
     // the list (the grammar only lets a declaration have one), and the type it
@@ -666,6 +671,7 @@ void Checker::runSignatures() {
           declared = kTypeError;
         }
         params.push_back(declared);
+        paramTypeNodes.push_back(paramType.valid() ? paramType : param);
         if (const std::optional<resolve::DefId> def =
                 defAtName(childOf(param, ast::NodeKind::Name))) {
           if (def->index < defTypes_.size()) {
@@ -674,6 +680,45 @@ void Checker::runSignatures() {
             // its own parameter would have to copy it into a `let` first.
             defIsConst_[def->index] = false;
           }
+        }
+      }
+    }
+
+    // **The boundary, refused by name where it cannot be honoured**
+    // (`arrays.md` decision 11). An array crosses this language's functions by
+    // *value*: the caller copies it and passes a pointer to the copy, and a
+    // return writes into a destination the caller hands over. That shape is this
+    // compiler's own -- nothing outside promises it -- so a declaration whose
+    // definition lives somewhere this compiler is not looking must not claim it.
+    //
+    // Refusing here rather than at the call site is the difference between a
+    // diagnostic and wrong code: the callee was compiled by a C compiler, the
+    // argument would be a pointer to a copy it is not expecting, and the program
+    // would link, run, and read the wrong bytes.
+    //
+    // A declaration with no body *is* the `extern` spelling: the parser refuses a
+    // function with neither a body nor the word, so the missing block is the one
+    // fact, and asking the AST for a flag it does not carry would be a second
+    // spelling of the same thing.
+    if (!body.valid()) {
+      if (types_.isAggregate(returnType)) {
+        error(typeNode.valid() ? typeNode : decl, SemaErrorCode::ExternAggregate,
+              "`extern` says this function is defined somewhere this compiler is not looking, "
+              "and an array `" +
+                  types_.spelling(returnType) +
+                  "` returns here as a shape the caller sets up: pass a pointer instead, and "
+                  "the address is what crosses");
+      }
+      for (std::size_t i = 0; i < params.size() && i < paramTypeNodes.size(); ++i) {
+        const TypeId declared = params[i];
+        if (types_.isAggregate(declared)) {
+          error(paramTypeNodes[i], SemaErrorCode::ExternAggregate,
+                "`extern` says this function is defined somewhere this compiler is not looking, "
+                "and an array `" +
+                    types_.spelling(declared) +
+                    "` is passed here as a copy the caller makes: pass a pointer instead, "
+                    "`*" +
+                    types_.spelling(declared) + "`, and the address crosses");
         }
       }
     }

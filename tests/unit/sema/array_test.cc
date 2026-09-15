@@ -394,6 +394,38 @@ TEST(ArrayTest, AnArrayOfStrHoldsOneAddressPerElement) {
   EXPECT_FALSE(names->elements[0].negated);
 }
 
+TEST(ArrayTest, AnExternSignatureCannotPromiseAnArray) {
+  // Decision 11: an array crosses this language's functions by *value* -- the
+  // caller copies it, a return writes into a destination the caller hands over --
+  // and that shape is this compiler's own. An `extern` declaration claims the
+  // definition is somewhere this compiler is not looking, so it must not claim a
+  // convention nothing outside promises: the program would link, run and read the
+  // wrong bytes.
+  SemaFixture parameter;
+  parameter.source("extern fn i32 takes(a: [4]i32);\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(parameter.build());
+  EXPECT_TRUE(parameter.hasError("sema-extern-aggregate"));
+  EXPECT_NE(parameter.firstError().message.find("pass a pointer instead"), std::string::npos)
+      << parameter.firstError().message;
+
+  SemaFixture returned;
+  returned.source("extern fn [4]i32 make();\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(returned.build());
+  EXPECT_TRUE(returned.hasError("sema-extern-aggregate"));
+
+  // The two shapes that *do* cross, and the reason the refusal is about the array
+  // in the signature rather than about `extern`: a pointer to the object is an
+  // address, which every ABI agrees about, and a *defined* function may take and
+  // return an array because both sides are this compiler.
+  SemaFixture fine;
+  fine.source("extern fn i32 takes(p: *[4]i32);\n"
+              "fn [4]i32 local() { return [4]i32{1, 2, 3, 4}; }\n"
+              "fn i32 main() { return local()[0]; }\n");
+  ASSERT_TRUE(fine.build());
+  EXPECT_FALSE(fine.hasError("sema-extern-aggregate")) << fine.firstError().message;
+  EXPECT_EQ(fine.errorCount(), 0u) << fine.firstError().message;
+}
+
 TEST(ArrayTest, ANonConstantElementIsRefusedOnceAndWithoutCascading) {
   SemaFixture f;
   f.source("fn i32 g();\n"

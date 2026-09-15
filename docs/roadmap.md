@@ -390,6 +390,12 @@ which also records the reversal.
       sentence (decisions 27, 28 of
       [`architectures/arrays.md`](architectures/arrays.md)) — while a zero fill
       of any count stays legal, because it is one constant
+- [x] The **boundary rule** for arrays: an `extern` declaration with a `[N]T`
+      parameter or return is refused by name, because an array crosses this
+      language's functions by value and no outside ABI promises that shape —
+      while `*[N]T` crosses freely (decision 11 of
+      [`architectures/arrays.md`](architectures/arrays.md)); mapping C's own
+      `T a[N]` parameter to `*T` is `cinterop`'s, when that module lands
 - [x] The **reserved spellings** (step 10 of
       [`architectures/arrays.md`](architectures/arrays.md)): `[]T` and `..` each
       parse and are refused by name, so no `.mx` file can mean anything else by

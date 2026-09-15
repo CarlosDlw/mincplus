@@ -488,6 +488,9 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       // is a *type*, and this is the stage that has types.
       {"fn i32 f() { return 1; }\nfn i32 f() { return 2; }\n", false},
       {"extern fn i32 f(a: i32);\nfn i32 f() { return 0; }\n", false},
+      // The boundary: an array in an `extern` signature, in both directions.
+      {"extern fn i32 f(a: [4]i32);\nfn i32 main() { return 0; }\n", false},
+      {"extern fn [4]i32 f();\nfn i32 main() { return 0; }\n", false},
       {"fn i32 main() { return 1 / 0; }\n", false},
       {"fn i32 main() { return 0; }\n", false},                               // maxTypes = 0
       {"fn i32 f() { return 1; let x = 2; return x; }\n", false},             // unreachable

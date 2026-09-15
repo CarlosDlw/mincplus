@@ -202,6 +202,25 @@ TEST(IrDebugTest, DebugInformationWithNoSourceFileIsRefusedRatherThanGuessed) {
   EXPECT_TRUE(fixture.hasError("ir-internal"));
 }
 
+TEST(IrDebugTest, AnArrayBindingIsACompositeTypeWithItsCount) {
+  // What a debugger needs to show the elements of an array at all: a composite
+  // type and the count as a `DISubrange`. An array that is only a size (a byte
+  // blob) prints as bytes, and a reader looking at a table of `i32` in `gdb`
+  // wants the four elements.
+  test::IrFixture fixture;
+  ASSERT_TRUE(fixture.source("fn i32 main() { let a: [3]i32 = [1, 2, 3]; return a[0]; }\n")
+                  .debugInfo()
+                  .build());
+  ASSERT_TRUE(fixture.moduleBuilt());
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("DW_TAG_array_type"), std::string::npos) << text;
+  EXPECT_NE(text.find("!DISubrange(count: 3, lowerBound: 0)"), std::string::npos) << text;
+  // The size is the object's, which is the count times the element -- and the
+  // alignment is the element's, because an array adds no padding of its own.
+  EXPECT_NE(text.find("size: 96, align: 32"), std::string::npos) << text;
+}
+
 TEST(IrDebugTest, DebugInformationDoesNotChangeTheInstructionsOnlyTheirLocations) {
   // The property that makes `-g` free to leave on, and the one a later change to
   // the lowering is most likely to break. `codegen.md` calls it checkable exactly,

@@ -133,6 +133,25 @@ the size and comes at the declaration.
   language says where that stops instead of letting it be a slow build. A list is
   never limited this way: its length is what you wrote.
 
+## Arrays and `extern`
+
+An array crosses this language's functions **by value**: the caller copies it and
+passes a pointer to the copy, and a return writes into a destination the caller
+hands over. That shape is the compiler's own, so it is not something an `extern`
+declaration may claim -- the definition would be somewhere else, compiled by
+another compiler, expecting another convention:
+
+```minc
+extern fn i32 takes(a: [4]i32);   // error: pass a pointer instead
+let p: *[4]i32 = &table;
+```
+
+A pointer crosses freely, because an address is something every ABI agrees about:
+
+```minc
+extern fn i32 takes(p: *[4]i32);  // fine
+```
+
 ## What is not here yet
 
 - **Slices** (`[]T`, a pointer and a length together) are **reserved**: the
