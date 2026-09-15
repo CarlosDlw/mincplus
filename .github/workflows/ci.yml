@@ -32,6 +32,10 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install -y ninja cmake
 
+      # LLVM is not something to inherit from the runner image: the action says
+      # why the major is pinned and what it exports for the preset to read.
+      - uses: ./.github/actions/install-llvm
+
       # GTest is resolved by tests/unit/CMakeLists.txt: package config, then
       # pkg-config, then a pinned FetchContent download. The package installs
       # above are a speed-up, not a requirement, so a runner that cannot find
@@ -70,6 +74,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake ccache libgtest-dev
+
+      - uses: ./.github/actions/install-llvm
 
       # A separate cache from the `ci` job: the sanitizer build compiles with
       # different flags, so its objects cannot be shared with the plain one.
@@ -136,6 +142,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang clang-tidy ninja-build cmake ccache
+      - uses: ./.github/actions/install-llvm
       - name: Configure
         # clang-tidy cannot consume a GNU compile database (GCC emits flags
         # such as -fmodules-ts that it does not understand), so this job

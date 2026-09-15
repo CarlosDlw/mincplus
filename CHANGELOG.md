@@ -105,5 +105,5 @@ and the standard library. The
 carries the authoritative list, marked *decided* / *planned* / *open*, and each
 unimplemented construct is marked on the page that would describe it.
 
-[Unreleased]: https://github.com/mincplus/mincplus/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/mincplus/mincplus/releases/tag/v0.1.0
+[Unreleased]: https://github.com/CarlosDlw/mincplus/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/CarlosDlw/mincplus/releases/tag/v0.1.0

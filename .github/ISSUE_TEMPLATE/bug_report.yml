@@ -11,7 +11,7 @@ body:
         If you think the bug is exploitable — a crash on a malformed input, a
         module LLVM's verifier rejects, wrong code from a program a user did not
         write — please use
-        [private reporting](https://github.com/mincplus/mincplus/security/advisories/new)
+        [private reporting](https://github.com/CarlosDlw/mincplus/security/advisories/new)
         instead.
 
   - type: dropdown

@@ -14,12 +14,25 @@ releases yet.
 | **CMake** | 3.28 or newer |
 | **Ninja** | any version |
 | **A C++20 compiler** | Clang, GCC or MSVC |
-| **LLVM** | development libraries (`llvm-dev`, `llvm` via Homebrew, or the official Windows installer) |
+| **LLVM** | development libraries, 22 or newer (`llvm-22-dev`, `llvm` via Homebrew, or the official Windows installer) |
 | **GoogleTest** | found automatically, or downloaded by CMake |
 | **A C toolchain** | `clang`, `cc` or `gcc` — `mincc build` invokes one to link |
 
 `ccache` is used when it is installed, and makes a rebuild after a small edit
 close to free.
+
+If LLVM is somewhere CMake does not look by default — a versioned package under
+`/usr/lib/llvm-22`, Homebrew's `llvm`, the Windows installer — the presets read one
+variable, so it is said once:
+
+```sh
+MINC_LLVM_ROOT=/usr/lib/llvm-22 cmake --preset dev
+```
+
+LLVM's *build configuration* is part of its ABI: this compiler is built with RTTI
+on, exceptions off and assertions off, and the configure step refuses an LLVM that
+disagrees rather than linking against it and hoping. A release package has that
+configuration; a local build with `LLVM_ENABLE_ASSERTIONS=ON` does not.
 
 ## Build
 

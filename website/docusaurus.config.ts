@@ -20,10 +20,11 @@ const config: Config = {
     v4: true, // Improve compatibility with the upcoming Docusaurus v4
   },
 
-  // Change this to the deployed origin; `onBrokenLinks: 'throw'` below makes a
-  // link to a page that does not exist a build failure, not a warning.
-  url: 'https://mincplus.dev',
-  baseUrl: '/',
+  // The site is a GitHub Pages project site, so the origin is the account and
+  // the repository is the base path. `onBrokenLinks: 'throw'` below makes a link
+  // to a page that does not exist a build failure, not a warning.
+  url: 'https://carlosdlw.github.io',
+  baseUrl: '/mincplus/',
 
   onBrokenLinks: 'throw',
   markdown: {

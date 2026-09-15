@@ -1,0 +1,68 @@
+# The LLVM development files this compiler builds against.
+#
+# LLVM is not an optional dependency: `src/ir` and `src/backend` include
+# `llvm/*`, and the configure step refuses to run without it. A runner image may
+# happen to carry a distribution LLVM, but "happens to carry" is not a build
+# input -- its version would drift with the image, and the ABI requirements this
+# project states (RTTI on, exceptions off, assertions off) would be whatever the
+# image's packager chose. A mismatch there is not a link error; it is an ODR
+# violation across the LLVM boundary, which is why `CMakeLists.txt` checks.
+#
+# So every job that compiles C++ installs LLVM here, pinned to the major this
+# project is developed against, and exports the one variable the presets read
+# (`MINC_LLVM_ROOT`, see `CMakePresets.json`). One place to change the version,
+# one name for "where LLVM is", on three platforms.
+name: install LLVM
+description: Install the LLVM development files and export MINC_LLVM_ROOT.
+
+inputs:
+  major:
+    description: The LLVM major version to build against.
+    required: false
+    default: '22'
+
+runs:
+  using: composite
+  steps:
+    - name: Install LLVM (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+        # apt.llvm.org is LLVM's own archive. The distribution's LLVM packages
+        # trail by several releases, and the versioned series is what pins the
+        # major rather than "whatever this image has today".
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+          | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+        sudo add-apt-repository -y \
+          "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${{ inputs.major }} main"
+        sudo apt-get update
+        sudo apt-get install -y "llvm-${{ inputs.major }}-dev"
+        echo "MINC_LLVM_ROOT=/usr/lib/llvm-${{ inputs.major }}" >> "$GITHUB_ENV"
+
+    - name: Install LLVM (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The versioned formula first: Homebrew's plain `llvm` tracks the newest
+        # release, which is not always the one this project is written against.
+        brew install "llvm@${{ inputs.major }}" || brew install llvm
+        prefix="$(brew --prefix "llvm@${{ inputs.major }}" 2>/dev/null \
+          || brew --prefix llvm)"
+        echo "MINC_LLVM_ROOT=${prefix}" >> "$GITHUB_ENV"
+
+    - name: Install LLVM (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        choco install -y llvm
+        echo "MINC_LLVM_ROOT=C:/Program Files/LLVM" >> $env:GITHUB_ENV
+
+    # Printed rather than assumed: the configure step reports the version it
+    # found, and this says which directory it was told to look in, so a run that
+    # picks up the wrong LLVM says so in the log instead of in a compiler error.
+    - name: Report the prefix
+      shell: bash
+      run: echo "MINC_LLVM_ROOT=$MINC_LLVM_ROOT"

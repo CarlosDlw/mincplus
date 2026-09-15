@@ -8,7 +8,7 @@ documentation.
 
 | What | Where |
 | --- | --- |
-| "How do I write X?", "what does this diagnostic mean?" | [Discussions](https://github.com/mincplus/mincplus/discussions), or an issue if Discussions is not enabled |
+| "How do I write X?", "what does this diagnostic mean?" | [Discussions](https://github.com/CarlosDlw/mincplus/discussions) |
 | "This file does not compile and I think it should" | an issue, using the **Bug report** template |
 | "The compiler crashed, or produced a program that behaves differently from what the language says" | an issue — and if you believe it is exploitable, [SECURITY.md](SECURITY.md) instead |
 | "This feature is missing", "this should be spelled differently" | an issue, using the **Feature request** or **Language proposal** template |

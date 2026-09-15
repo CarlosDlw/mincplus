@@ -1,6 +1,7 @@
 # minc+
 
-[![ci](https://github.com/mincplus/mincplus/actions/workflows/ci.yml/badge.svg)](https://github.com/mincplus/mincplus/actions/workflows/ci.yml)
+[![ci](https://github.com/CarlosDlw/mincplus/actions/workflows/ci.yml/badge.svg)](https://github.com/CarlosDlw/mincplus/actions/workflows/ci.yml)
+[![docs](https://img.shields.io/badge/docs-carlosdlw.github.io-blue.svg)](https://carlosdlw.github.io/mincplus/)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![platforms: Linux | macOS | Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue.svg)
 ![standard: C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
@@ -126,11 +127,19 @@ used when present. The CMake presets are the source of truth for every flag; the
 LLVM's *build configuration* is part of its ABI, so a mismatch is something the
 configure step reports rather than a link that half-works: this compiler is built
 with RTTI on, exceptions off, and `LLVM_ENABLE_ASSERTIONS` off (which
-`LLVM_ENABLE_ABI_BREAKING_CHECKS` follows). A distribution LLVM — `llvm-dev`,
+`LLVM_ENABLE_ABI_BREAKING_CHECKS` follows). A release LLVM — `llvm-dev`,
 Homebrew's `llvm`, the official Windows installer — has that configuration.
 
+If LLVM is somewhere CMake does not look by default (a versioned package under
+`/usr/lib/llvm-22`, Homebrew's `llvm`, the Windows installer), every preset reads
+one variable, so it is said once:
+
 ```sh
-git clone https://github.com/mincplus/mincplus
+MINC_LLVM_ROOT=/usr/lib/llvm-22 cmake --preset dev
+```
+
+```sh
+git clone https://github.com/CarlosDlw/mincplus
 cd mincplus
 cmake --preset dev && cmake --build --preset dev
 ctest --preset dev
@@ -155,7 +164,7 @@ Three kinds of writing live in this repository, and each has one reader:
 
 | Where | What | Who reads it |
 | --- | --- | --- |
-| [`website/`](website) | The **language reference**: what a `.mx` file means, and what each tool does. `make docs` builds it, `make docs-serve` serves it. | Someone writing a program |
+| [`website/`](website) | The **language reference**: what a `.mx` file means, and what each tool does. Published at <https://carlosdlw.github.io/mincplus/>; `make docs` builds it, `make docs-serve` serves it. | Someone writing a program |
 | [`README.md`](README.md) | What the project is, what exists today, and how to build it. | Someone deciding whether to use it |
 | [`docs/`](docs) | The **design records**: why each stage is shaped the way it is, what the alternatives were, what the market does. [`docs/architecture.md`](docs/architecture.md) is the map. | Someone changing the compiler |
 
@@ -295,7 +304,7 @@ new file belongs — are in [`docs/architecture.md`](docs/architecture.md).
 
 ## Getting help
 
-Ask in [Discussions](https://github.com/mincplus/mincplus/discussions), or open
+Ask in [Discussions](https://github.com/CarlosDlw/mincplus/discussions), or open
 an issue using the template that matches. The forms ask for the two things that
 make a compiler bug quick to fix: the smallest file that shows it, and the exact
 command. Anything about a build or a wrong answer should start with the output of

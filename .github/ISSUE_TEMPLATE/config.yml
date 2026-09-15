@@ -3,8 +3,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: The language reference
-    url: https://mincplus.dev
+    url: https://carlosdlw.github.io/mincplus/
     about: What a `.mx` file means, page by page, with anything unimplemented marked as such.
   - name: Report a security vulnerability
-    url: https://github.com/mincplus/mincplus/security/advisories/new
+    url: https://github.com/CarlosDlw/mincplus/security/advisories/new
     about: Private reporting, for anything exploitable. Please do not open a public issue first — see SECURITY.md.

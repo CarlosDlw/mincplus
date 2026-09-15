@@ -714,10 +714,13 @@ the two cannot disagree about what the pipeline means.
 - [x] Cross-platform CI extended from `support` to the whole pipeline: the
       `build-test` job configures, builds and runs the whole suite on Linux,
       macOS and Windows, and `sanitize`, `format` and `tidy` are separate jobs
-- [ ] Install and pin LLVM in CI rather than relying on the runner image having
+- [x] Install and pin LLVM in CI rather than relying on the runner image having
       it: `find_package(LLVM CONFIG REQUIRED)` means a runner without LLVM
       development files fails at *configure*, which is a red CI run that says
-      nothing about the change
+      nothing about the change. One composite action
+      (`.github/actions/install-llvm`) installs the pinned major on all three
+      platforms and exports `MINC_LLVM_ROOT`, the single variable every preset
+      reads — so the version and the path are stated once, not per job
 
 ## 13. Release and maintenance
 

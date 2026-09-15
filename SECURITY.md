@@ -15,9 +15,8 @@ no maintenance branches, and a fix is a new commit rather than a backport.
 **Please do not open a public issue for a security bug.**
 
 Use GitHub's private reporting — *Security* → *Report a vulnerability* on this
-repository — or email **security@mincplus.dev**. If you would rather not use
-either, open an issue that says only that you have a report and how to reach you,
-and nothing about the bug itself.
+repository. If you would rather not use it, open an issue that says only that you
+have a report and how to reach you, and nothing about the bug itself.
 
 A good report contains:
 
