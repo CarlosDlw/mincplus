@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,12 +28,9 @@ jobs:
       - name: Install toolchain (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja cmake ccache googletest
-      - name: Install toolchain (Windows)
-        if: runner.os == 'Windows'
-        run: choco install -y ninja cmake
 
       # LLVM is not something to inherit from the runner image: the action says
-      # why the major is pinned and what it exports for the preset to read.
+      # why the release is pinned and what it exports for the preset to read.
       - uses: ./.github/actions/install-llvm
 
       # GTest is resolved by tests/unit/CMakeLists.txt: package config, then
@@ -54,6 +51,71 @@ jobs:
             ~/AppData/Local/ccache
           key: ccache-${{ matrix.os }}-${{ github.sha }}
           restore-keys: ccache-${{ matrix.os }}-
+
+      # Windows names its compiler, because the image also has MinGW's GCC on
+      # PATH (`C:\mingw64\bin`) and CMake would pick it -- and a MinGW driver
+      # cannot link the MSVC-built LLVM libraries, which is a link failure about
+      # C++ ABIs wearing a symbol's name. MSVC is also the toolchain this project
+      # states support for (`cmake/minc_cxx.cmake` sets `/utf-8`,
+      # `/Zc:__cplusplus` and `/W4 /permissive-` for it), so it is the one to
+      # test. The environment comes from the installed Visual Studio.
+      - name: Configure
+        run: cmake --preset ci
+      - name: Build
+        run: cmake --build --preset ci
+      - name: Test
+        run: ctest --preset ci
+
+  # Windows is a job of its own rather than a matrix entry, because it is the one
+  # platform where the toolchain is decided by what can supply a *development*
+  # tree of LLVM. LLVM's own prebuilt Windows packages are a toolchain package --
+  # binaries, no `LLVMConfig.cmake`, no libraries to link against -- so
+  # `find_package(LLVM CONFIG)` cannot succeed with them, and the installer and
+  # Chocolatey's package are the same thing. MSYS2's MinGW-w64 packages do ship a
+  # development tree, and they are the same ABI as the GCC already on this
+  # image's PATH, so the whole job runs in that one environment: GCC compiles,
+  # MinGW's LLVM links, and no two toolchains have to agree about anything.
+  #
+  # What that does *not* do is exercise MSVC, which `cmake/minc_cxx.cmake` has
+  # flags for (`/utf-8`, `/Zc:__cplusplus`, `/W4 /permissive-`). That is a gap and
+  # it is recorded as one rather than dressed up.
+  build-test-windows:
+    name: build-test (windows, MSYS2 MinGW-w64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      # The presets read this (`CMakePresets.json`), and inside MSYS2 the MinGW
+      # development tree is at `/mingw64`.
+      MINC_LLVM_ROOT: /mingw64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-llvm
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gtest
+            mingw-w64-x86_64-ccache
+
+      - name: Report what was installed
+        run: |
+          g++ --version | head -1
+          llvm-config --version
+          cmake --version | head -1
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-windows-${{ github.sha }}
+          restore-keys: ccache-windows-
       - name: Configure
         run: cmake --preset ci
       - name: Build

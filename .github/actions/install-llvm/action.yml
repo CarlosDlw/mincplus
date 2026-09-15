@@ -1,5 +1,5 @@
-# The LLVM development files this compiler builds against, and the formatter that
-# belongs to the same release.
+# The LLVM release this compiler is built against, and the clang tools that belong
+# to it.
 #
 # LLVM is not an optional dependency: `src/ir` and `src/backend` include
 # `llvm/*`, and the configure step refuses to run without it. A runner image may
@@ -9,12 +9,13 @@
 # image's packager chose. A mismatch there is not a link error; it is an ODR
 # violation across the LLVM boundary, which is why `CMakeLists.txt` checks.
 #
-# The formatter and the analyzer are installed from the same source and pinned to
-# the same major, because both are version-dependent tools and a gate that
-# compares a developer against CI only means something if both run the same one:
-# the tree that is clean under 22 is not clean under 18. One version, one place.
+# The formatter and the analyzer come from the same release for the same reason
+# one level up: both are version-dependent tools, and a gate that compares a
+# developer against CI only means something if both run the same one. The tree
+# that is clean under 22 is not clean under 18 -- which is how the first CI run
+# failed, on the format job, with a clean tree.
 #
-# What it exports -- the names are the Makefile's, so the CI jobs run `make
+# What it exports. The names are the Makefile's, so the CI jobs run `make
 # format-check` and `make tidy` rather than restating the commands:
 #   MINC_LLVM_ROOT   where LLVM is, for the presets (`CMakePresets.json`)
 #   CLANG_FORMAT     the formatter the `format` gate runs
@@ -22,13 +23,13 @@
 #   RUN_CLANG_TIDY   the parallel driver for it, from the same release
 #   TIDY_CXX         the clang the tidy gate configures the sources with
 name: install LLVM
-description: Install LLVM and its matching clang tools, and export where they are.
+description: Install the pinned LLVM release and its clang tools, and export where they are.
 
 inputs:
-  major:
-    description: The LLVM major version to build against.
+  version:
+    description: The LLVM release to install, as it is tagged (`22.1.8`).
     required: false
-    default: '22'
+    default: '22.1.8'
 
 runs:
   using: composite
@@ -38,31 +39,32 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        major="${{ inputs.version }}"; major="${major%%.*}"
         codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
-        # apt.llvm.org is LLVM's own archive. The distribution's LLVM packages
-        # trail by several releases, and the versioned series is what pins the
-        # major rather than "whatever this image has today".
+        # apt.llvm.org is LLVM's own archive. The distribution's packages trail by
+        # several releases, and the versioned series is what pins the major rather
+        # than "whatever this image has today".
         wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
           | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
         sudo add-apt-repository -y \
-          "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${{ inputs.major }} main"
+          "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${major} main"
         sudo apt-get update
         sudo apt-get install -y \
-          "llvm-${{ inputs.major }}-dev" \
-          "clang-${{ inputs.major }}" \
-          "clang-tools-${{ inputs.major }}" \
-          "clang-tidy-${{ inputs.major }}" \
-          "clang-format-${{ inputs.major }}"
-        prefix="/usr/lib/llvm-${{ inputs.major }}"
+          "llvm-${major}-dev" \
+          "clang-${major}" \
+          "clang-tools-${major}" \
+          "clang-tidy-${major}" \
+          "clang-format-${major}"
+        prefix="/usr/lib/llvm-${major}"
         {
           echo "MINC_LLVM_ROOT=${prefix}"
-          echo "CLANG_FORMAT=clang-format-${{ inputs.major }}"
-          echo "CLANG_TIDY=clang-tidy-${{ inputs.major }}"
-          # The package's own driver, not whatever `run-clang-tidy` the image
-          # happens to have on PATH: a driver from another release would run
-          # another analyzer and report another release's findings.
+          echo "CLANG_FORMAT=clang-format-${major}"
+          echo "CLANG_TIDY=clang-tidy-${major}"
+          # The package's own driver, not whatever `run-clang-tidy` the image has
+          # on PATH: a driver from another release would run another analyzer and
+          # report another release's findings.
           echo "RUN_CLANG_TIDY=${prefix}/bin/run-clang-tidy"
-          echo "TIDY_CXX=clang++-${{ inputs.major }}"
+          echo "TIDY_CXX=clang++-${major}"
         } >> "$GITHUB_ENV"
 
     - name: Install LLVM (macOS)
@@ -70,11 +72,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        major="${{ inputs.version }}"; major="${major%%.*}"
         # The versioned formula first: Homebrew's plain `llvm` tracks the newest
         # release, which is not always the one this project is written against.
-        brew install "llvm@${{ inputs.major }}" || brew install llvm
-        prefix="$(brew --prefix "llvm@${{ inputs.major }}" 2>/dev/null \
-          || brew --prefix llvm)"
+        brew install "llvm@${major}" || brew install llvm
+        prefix="$(brew --prefix "llvm@${major}" 2>/dev/null || brew --prefix llvm)"
         # Homebrew's `llvm` is keg-only, so its binaries are not on PATH.
         {
           echo "MINC_LLVM_ROOT=${prefix}"
@@ -84,37 +86,21 @@ runs:
           echo "TIDY_CXX=${prefix}/bin/clang++"
         } >> "$GITHUB_ENV"
 
-    - name: Install LLVM (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        choco install -y llvm
-        # The prefix is *found*, not assumed: the installer's layout is its own,
-        # and `bin/llvm-config.exe` is not always the real one (Chocolatey shims
-        # it). `LLVMConfig.cmake` is the file the configure step needs, so its
-        # location is what decides where the prefix is -- and a package that
-        # ships no development files fails here, with that sentence, rather than
-        # at `find_package` with a list of names it looked for.
-        $prefix = $null
-        $cfg = Get-ChildItem "C:\Program Files\LLVM", "C:\ProgramData\chocolatey\lib\llvm" `
-                 -Filter LLVMConfig.cmake -Recurse -ErrorAction SilentlyContinue |
-               Select-Object -First 1
-        if ($cfg) { $prefix = $cfg.Directory.Parent.Parent.Parent.FullName }
-        elseif (Test-Path "C:\Program Files\LLVM") { $prefix = "C:\Program Files\LLVM" }
-        if (-not $prefix) { throw "LLVM was installed but has no CMake package (LLVMConfig.cmake)" }
-        $prefix = $prefix -replace '\\', '/'
-        {
-          echo "MINC_LLVM_ROOT=$prefix"
-          echo "CLANG_FORMAT=$prefix/bin/clang-format.exe"
-          echo "CLANG_TIDY=$prefix/bin/clang-tidy.exe"
-        } >> $env:GITHUB_ENV
-        Write-Host "LLVM prefix: $prefix"
-        Write-Host "CMake package: $cfg"
+    # Windows is deliberately not here. It is the one platform where "install
+    # LLVM" has no answer in the obvious places: LLVM's own prebuilt Windows
+    # packages are a *toolchain* package -- clang and llvm binaries, no
+    # `LLVMConfig.cmake` and no libraries to link against (LLVM's own answer on
+    # discourse.llvm.org), and the installer and Chocolatey's package are the same
+    # thing, which is what the first CI run measured on this image. Windows gets
+    # its development tree from MSYS2's MinGW-w64 packages instead, in a job of
+    # its own, because that toolchain has to be the one that runs the whole build:
+    # see `build-test-windows` in `ci.yml`.
 
     # Printed rather than assumed: the configure step reports the version it
-    # found, and this says which directory it was told to look in, so a run that
-    # picks up the wrong LLVM says so in the log instead of in a compiler error.
+    # found, and this says which tree it was told to look in, so a run that picks
+    # up the wrong LLVM says so in the log instead of in a compiler error.
     - name: Report
+      if: runner.os != 'Windows'
       shell: bash
       run: |
         echo "MINC_LLVM_ROOT=$MINC_LLVM_ROOT"
