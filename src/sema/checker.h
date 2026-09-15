@@ -30,6 +30,7 @@
 
 #include "ast/ast.h"
 #include "parse/syntax_kind.h"
+#include "resolve/def_index.h"
 #include "resolve/map.h"
 #include "sema/sema.h"
 #include "sema/sema_error.h"
@@ -343,13 +344,20 @@ private:
   // undefined and the backend inherits a poison value. Asked by both places a
   // shift can be written, so the two cannot disagree.
   [[nodiscard]] bool checkShiftCount(ast::AstId countExpr, TypeId opType);
+  // The divisor of a `/` or `%` has a rule of its own: a constant zero is a
+  // mistake the compiler can see, whatever the *other* side is. Asked by both
+  // places a division can be written, so `x /= 0` and `x / 0` cannot disagree --
+  // and not folded into `foldBinary`, which fires only when *both* operands are
+  // constant and so would miss `x / 0` entirely.
+  [[nodiscard]] bool checkDivisor(ast::AstId divisorExpr, Tag op);
 
-  // Folding for the operators that have a folded value. False when a constant
-  // division or remainder by zero was reported: that is a diagnostic here for
-  // the same reason the preprocessor diagnoses it in a `#if`, rather than an
-  // undefined behaviour for the IR to inherit.
-  [[nodiscard]] bool foldBinary(ast::AstId opToken, Tag op, const ExprInfo& left,
-                                const ExprInfo& right, ExprInfo& info);
+  // Folding for the operators that have a folded value. False when the result is
+  // not a value at all -- today a division or remainder whose divisor is the
+  // constant zero, which `checkDivisor` has already reported. There is no token
+  // parameter: the diagnostic for that case is not this function's to make, so
+  // it has no place to point at and no business knowing where one would be.
+  [[nodiscard]] bool foldBinary(Tag op, const ExprInfo& left, const ExprInfo& right,
+                                ExprInfo& info);
 
   // True when `operand` may be stored to. Reports the specific reason when it
   // may not: a `const` binding, or something that is not a place at all. The
@@ -398,12 +406,11 @@ private:
   std::vector<support::ConstInt> defConstValues_;
   std::vector<bool> defHasConstValue_;
   std::vector<bool> defIsConst_;
-  // Name-use span start -> the reference that answers it. Resolved once, so a
-  // `PathExpr` costs a lookup and not a scan. The key is `(file, offset)`
-  // packed, because a unit spans several files and offsets restart in each.
-  std::unordered_map<std::uint64_t, std::size_t> refByOffset_;
-  // Declaration name-span start -> def, for the reverse direction.
-  std::unordered_map<std::uint64_t, resolve::DefId> defByNameOffset_;
+  // Name uses and declarations, indexed by where they sit in the unit's text.
+  // Built once, so a `PathExpr` costs a lookup and not a scan. The rule itself
+  // is `resolve`'s (`def_index.h`): `ir` asks it too, and two copies of it would
+  // be two answers waiting to differ.
+  resolve::DefIndex index_;
 
   TypeId currentReturn_ = kTypeError;
   std::uint32_t currentFunctionName_ = support::kInvalidSym;

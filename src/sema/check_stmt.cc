@@ -26,10 +26,6 @@
 namespace minc::sema {
 namespace {
 
-[[nodiscard]] std::uint64_t keyOf(support::FileId file, std::uint32_t begin) {
-  return (static_cast<std::uint64_t>(file) << 32U) | begin;
-}
-
 // The word that makes a type unfit for an object, or empty when the type is fit.
 //
 // Two words, one rule. `void` names no value at all, `!` names a value that
@@ -52,7 +48,7 @@ namespace {
 
 Checker::Checker(const ast::LoweredFile& file, const resolve::DefMap& defs,
                  const support::Interner& symbols, TypeStore& types, SemaOptions options)
-    : file_(file), defs_(defs), symbols_(symbols), types_(types), options_(options) {
+    : file_(file), defs_(defs), symbols_(symbols), types_(types), options_(options), index_(defs) {
   // The type budget is enforced by the store, because the store is where the
   // allocation happens; the option is how a caller lowers it for this check.
   types_.setMaxTypes(options_.maxTypes);
@@ -61,72 +57,36 @@ Checker::Checker(const ast::LoweredFile& file, const resolve::DefMap& defs,
   defHasConstValue_.assign(defs_.defs.size(), false);
   defIsConst_.assign(defs_.defs.size(), false);
 
-  // Name uses, indexed by where they were written in the unit's text. The
-  // reference array is already in source order; this turns "which declaration
-  // does this `PathExpr` denote?" into one lookup instead of a scan per node.
-  refByOffset_.reserve(defs_.refs.size());
-  for (std::size_t i = 0; i < defs_.refs.size(); ++i) {
-    const resolve::NameRef& ref = defs_.refs[i];
-    const auto [it, inserted] =
-        refByOffset_.emplace(keyOf(ref.unitSpan.file, ref.unitSpan.begin), i);
-    // Two references starting at one offset cannot happen for a well-formed
-    // unit (a byte belongs to one token); if it ever did, the first is the one
-    // written first, and the answer stays a function of the input.
-    (void)it;
-    (void)inserted;
-  }
-
-  // Declarations, indexed for the reverse direction: from a declaration's
-  // `Name` node to the def the resolver created for it.
-  //
-  // This is the indexed form of `resolve::defOfNameNode` -- the same rule, keyed
-  // on the *unit* offset instead of scanned, because this stage asks it once per
-  // declaration and the scan would be quadratic in the unit's size. The rule:
-  // the unit offset is one token each, while the written span is not, because a
-  // macro can give two names one written location (see `Def::unitSpan`). If the
-  // rule changes, both places change.
-  //
-  // A predefined name has no declaration to point at, so it is left out rather
-  // than parked at offset 0 where a real name could land.
-  //
-  // The answer is the def's **identity** and not its own slot: a name declared
-  // twice -- `extern fn i32 f();` above `fn i32 f() { }` -- is one function, so
-  // both sites have to answer with one `DefId`. Answering with the site's own
-  // index would give one function two types and the lowering two symbols.
-  for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
-    const resolve::Def& def = defs_.defs[i];
-    if (def.predefined) {
-      continue;
-    }
-    const resolve::DefId site{def.unitSpan.file, static_cast<std::uint32_t>(i)};
-    defByNameOffset_.emplace(keyOf(def.unitSpan.file, def.unitSpan.begin),
-                             resolve::canonicalOf(def, site));
-  }
-
   // The language's predefined names. `resolve` bound them; their *types* are
-  // this stage's to decide.
+  // this stage's to decide -- and the switch is over *which* name it is, not
+  // over its spelling, so the list has one home (`resolve/predefined.h`) and a
+  // name added there fails to compile here until its type is decided.
   for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
     const resolve::Def& def = defs_.defs[i];
-    if (!def.predefined) {
+    switch (def.predefined) {
+    case resolve::Predefined::None:
       continue;
-    }
-    // `null` is `*void`, and that is not a shortcut: `*void` is the one pointer
-    // type that converts to every other one, so `null` is usable wherever a
-    // pointer is wanted without a nullable-pointer type, a special literal type
-    // or a rule that makes an integer zero a pointer. It is the same shape the
-    // model gives the untyped pointer for `malloc` (`memory.md`, *The surface*).
-    if (symbols_.lookup(def.name) == "null") {
+    case resolve::Predefined::Null:
+      // `null` is `*void`, and that is not a shortcut: `*void` is the one
+      // pointer type that converts to every other one, so `null` is usable
+      // wherever a pointer is wanted without a nullable-pointer type, a special
+      // literal type or a rule that makes an integer zero a pointer. It is the
+      // same shape the model gives the untyped pointer for `malloc`
+      // (`memory.md`, *The surface*).
       defTypes_[i] = types_.pointerTo(kTypeVoid);
-      defIsConst_[i] = true;
-      continue;
-    }
-    defTypes_[i] = kTypeBool;
-    defIsConst_[i] = true;
-    if (symbols_.lookup(def.name) == "true" || symbols_.lookup(def.name) == "false") {
+      break;
+    case resolve::Predefined::False:
+    case resolve::Predefined::True:
+      defTypes_[i] = kTypeBool;
       defHasConstValue_[i] = true;
       defConstValues_[i] =
-          support::ConstInt::fromSigned(symbols_.lookup(def.name) == "true" ? 1 : 0);
+          support::ConstInt::fromSigned(def.predefined == resolve::Predefined::True ? 1 : 0);
+      break;
     }
+    // Every predefined name denotes a value and not storage, so none of them can
+    // be assigned to. That is one property of the whole class and not of a row:
+    // it is written once, outside the switch.
+    defIsConst_[i] = true;
   }
 }
 
@@ -245,29 +205,7 @@ bool Checker::enterDepth() {
 // --- declaration lookup ------------------------------------------------------
 
 std::optional<resolve::DefId> Checker::defAtName(ast::AstId nameNode) const {
-  if (!nameNode.valid()) {
-    return std::nullopt;
-  }
-  // The unit offset first: it is one token each, so it identifies the
-  // declaration even when the preprocessor gave two names one written location.
-  const support::Span unit = file_.at(nameNode).unit;
-  const auto found = defByNameOffset_.find(keyOf(unit.file, unit.begin));
-  if (found != defByNameOffset_.end()) {
-    return found->second;
-  }
-  // A synthetic declaration (an inserted token) may have no unit range; fall
-  // back to the written span, which is exact whenever nothing was expanded.
-  const support::Span span = origin(nameNode);
-  for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
-    const resolve::Def& def = defs_.defs[i];
-    if (def.predefined || def.nameSpan.file != span.file) {
-      continue;
-    }
-    if (def.nameSpan.begin >= span.begin && def.nameSpan.end <= span.end) {
-      return resolve::DefId{span.file, static_cast<std::uint32_t>(i)};
-    }
-  }
-  return std::nullopt;
+  return index_.defAtName(file_, nameNode);
 }
 
 const resolve::Def* Checker::defFor(resolve::DefId id) const {
@@ -292,16 +230,7 @@ bool Checker::isConstDef(resolve::DefId id) const {
 }
 
 std::optional<resolve::DefId> Checker::defOfPath(ast::AstId pathExpr) const {
-  const support::Span unit = file_.at(pathExpr).unit;
-  const auto found = refByOffset_.find(keyOf(unit.file, unit.begin));
-  if (found == refByOffset_.end()) {
-    return std::nullopt;
-  }
-  const resolve::NameRef& ref = defs_.refs[found->second];
-  if (!ref.resolved()) {
-    return std::nullopt;
-  }
-  return ref.target;
+  return index_.targetAt(file_.at(pathExpr).unit);
 }
 
 std::optional<resolve::DefId> Checker::defOfPlace(ast::AstId expr) const {
@@ -503,9 +432,17 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   }
   const bool toBool = types_.get(to).kind == TypeKind::Bool;
   if (toBool && types_.isArithmetic(from)) {
+    // Where the mistake is comes *before* the advice, as it does in the two
+    // refusals below: "in this initializer" is part of the sentence about this
+    // conversion, and a sentence that trails off into advice reads as if the
+    // advice were the mistake's subject.
+    //
+    // The message cannot name the expression -- the checker has a type and a
+    // node, not the text the reader wrote -- so it shows the *shape* of the fix
+    // instead of a placeholder with a hole in it.
     error(at, code,
-          "`" + types_.spelling(from) + "` does not convert to `bool`; write `" +
-              std::string(what) + " != 0`");
+          "`" + types_.spelling(from) + "` does not convert to `bool`" + std::string(what) +
+              ": write the comparison you mean, as in `value != 0`");
     return;
   }
   // A pointer and a non-pointer, in either direction. The message is its own
@@ -515,10 +452,10 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   // counted. Until they are in the grammar, the refusal is the whole rule.
   if (types_.isPointer(from) != types_.isPointer(to)) {
     error(at, SemaErrorCode::PointerInteger,
-          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) +
-              "`: a pointer is not an integer, and the language has no implicit conversion "
-              "between the two" +
-              std::string(what));
+          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) + "`" +
+              std::string(what) +
+              ": a pointer is not an integer, and the language has no implicit conversion "
+              "between the two");
     return;
   }
   // Two pointer types that do not meet: the same refusal `p == q` makes, so the
@@ -529,10 +466,10 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   // rather than on one the source wrote.
   if (types_.isPointer(from) && types_.isPointer(to)) {
     error(at, SemaErrorCode::PointerMismatch,
-          "`" + types_.spelling(from) + "` cannot be used as `" + types_.spelling(to) +
-              "`: pointers convert implicitly only to the same pointee type, or through "
-              "`*void`" +
-              std::string(what));
+          "`" + types_.spelling(from) + "` cannot be used as `" + types_.spelling(to) + "`" +
+              std::string(what) +
+              ": pointers convert implicitly only to the same pointee type, or through "
+              "`*void`");
     return;
   }
   error(at, code,

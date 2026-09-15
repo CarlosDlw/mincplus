@@ -57,8 +57,8 @@ struct ResolveOutput {
 // Resolves one translation unit. `symbols` is the interner the lowered file's
 // `SymId`s came from; every comparison this stage makes is on `SymId` integers,
 // and the interner is only read -- except to bind the language's predefined
-// names (`true`, `false`), which is why it is taken by mutable reference: adding
-// a name to the symbol table is a decision this stage makes.
+// names (`kPredefinedNames`), which is why it is taken by mutable reference:
+// adding a name to the symbol table is a decision this stage makes.
 [[nodiscard]] ResolveOutput resolveUnit(const ast::LoweredFile& file, support::Interner& symbols,
                                         ResolveOptions options = {});
 

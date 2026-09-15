@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "resolve/predefined.h"
 #include "support/intern/sym_id.h"
 #include "support/span/file_id.h"
 #include "support/span/span.h"
@@ -153,16 +154,42 @@ struct Def {
   // redeclaration. The unused pass reads it and says nothing: one mistake, one
   // diagnostic, even when two passes could each say something about it.
   bool hasProblem = false;
-  // True for a name the language binds before any source is read -- today
-  // `true` and `false`, which are ordinary names because the lexer deliberately
-  // does not make them keywords. A predefined name has no declaration to point
-  // at, so it is never reported as unused and never printed with a location.
-  bool predefined = false;
+  // Which name the language bound before any source was read, or `None` for an
+  // ordinary declaration (`predefined.h`). These are ordinary names -- the lexer
+  // deliberately does not make them keywords -- and a predefined one has no
+  // declaration to point at, so it is never reported as unused and never printed
+  // with a location.
+  //
+  // A category and not a boolean, because the three consumers ask *which* one:
+  // `sema` gives `true`/`false` the boolean type and a constant value while
+  // `null` is the untyped pointer, and `ir` emits a different constant for each.
+  // The bool this replaces could answer "is it predefined" and nothing else,
+  // which is the question none of them actually asks.
+  Predefined predefined = Predefined::None;
 
   [[nodiscard]] constexpr bool isFunction() const {
     return kind == DefKind::Function;
   }
 };
+
+// The `DefId` of the declaration at `index` in a `DefMap`.
+//
+// The file half is the one the declaration was **written** in, and not the unit
+// the compilation read: a header's declaration stays a header's declaration even
+// though the unit's text is one buffer, and that is what makes "declared here"
+// point at the header. `span` is the fallback for a declaration whose name has no
+// written file at all -- one built by hand, in a test or a tool.
+//
+// One rule, in one place, and deliberately so: `resolve` builds an id this way
+// when it inserts a declaration, and `source_to_def` and the offset index rebuild
+// it from a position. Two spellings of "which id is this declaration" is two ids
+// for one declaration -- and two ids is two types and two `llvm::Function`s, with
+// LLVM renaming the loser to `f.1`.
+[[nodiscard]] constexpr DefId defIdOf(const Def& def, std::uint32_t index) {
+  const support::FileId owner =
+      def.nameSpan.file != support::kInvalidFile ? def.nameSpan.file : def.span.file;
+  return DefId{owner, index};
+}
 
 // The declaration every lookup of this name answers, from a declaration site.
 //

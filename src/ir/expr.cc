@@ -234,23 +234,21 @@ Value Lowering::lowerPath(ast::AstId expr) {
   // A predefined name is a *value*, not storage: `true`, `false` and `null`
   // denote no object, which is why `&null` is refused one stage up and why
   // nothing here ever makes an alloca for one.
-  if (declaration.predefined) {
-    const std::string_view name = declaration.name == support::kInvalidSym
-                                      ? std::string_view{}
-                                      : symbols_.lookup(declaration.name);
-    if (name == "true") {
-      return Value{llvm::ConstantInt::getTrue(context_), type};
-    }
-    if (name == "false") {
-      return Value{llvm::ConstantInt::getFalse(context_), type};
-    }
-    if (name == "null") {
-      return Value{llvm::ConstantPointerNull::get(pointerType()), type};
-    }
-    fatal(spanOf(expr), IRDiagnosticCode::Internal,
-          "a predefined name this stage does not know reached lowering: `" + std::string(name) +
-              "`");
-    return {};
+  //
+  // The switch is over *which* name it is and not over its spelling, so the list
+  // has one home (`resolve/predefined.h`) and a row added there fails to compile
+  // here until its constant is written. The arm that used to be a `fatal` for an
+  // unknown spelling is gone with the spelling match: there is no longer a way
+  // to reach this point with a name nobody decided.
+  switch (declaration.predefined) {
+  case resolve::Predefined::None:
+    break;
+  case resolve::Predefined::True:
+    return Value{llvm::ConstantInt::getTrue(context_), type};
+  case resolve::Predefined::False:
+    return Value{llvm::ConstantInt::getFalse(context_), type};
+  case resolve::Predefined::Null:
+    return Value{llvm::ConstantPointerNull::get(pointerType()), type};
   }
 
   if (declaration.kind == resolve::DefKind::Function) {

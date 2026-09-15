@@ -117,6 +117,17 @@ Rules:
   reverse, and `minc_resolve_report` is the only target on this path that links
   `minc_diag` — so the resolver is testable with no `Session` and no terminal,
   and can be reused by the language server without a `DiagBag` in sight.
+- **A rule two stages need lives in the stage that owns the fact, not in each of
+  them.** `sema` and `ir` both ask "which declaration is this name node" of the
+  same `DefMap`, so the answer is one class, `resolve::DefIndex`, and both ask
+  *it* — the alternative was a copy of the key, the index and the written-span
+  fallback in each, held together by nothing the compiler can check, and the
+  copies had already drifted. The same reasoning gives
+  `resolve/predefined.h` one table for the names the language binds before any
+  source is read: `resolve` binds them, `sema` types them and `ir` lowers them,
+  and all three now switch on a category instead of matching on a spelling.
+  The test of the rule is a question, not a principle: *if this changes, how many
+  files have to change with it, and does anything fail if one does not?*
 - `src/ast/` and `src/resolve/` have **no platform branch**: a file is named by
   `support::FileId`, and the path identity behind it comes from `support`. Unix
   and Windows cannot disagree about which name a program means.

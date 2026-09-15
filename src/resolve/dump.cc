@@ -67,8 +67,11 @@ std::string dumpDefMap(const DefMap& map, const ast::LoweredFile& file,
       out += "  " + std::string(toString(def.kind));
       out += "  " + std::string(symbols.lookup(def.name));
       out += "  refs " + std::to_string(def.refCount);
-      if (def.predefined) {
-        out += "  [predefined]";
+      if (isPredefined(def.predefined)) {
+        // *Which* one, not merely that it is one: the dump is read when a name
+        // behaves unexpectedly, and "predefined" alone would leave the reader to
+        // guess whether it is a value or the null pointer.
+        out += "  [predefined " + std::string(toString(def.predefined)) + "]";
       } else {
         out += "  " + locationOf(sources, def.nameSpan);
       }

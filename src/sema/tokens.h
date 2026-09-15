@@ -87,6 +87,11 @@ inline constexpr Tag kTokEqual = tagOf(lex::TokenKind::Equal);
 // pointer: `p += n` and `p -= n`.
 inline constexpr Tag kTokPlusEqual = tagOf(lex::TokenKind::PlusEqual);
 inline constexpr Tag kTokMinusEqual = tagOf(lex::TokenKind::MinusEqual);
+// The two remaining arithmetic forms. They are here for the same reason as the
+// others: every operator the language spells gets one name, so a check that
+// needs to name one cannot invent a second spelling for it at the call site.
+inline constexpr Tag kTokStarEqual = tagOf(lex::TokenKind::StarEqual);
+inline constexpr Tag kTokSlashEqual = tagOf(lex::TokenKind::SlashEqual);
 inline constexpr Tag kTokPercentEqual = tagOf(lex::TokenKind::PercentEqual);
 inline constexpr Tag kTokAmpEqual = tagOf(lex::TokenKind::AmpEqual);
 inline constexpr Tag kTokPipeEqual = tagOf(lex::TokenKind::PipeEqual);

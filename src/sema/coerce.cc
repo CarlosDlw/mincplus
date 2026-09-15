@@ -272,4 +272,32 @@ bool Checker::checkShiftCount(ast::AstId countExpr, TypeId opType) {
   return true;
 }
 
+// --- divisors ----------------------------------------------------------------
+
+bool Checker::checkDivisor(ast::AstId divisorExpr, Tag op) {
+  // The question is asked of every arithmetic operator -- the call site is one
+  // line and a guard at each of them is a guard that can be forgotten -- so the
+  // refusal to answer for an operator with no divisor is here. `300 * 0` is not a
+  // division, and a check that said it was would be worse than no check.
+  const bool remainder = op == kTokPercent || op == kTokPercentEqual;
+  const bool division = op == kTokSlash || op == kTokSlashEqual;
+  if (!division && !remainder) {
+    return true;
+  }
+  const ExprInfo& facts = out_.typed.infoOf(divisorExpr);
+  if (!facts.hasIntValue) {
+    // A divisor the compiler cannot fold is the runtime trap the lowering
+    // emits (`ir.md`, *The runtime contract*); there is nothing to say here.
+    return true;
+  }
+  if (!support::isZero(facts.value)) {
+    return true;
+  }
+  // `hasIntValue` is only ever set on an integer, so `0.0` never reaches this
+  // arm: a float division by zero is the IEEE answer, not a mistake.
+  error(divisorExpr, SemaErrorCode::DivisionByZero,
+        remainder ? "remainder by zero" : "division by zero");
+  return false;
+}
+
 } // namespace minc::sema

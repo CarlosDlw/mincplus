@@ -204,32 +204,12 @@ Lowering::Lowering(const ast::LoweredFile& file, const resolve::DefMap& defs,
                    const support::Interner& symbols, const LoweringOptions& options)
     : file_(file), defs_(defs), typed_(typed), types_(types), symbols_(symbols), options_(options),
       impl_(makeImpl(file.file())), context_(impl_->context), module_(*impl_->module),
-      layout_(impl_->layout), builder_(impl_->context), allocaBuilder_(impl_->context) {
-  // The declarations are indexed first, because an index is what keeps a lookup
-  // per `PathExpr` a hash instead of a scan. Both keys are unit offsets for the
-  // same reason the checker uses them: a macro can give two names one *written*
-  // location, and a unit offset is one token each, so it is unique.
-  //
-  // The answer is the def's **identity**, not the site's own index: a name
-  // declared twice is one function, and `functions_` is keyed on this. Answering
-  // with the site would create two `llvm::Function`s for one name, and LLVM
-  // renames the loser to `f.1` -- leaving `f` declared and undefined while the
-  // body lands under a name no call refers to.
-  for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
-    const resolve::Def& def = defs_.defs[i];
-    if (def.predefined) {
-      continue;
-    }
-    const resolve::DefId site{def.unitSpan.file, static_cast<std::uint32_t>(i)};
-    defByName_.emplace(offsetKey(def.unitSpan.file, def.unitSpan.begin),
-                       resolve::canonicalOf(def, site));
-  }
-  for (const resolve::NameRef& ref : defs_.refs) {
-    if (!ref.resolved()) {
-      continue;
-    }
-    refByOffset_.emplace(offsetKey(ref.unitSpan.file, ref.unitSpan.begin), ref.target);
-  }
+      layout_(impl_->layout), builder_(impl_->context), allocaBuilder_(impl_->context),
+      index_(defs) {
+  // The name uses and the declarations, indexed once by where they sit in the
+  // unit's text -- the checker's rule, and literally the checker's class
+  // (`resolve::DefIndex`), so a `PathExpr` costs a lookup here and ``sema``
+  // answers the same question the same way.
 
   // The target and the layout next: every instruction below is built against
   // this layout, and a refusal here means nothing is built at all.
@@ -393,34 +373,11 @@ std::optional<resolve::DefId> Lowering::defOfPath(ast::AstId pathExpr) const {
   if (!pathExpr.valid()) {
     return std::nullopt;
   }
-  const auto found =
-      refByOffset_.find(offsetKey(file_.at(pathExpr).unit.file, file_.at(pathExpr).unit.begin));
-  if (found == refByOffset_.end()) {
-    return std::nullopt;
-  }
-  return found->second;
+  return index_.targetAt(file_.at(pathExpr).unit);
 }
 
 std::optional<resolve::DefId> Lowering::defAtName(ast::AstId nameNode) const {
-  if (!nameNode.valid()) {
-    return std::nullopt;
-  }
-  const support::Span unit = file_.at(nameNode).unit;
-  const auto found = defByName_.find(offsetKey(unit.file, unit.begin));
-  if (found != defByName_.end()) {
-    return found->second;
-  }
-  const support::Span span = spanOf(nameNode);
-  for (std::size_t i = 0; i < defs_.defs.size(); ++i) {
-    const resolve::Def& def = defs_.defs[i];
-    if (def.predefined || def.nameSpan.file != span.file) {
-      continue;
-    }
-    if (def.nameSpan.begin >= span.begin && def.nameSpan.end <= span.end) {
-      return resolve::DefId{span.file, static_cast<std::uint32_t>(i)};
-    }
-  }
-  return std::nullopt;
+  return index_.defAtName(file_, nameNode);
 }
 
 std::optional<resolve::DefId> Lowering::defOfPlace(ast::AstId expr) const {

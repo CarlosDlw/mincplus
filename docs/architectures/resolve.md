@@ -347,6 +347,60 @@ compared cheaply; a formatter or refactor can rewrite the AST without dragging
 resolution along; and a revision's resolution can be dropped without touching
 the tree.
 
+### The two answers below `resolve` reads, and why they live here
+
+`resolve` publishes a `DefMap`, and the stages under it ask two questions of it:
+*which declaration does this name use denote* and *which declaration is this name
+node*. Both are keyed on the **unit offset** of the node's first token, for the
+reason `Def::unitSpan` exists: a written span is not unique, because a macro that
+expands one argument into two names gives both declarations the same one.
+
+Both answers are `resolve::DefIndex` (`resolve/def_index.h`), and they are here
+rather than in the consumers because they were in the consumers. `sema`, `ir` and
+`source_to_def` each carried a copy of the same three pieces — the offset key,
+the declaration index, and the written-span fallback — and each copy carried a
+comment saying the other two had to change with it. A comment that says "if the
+rule changes, both places change" is a bug report, not documentation: nothing in
+the compiler enforces it, and the three had already drifted (two answered with
+the declaration's identity and one with the declaration *site*, which is two
+`DefId`s for one function — and two ids is two types in `sema` and two symbols in
+the backend, where LLVM renames the loser to `f.1`).
+
+The rule, in one place:
+
+1. **The unit offset first.** One token per name, so it stays unique even when a
+   macro gave two declarations one written location.
+2. **The written span second**, and only for a node with no unit range — one the
+   preprocessor or the parser *inserted*. Containment rather than equality,
+   because such a node's written range is the whole construct it stands for.
+3. **The identity, never the site.** A name declared twice — `extern fn i32 f();`
+   above `fn i32 f() { }` — is one function, so both declaration sites answer
+   with one `DefId` (`Def::canonical`).
+
+`tests/unit/resolve/def_index_test.cc` pins the first two by running both the
+indexed rule and the scanning one (`defOfNameNode`, now a call into the index)
+over every `Name` node of a unit and requiring the same answer.
+
+### The names the language already knows
+
+`true`, `false` and `null` are bound by `resolve` before any source is read — Go's
+universe block in miniature — and the list is one table,
+`resolve/predefined.h`. It is one table because it was *three*: `resolve` bound
+the names, `sema` gave them types, and `ir` gave them constants, and each of the
+three matched on the **spelling** with its own copy of the list. Adding a name
+meant finding all three, and nothing failed if one was missed.
+
+The fix is that a def carries a *category* and not a flag: `Def::predefined` is
+`resolve::Predefined` (`None`, `False`, `True`, `Null`), so a consumer switches on
+which name it is and the compiler points at every switch that has not been
+written yet. The boolean it replaces could only ever answer "is it predefined",
+which is the question none of the three actually asks. It is also where the
+builtins land: `builtins.md`'s closed list is the same seam, one row per name.
+
+Nothing about the language's behavior changed with this: a predefined name is
+still an ordinary def in the file scope — `let null = 1;` shadows one and
+`-Wshadow` says so — and `resolve` still refuses to report one as unused.
+
 ### The item tree, and the invariant that makes the LSP work
 
 The unit's scope is a function of the **set of item trees**, in include order —
@@ -475,6 +529,8 @@ make Linux and Windows disagree about which name a program means.
 | `resolve/resolve.h` · `resolve.cc` | Both phases: collect the file-scope items, then resolve the bodies |
 | `resolve/lookup.cc` | The scope chain, the name tables, and `NameRef`s |
 | `resolve/suggestions.cc` | The bounded typo search |
+| `resolve/def_index.h` · `def_index.cc` | The offset index, and the declaration-lookup rule `sema` and `ir` both ask |
+| `resolve/predefined.h` · `predefined.cc` | The names the language binds before any source is read |
 | `resolve/source_to_def.cc` | Syntax node → def, and offset → def: the IDE primitive |
 | `resolve/store.h` · `store.cc` | The `(FileId, revision)` cache and its invalidation |
 | `resolve/dump.h` · `dump.cc` | The scopes/defs/refs views `mincc resolve` prints |

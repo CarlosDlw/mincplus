@@ -37,6 +37,10 @@ namespace minc::resolve {
 // token per name and stays unique; the written span does not, and a macro that
 // expands one argument into two names gives two declarations the same one. A
 // synthetic name with no unit range falls back to the written span.
+//
+// The rule is `DefIndex::defAtName` and this is a call into it -- `sema` and `ir`
+// ask the same question of the same map, and the answer is one implementation so
+// that the three of them cannot drift apart.
 [[nodiscard]] std::optional<DefId> defOfNameNode(const DefMap& map, const ast::LoweredFile& file,
                                                  ast::AstId nameNode);
 

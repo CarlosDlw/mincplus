@@ -12,6 +12,8 @@ minc_add_library(minc_resolve
     store.cc
     dump.cc
     def.cc
+    def_index.cc
+    predefined.cc
     resolve_error.cc
   DEPS minc_ast minc_intern minc_span minc_source minc_text
 )

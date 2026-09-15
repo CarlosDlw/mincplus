@@ -44,6 +44,7 @@
 #include "ir/ir.h"
 #include "lex/token_kind.h"
 #include "parse/syntax_kind.h"
+#include "resolve/def_index.h"
 #include "resolve/map.h"
 #include "sema/type_store.h"
 #include "sema/typed_ast.h"
@@ -54,18 +55,18 @@
 
 namespace minc::ir {
 
-// A `DefId` packed into the one key every map here is keyed on.
+// A `DefId` packed into the one key every map here is keyed on: `functions_`,
+// `locals_`, the string table's owner, the debug info.
 //
 // The *declaration* and not the name, because two bindings may share a spelling
 // and a `PathExpr` that resolves to one of them must not find the other's
 // storage -- and the file half is part of it, because a unit spans several files
 // whose offsets restart.
-[[nodiscard]] constexpr std::uint64_t defKey(resolve::DefId def) {
-  return (static_cast<std::uint64_t>(def.file) << 32U) | def.index;
-}
-[[nodiscard]] constexpr std::uint64_t offsetKey(support::FileId file, std::uint32_t begin) {
-  return (static_cast<std::uint64_t>(file) << 32U) | begin;
-}
+//
+// Spelled the same way for the whole compiler: `resolve::defKey` is also what
+// the offset index keys a declaration by, and two packings of one pair is how a
+// lookup starts missing entries it should have found.
+using resolve::defKey;
 
 class DebugInfo;
 
@@ -377,9 +378,10 @@ private:
   std::unordered_map<std::string, llvm::GlobalVariable*> strings_;
   // Interned names, so a diagnostic and a symbol can spell one without a scan.
   // Built once in the constructor, because a lookup per `PathExpr` is what keeps
-  // a unit's cost linear rather than quadratic.
-  std::unordered_map<std::uint64_t, resolve::DefId> defByName_;
-  std::unordered_map<std::uint64_t, resolve::DefId> refByOffset_;
+  // a unit's cost linear rather than quadratic -- and built by the *checker's*
+  // own class (`resolve/def_index.h`), because this stage and `sema` ask one
+  // question of one map and must not answer it two ways.
+  resolve::DefIndex index_;
 
   struct Loop {
     llvm::BasicBlock* condition = nullptr;

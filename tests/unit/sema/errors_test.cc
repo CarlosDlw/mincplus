@@ -262,6 +262,76 @@ TEST(ErrorsTest, ConstantDivisionByZeroIsDiagnosedHere) {
   }
 }
 
+// The divisor is checked on its own, and not only when the whole expression
+// folds: `x / 0` has a constant divisor and a non-constant other side, and the
+// fold never runs for it. The mistake is the same mistake, so the diagnostic is
+// the same diagnostic -- through one function the two spellings share.
+TEST(ErrorsTest, AConstantZeroDivisorIsRefusedWithANonConstantDividend) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a = 1; let x = a / 0; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-division-by-zero"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a = 1; let x = a % 0; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_NE(f.firstError().message.find("remainder by zero"), std::string::npos);
+  }
+  {
+    // The compound form asks the same question.
+    SemaFixture f;
+    f.source("fn i32 main() { let a = 1; a /= 0; return a; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-division-by-zero"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a = 1; a %= 0; return a; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-division-by-zero"));
+  }
+  {
+    // And `*` is not a division. The divisor check is asked of every arithmetic
+    // operator, so this is the case where it has to *decline* to answer: `x * 0`
+    // is zero, not an error.
+    SemaFixture f;
+    f.source("fn i32 main() { let a = 1; let x = a * 0; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_FALSE(f.hasError("sema-division-by-zero"));
+  }
+  {
+    // A float division by zero is the IEEE answer and stays one: `hasIntValue`
+    // is only set on an integer, so `0.0` never reaches the check.
+    SemaFixture f;
+    f.source("fn f64 main() { let a = 1.0; let x = a / 0.0; return x; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_FALSE(f.hasError("sema-division-by-zero"));
+  }
+}
+
+// The advice in a refusal has to be advice a reader can act on. The message
+// cannot name the expression -- the checker holds a type and a node, not the text
+// the reader wrote -- so it names the shape of the fix, and it says *where* the
+// conversion is before it gives the advice. A message with a hole in it ("write
+// ` != 0`") is worse than no advice at all, and it is the kind of thing only a
+// test can hold in place.
+TEST(ErrorsTest, ARefusedBooleanConversionAdvisesAComparableShape) {
+  SemaFixture f;
+  f.source("fn i32 main() { let a = 1; let b: bool = a; return b ? 1 : 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_TRUE(f.hasError("sema-invalid-assignment"));
+  const std::string& message = f.firstError().message;
+  EXPECT_NE(message.find("does not convert to `bool`"), std::string::npos);
+  EXPECT_NE(message.find("in this initializer"), std::string::npos);
+  EXPECT_NE(message.find("value != 0"), std::string::npos);
+  // No placeholder: the two characters that used to be all that was left of the
+  // expression are not a message any more.
+  EXPECT_EQ(message.find("write ` "), std::string::npos);
+  EXPECT_EQ(message.find("write ` in"), std::string::npos);
+}
+
 // The shift count has a range and it is the width of the value moved, not the
 // range of the value: C leaves both of these undefined and the backend inherits
 // a poison value, which is a `>>` that does not shift.

@@ -279,8 +279,9 @@ TypeId Checker::checkPath(ast::AstId expr, ExprInfo& info) {
   // A predefined name is a *value*: `true`, `false` and `null` denote no storage,
   // so `&null` is not an address and `null = p` is not a store. Asking the def
   // rather than the kind keeps that true for the next predefined name too.
-  info.isLvalue = !isFunction && !declaration->predefined && !types_.isError(type);
-  if (isConstDef(*def) || declaration->predefined) {
+  info.isLvalue =
+      !isFunction && !resolve::isPredefined(declaration->predefined) && !types_.isError(type);
+  if (isConstDef(*def) || resolve::isPredefined(declaration->predefined)) {
     info.isConstant = true;
     if (def->index < defHasConstValue_.size() && defHasConstValue_[def->index]) {
       info.hasIntValue = true;
@@ -711,8 +712,7 @@ std::optional<TypeId> Checker::checkPointerBinary(ast::AstId expr, Tag kind, ast
   return pointerType;
 }
 
-bool Checker::foldBinary(ast::AstId opToken, Tag op, const ExprInfo& left, const ExprInfo& right,
-                         ExprInfo& out) {
+bool Checker::foldBinary(Tag op, const ExprInfo& left, const ExprInfo& right, ExprInfo& out) {
   if (!left.hasIntValue || !right.hasIntValue) {
     return true; // not foldable; nothing to say
   }
@@ -726,10 +726,15 @@ bool Checker::foldBinary(ast::AstId opToken, Tag op, const ExprInfo& left, const
   case kTokStar:
     out.value = support::mul(left.value, right.value);
     break;
+  // Division and remainder have no diagnostic here: `checkDivisor` owns it, and
+  // owns it for the case this function cannot see. Folding needs *both* operands
+  // constant, and `x / 0` is a mistake for exactly the same reason `1 / 0` is,
+  // so a check here would answer only half the question -- and would then need a
+  // second copy of the message at the compound-assignment path to cover the
+  // other half.
   case kTokSlash: {
     const std::optional<support::ConstInt> quotient = support::divide(left.value, right.value);
     if (!quotient.has_value()) {
-      error(opToken, SemaErrorCode::DivisionByZero, "division by zero");
       return false;
     }
     out.value = *quotient;
@@ -738,7 +743,6 @@ bool Checker::foldBinary(ast::AstId opToken, Tag op, const ExprInfo& left, const
   case kTokPercent: {
     const std::optional<support::ConstInt> rest = support::remainder(left.value, right.value);
     if (!rest.has_value()) {
-      error(opToken, SemaErrorCode::DivisionByZero, "remainder by zero");
       return false;
     }
     out.value = *rest;
@@ -916,7 +920,13 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
   // the promotion rule a second time.
   recordOperationOperand(expr, 0, lhs, result);
   recordOperationOperand(expr, 1, rhs, result);
-  if (!foldBinary(op, kind, leftInfo, rightInfo, info)) {
+  // The divisor before the fold: `x / 0` has a constant divisor and a
+  // non-constant other side, so `foldBinary` never runs for it and the mistake
+  // would reach the backend instead of the reader.
+  if (!checkDivisor(rhs, kind)) {
+    return kTypeError;
+  }
+  if (!foldBinary(kind, leftInfo, rightInfo, info)) {
     return kTypeError;
   }
   // A constant that does not fit the type the operator computes in is a mistake
@@ -1109,6 +1119,11 @@ TypeId Checker::checkAssign(ast::AstId expr, ExprInfo& info) {
     }
     if (shift) {
       (void)checkShiftCount(rhs, opType);
+    }
+    // `x /= 0` asks the divisor question through the same function the binary
+    // form does, so the two spellings cannot come to different answers.
+    if (kind == kTokSlashEqual || kind == kTokPercentEqual) {
+      (void)checkDivisor(rhs, kind);
     }
     info.opType = opType;
     recordOperationOperand(expr, 0, lhs, opType);

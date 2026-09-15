@@ -116,9 +116,7 @@ private:
     def.ns = ns;
     def.linkage = linkage;
     def.inError = inError;
-    const support::FileId owner =
-        nameSpan.file != support::kInvalidFile ? nameSpan.file : span.file;
-    const DefId id{owner, static_cast<std::uint32_t>(map_.defs.size())};
+    const DefId id = defIdOf(def, static_cast<std::uint32_t>(map_.defs.size()));
     // A declaration that claims a name is its own identity; the two paths below
     // are the ones that hand that identity to a declaration written earlier.
     def.canonical = id;
@@ -216,25 +214,29 @@ private:
 
   // The language's own names, bound in the file scope before anything is read
   // -- Go's universe block, and the reason `true` is not an unknown name. The
-  // lexer deliberately leaves `true`/`false`/`null` as identifiers (they are
-  // values, not grammar), so resolving them is exactly this stage's job, and the
-  // *types* they have are `sema`'s to decide -- `true` and `false` are `bool`,
-  // and `null` is the untyped pointer (`memory.md`, *The surface*).
+  // lexer deliberately leaves them as identifiers (they are values, not
+  // grammar), so resolving them is exactly this stage's job; the *types* they
+  // have are `sema`'s to decide, and the constants `ir`'s.
+  //
+  // The list is `kPredefinedNames` and nothing else -- not a second copy of it
+  // here. This loop binds a name and records *which* name it bound; the stages
+  // below read that field instead of matching on spelling, which is what keeps
+  // the three of them from disagreeing about the same name.
   //
   // They are ordinary defs in the file scope, so a `let null = 1;` shadows one
   // exactly as any other binding would, and `-Wshadow` says so. That is the
   // same rule every name follows and needs no exception here.
   void installPredefined() {
     const support::Span nowhere(file_.file(), 0, 0);
-    for (const std::string_view spelling : {"true", "false", "null"}) {
-      const support::SymId name = symbols_.intern(spelling);
+    for (const PredefinedName& row : kPredefinedNames) {
+      const support::SymId name = symbols_.intern(row.spelling);
       if (name == support::kInvalidSym) {
         continue; // the interner is full; nothing can be added anyway
       }
       const DefId id = insertDef(map_.fileScope, Namespace::Ordinary, name, nowhere, nowhere,
                                  nowhere, DefKind::Constant, Linkage::None, /*inError=*/false);
       if (id.valid() && id.index < map_.defs.size()) {
-        map_.defs[id.index].predefined = true;
+        map_.defs[id.index].predefined = row.name;
       }
     }
   }
@@ -465,7 +467,7 @@ private:
 
   void reportUnused() {
     for (const Def& def : map_.defs) {
-      if (def.inError || def.hasProblem || def.predefined || def.refCount != 0 ||
+      if (def.inError || def.hasProblem || isPredefined(def.predefined) || def.refCount != 0 ||
           def.name == support::kInvalidSym) {
         continue;
       }
