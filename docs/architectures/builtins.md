@@ -135,6 +135,15 @@ readers of that table are `sema` (the signature and the effect), `ir` (the
 lowering) and the reference (the generated documentation).** No stage matches a
 builtin by its *name*.
 
+The seam this lands on already exists, and it is
+[`resolve/predefined.h`](../../include/resolve/predefined.h): the names the
+language binds before any source is read are one table and one *category*
+(`Def::predefined`), so `resolve` binds them, `sema` types them and `ir` lowers
+them by switching on which name it is rather than by matching on a spelling.
+That is where a closed list of builtins goes — `trap`, `clz`, the overflow
+intrinsics — and the family 1 names (`exit`, `abort`) stay where they are:
+symbols an `extern` declaration reaches, with no builtin row at all.
+
 ```
                     ┌─→ sema: arity, types, effect (Diverges/Pure/WritesMemory)
 BuiltinSpec (row) ──┼─→ ir:   id -> llvm intrinsic / instruction
