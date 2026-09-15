@@ -411,6 +411,20 @@ TEST(BuildCommandTest, WhatEmissionWritesIsARealObjectAndNotAnErrorPage) {
   EXPECT_EQ(static_cast<unsigned char>(bytes[5]), 1u);
 }
 
+// The name the linker actually wrote. The C driver appends its platform's
+// executable suffix -- `-o linked` produces `linked.exe` next to the `linked` a
+// user asked for -- and that is the linker's convention, not this compiler's, so
+// there is nothing for the compiler to normalise here. Probing for both names
+// rather than being told which platform this is keeps the file's rule: a test may
+// contain no platform code.
+[[nodiscard]] std::string linkedOutput(const std::string& requested) {
+  if (std::filesystem::exists(requested)) {
+    return requested;
+  }
+  const std::string suffixed = requested + ".exe";
+  return std::filesystem::exists(suffixed) ? suffixed : requested;
+}
+
 TEST(BuildCommandTest, LinkingProducesAnExecutableAndRunReturnsItsStatus) {
   ScratchDir scratch;
   ASSERT_TRUE(scratch.valid());
@@ -423,7 +437,8 @@ TEST(BuildCommandTest, LinkingProducesAnExecutableAndRunReturnsItsStatus) {
     GTEST_SKIP() << "no C linker driver on PATH";
   }
   EXPECT_EQ(built.code, 0) << built.err;
-  EXPECT_TRUE(std::filesystem::exists(request.output));
+  EXPECT_TRUE(std::filesystem::exists(linkedOutput(request.output)))
+      << "no executable at " << request.output;
 
   // `run` is `build` plus an exec, so the program's status is the driver's.
   BuildRequest runRequest = requestFor(source);

@@ -128,9 +128,17 @@ TEST(CheckCommandTest, AParseErrorIsNotReReportedAsATypingError) {
 TEST(CheckCommandTest, TheTargetChangesWhatALongIs) {
   TempFile file("minc_check_target.mx", "fn i32 main() { let x: long = 1; return 0; }\n");
 
-  const CheckRun sysv = run({file.path()}, /*showAst=*/false, /*showTypes=*/true);
-  EXPECT_EQ(sysv.code, exitCode(ExitCode::Ok));
-  EXPECT_NE(sysv.out.find("long=64"), std::string::npos);
+  // Both sides name their target, because naming one is what this test is about:
+  // asking for the default asks for the *host*, and a `long` is 64 bits on System
+  // V and 32 on Windows. Leaving the first case implicit meant that on a Windows
+  // host the "sysv" half of this test was the Windows half -- which is how the
+  // first Windows CI run failed it.
+  const std::optional<sema::TargetInfo> sysv = sema::targetFromName(sema::kTripleLinuxAmd64);
+  ASSERT_TRUE(sysv.has_value());
+  const CheckRun systemV =
+      run({file.path()}, /*showAst=*/false, /*showTypes=*/true, /*stats=*/false, *sysv);
+  EXPECT_EQ(systemV.code, exitCode(ExitCode::Ok));
+  EXPECT_NE(systemV.out.find("long=64"), std::string::npos);
 
   const std::optional<sema::TargetInfo> windowsTarget =
       sema::targetFromName(sema::kTripleWindowsAmd64);
