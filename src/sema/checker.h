@@ -468,6 +468,13 @@ private:
     ast::AstId node;
     // True when that literal's value is negated: `-2.5`.
     bool negated = false;
+    // The elements, when `kind` is `Aggregate`: one record per element, or
+    // exactly one when `splat` is true. The *shape*, never the bytes -- a
+    // `[1 << 20]u8{0; 1 << 20}` is one record and one constant.
+    std::vector<GlobalElementValue> elements;
+    // The initializer was a fill: the recorded element is written `count` times
+    // and the count is the type's, so this is a flag and never an expansion.
+    bool splat = false;
     ast::AstId offender;
     SemaErrorCode code = SemaErrorCode::GlobalNotConstant;
     std::string reason;
@@ -513,6 +520,15 @@ private:
   // minus between the expression and the initializer as a whole, which is how
   // `-1.0` is still a literal.
   [[nodiscard]] IceValue evalInitializer(ast::AstId expr, bool negated = false) const;
+  // An initializer that is an array literal, either form: one record per
+  // element, or one record and `splat` for a fill. Recursive, because an element
+  // is an initializer of its own type -- `[2][3]i32{[1, 2, 3], [4, 5, 6]}`.
+  //
+  // It is reached *before* the `isConstant` test in `evalInitializer`, and that
+  // fact is deliberately false for an array: the checker refuses to claim a
+  // folded value it has no record for (`arrays.md` decision 15). What makes an
+  // array constant is therefore this walk and not a second notion of constness.
+  [[nodiscard]] IceValue evalAggregate(ast::AstId expr) const;
   // The same answer for an expression that is not one, with the sentence that
   // names *why*: a `let`, a function, a call, a dereference and a local all
   // deserve different words, and "this is not a constant" tells the reader

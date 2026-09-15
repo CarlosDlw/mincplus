@@ -10,6 +10,16 @@
 // zero-filled array of four -- and the way to say "sixty-four zeroes" is the
 // fill, `[64]u8{0; 64}`.
 
+// File scope: a table is written with the same two forms, and its bytes are the
+// compiler's -- there is nothing to run before `main`. `const` protects the
+// *name*, so the elements are read like any other element and neither the
+// binding nor an element of it may be assigned.
+const DAYS = [_]u32{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+const SQUARES: [4]i32 = [1, 4, 9, 16];
+const ZERO_ROW = [4]i32{0; 4};
+const MASKS = [3]bool{true, false, true};
+const YEAR: [2][2]i32 = [[1, 2], [3, 4]];
+
 fn i32 sum(a: [4]i32) {
   // `a` here is this function's own copy, and the elements are the object's.
   return a[0] + a[1] + a[2] + a[3];
@@ -45,6 +55,12 @@ fn i32 main() {
   // and `&table[0]` is refused for the same reason `&x` is.
   const table: [3]i32 = [3]i32{10, 20, 30};
 
+  // The file-scope tables above are read exactly like a local one: an element of
+  // the object, with the count known here and the address computed by the
+  // compiler.
+  let fromFileScope = SQUARES[3] + ZERO_ROW[2] + YEAR[1][1] +
+                      (MASKS[0] ? 1 : 0) + (DAYS[0] > 30 ? 1 : 0);
+
   // Passing the object passes a copy: `sum` cannot see the writes below.
   let total = sum(a);
 
@@ -60,5 +76,5 @@ fn i32 main() {
   // here, because the count is in the type and the index is a number.
   let element = grid[1][2] + digits[9] + zeroed[0] + sevens[3] + (flags[0] ? 1 : 0);
 
-  return total + element + viaPointer + b[0] + table[2] + a[1];
+  return total + element + viaPointer + b[0] + table[2] + a[1] + fromFileScope;
 }

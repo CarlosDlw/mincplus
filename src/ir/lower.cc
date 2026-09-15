@@ -134,6 +134,8 @@ constexpr IRDiagnosticCodeInfo kDiagnosticCodeInfos[] = {
     {IRDiagnosticCode::Assumption, "ir-assumption"},
     {IRDiagnosticCode::Alignment, "ir-alignment"},
     {IRDiagnosticCode::UnguardedOp, "ir-unguarded-op"},
+    {IRDiagnosticCode::ObjectTooLarge, "ir-object-too-large"},
+    {IRDiagnosticCode::InitializerTooLarge, "ir-initializer-too-large"},
 };
 // NOLINTEND(readability-identifier-naming)
 } // namespace
@@ -415,6 +417,34 @@ llvm::Value* Lowering::storageOf(ast::AstId pathExpr) const {
   return global == globals_.end() ? nullptr : global->second;
 }
 
+bool Lowering::frameObjectFits(sema::TypeId type, ast::AstId at) {
+  // The frame bound, asked at the two places a slot is created and nowhere else:
+  // a local binding, and the caller-side copy of a by-value aggregate argument
+  // (`arrays.md` decision 14). A giant local array is the one object shape whose
+  // cost the *source* does not bound -- `let a: [1 << 40]u8;` is eleven characters
+  // -- and without this the compiler builds an alloca of a terabyte, the backend
+  // emits a subtraction from the stack pointer that big, and the failure is a
+  // segfault on the function's first instruction.
+  //
+  // A by-value *parameter's* own slot is not asked about here, and that is not an
+  // omission: an aggregate parameter's storage is the pointer it arrived as and
+  // not a frame slot at all (`arrays.md` decision 13), so the size that matters is
+  // the caller's copy, which is the other caller of this function.
+  const std::size_t bytes = types_.sizeOf(type);
+  if (bytes <= support::kMaxStackObjectBytes) {
+    return true;
+  }
+  // `fatal` and not `error`: the slot is not created, so every later access to
+  // this binding would be a second message about the same object -- and an
+  // `ir-internal` one, about a program that is not buggy.
+  fatal(spanOf(at), IRDiagnosticCode::ObjectTooLarge,
+        "this object is " + std::to_string(bytes) + " bytes, and a frame slot may be at most " +
+            std::string(support::kMaxStackObjectBytesText) +
+            ": every local object is storage in this function's frame, and the frame is a "
+            "subtraction from the stack pointer");
+  return false;
+}
+
 llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
                                          std::string_view name, ast::AstId at) {
   const std::uint64_t key = defKey(def);
@@ -438,6 +468,9 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
   // format), and an `alloca` built from the null it returns would be a crash
   // where the reader was just handed a diagnostic. `locals_` stays unset, so the
   // binding has no slot rather than a wrong one.
+  if (!frameObjectFits(type, at)) {
+    return nullptr;
+  }
   llvm::Type* slotType = storageType(type);
   if (slotType == nullptr) {
     return nullptr;
@@ -465,6 +498,12 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
 }
 
 llvm::AllocaInst* Lowering::argumentCopy(sema::TypeId type, const Value& value, ast::AstId at) {
+  // The copy of a by-value aggregate argument is a frame slot like any other, and
+  // it is bounded by the same number for the same reason -- the callee reads it
+  // out of *this* frame.
+  if (!frameObjectFits(type, at)) {
+    return nullptr;
+  }
   llvm::Type* slotType = storageType(type);
   if (slotType == nullptr) {
     return nullptr;

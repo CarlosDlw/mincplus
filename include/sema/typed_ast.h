@@ -226,6 +226,37 @@ enum class GlobalValueKind : std::uint8_t {
   Literal,
   // The null pointer.
   Null,
+  // An array whose every element is one of the values above: `[3]i32{1, 2, 3}`
+  // or `let z = [64]u8{0; 64};` at file scope.
+  //
+  // Recorded as the *shape* and never as the bytes (`arrays.md` decision 15):
+  // `elements` holds one record per element and `splat` says the elements are
+  // one value written N times, so a table of a million entries is a record of
+  // one and not a million. The lowering reads this; it does not re-walk the tree
+  // looking for what makes an element constant, because that walk is `sema`'s
+  // rule and a second copy of it is the copy that disagrees.
+  Aggregate,
+};
+
+// One element of an aggregate initializer, in the shape of the binding's own
+// value -- the same fields and the same enumerators, one level down, because an
+// element *is* a value of the same kinds. `elements` is empty for every kind but
+// `Aggregate`, and a nested aggregate fills it one level deeper.
+struct GlobalElementValue {
+  GlobalValueKind kind = GlobalValueKind::Zero;
+  support::ConstInt intValue;
+  ast::AstId node;
+  bool negated = false;
+  // The type this value was built at, which the conversion to the element's own
+  // type is read from: `[3]i64{i8Value, ...}` is a `sext` per element.
+  TypeId type = kInvalidType;
+  std::vector<GlobalElementValue> elements;
+  // The same flag as the binding's, one level down: the element was written as a
+  // fill of *its* type, `[2][3]i32{[1, 2, 3]; 2}`. Recursive for the same reason
+  // `elements` is -- the record is a shape all the way down, and a nested fill
+  // that had no form here would be a legal array literal this compiler rejected
+  // for a reason that has nothing to do with the program.
+  bool splat = false;
 };
 
 // What an enumerator is called, in one table with the enumeration, so a kind
@@ -252,6 +283,13 @@ struct GlobalInfo {
   support::ConstInt intValue;
   // The literal whose spelling *is* the value, when `value` is `Literal`.
   ast::AstId node;
+  // The elements of an aggregate value, when `value` is `Aggregate`: one record
+  // per element, or exactly one when `splat` is true.
+  std::vector<GlobalElementValue> elements;
+  // The initializer was a *fill*: the value is written `count` times, and the
+  // count is in the type. Kept as a flag rather than ever being expanded -- a
+  // `[1 << 20]u8{0; ...}` is one record and one constant (`arrays.md` 15).
+  bool splat = false;
   // True when the value is the **negation** of what `node`'s spelling says:
   // `-2.5`. It is not arithmetic and it is not a folder this stage declined to
   // write -- a negated literal is a sign bit, which is exact for both a float and

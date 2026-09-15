@@ -180,6 +180,42 @@ inline constexpr std::size_t kMaxTypesPerUnit = std::size_t{1} << 20;
 // legitimate single AST/IR allocation while staying clear of that edge.
 inline constexpr std::size_t kMaxArenaAllocation = std::size_t{1} << 31;
 
+// --- objects and initializers -------------------------------------------------
+//
+// The two bounds the *size of an object* decides, and they are separate numbers
+// because they bound two different costs.
+//
+// The first bounds a **frame**: every local binding is a slot in the entry block,
+// and a slot is a subtraction from the stack pointer (`arrays.md` decision 14).
+// LLVM will happily build a 1 TiB alloca and the failure is then a segfault at the
+// first instruction of the function, which is the class of bug this project refuses
+// to hand to a debugger. 16 MiB is far above any local object a program wants and
+// far below the smallest stack a target has.
+inline constexpr std::size_t kMaxStackObjectBytes = std::size_t{16} << 20;
+// Human-readable rendering, kept in step by the assert below, the project's rule.
+inline constexpr const char* kMaxStackObjectBytesText = "16 MiB";
+
+// The second bounds **one written-out fill**: the elements of a non-zero fill are
+// materialised one `llvm::Constant` at a time, because LLVM's `splat` exists for
+// vectors and not for arrays. A *list* cannot reach this bound -- its length is
+// bounded by the source that spells it -- so the row it exists for is `[N]T{v; N}`,
+// whose count is a number in the type and can be any number at all. The count is
+// the unit and not the bytes, because the count is the cost. The zero fill is not
+// written out at all: it is one `ConstantAggregateZero` whatever the count, so
+// `[1 << 40]u8{0; ...}` stays legal and the reader keeps their own opinion about
+// how big their object is.
+inline constexpr std::size_t kMaxFillElements = std::size_t{1} << 20;
+// Human-readable rendering, kept in step by the assert below, the project's rule.
+// Spelled in characters and not in `Mi`, because the unit here is a count of
+// elements and a count has no prefix.
+inline constexpr const char* kMaxFillElementsText = "1048576 elements";
+
+static_assert(decimalFromText("1048576") == kMaxFillElements,
+              "the rendering of kMaxFillElements and its value must be the same number");
+
+static_assert(kMaxStackObjectBytes < kMaxSourceBytes,
+              "a frame object larger than the largest possible source is a guess");
+
 // --- the driver ---------------------------------------------------------------
 
 // Nested `@file` depth. A response file that names another is a real pattern --

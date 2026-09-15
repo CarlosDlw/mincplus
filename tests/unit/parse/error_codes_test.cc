@@ -81,6 +81,16 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::ExpectedArrayCount},
     {"array count with no closing bracket", "fn i32 main() { let x: [4 i32 = 1; }\n",
      ParseErrorCode::ExpectedArrayCountClose},
+    // C's brace spelling, in the two positions it can appear in. The braces
+    // belong to a *type* and a group of elements is a value, so the token is an
+    // error with a sentence about which grouping is which -- and the group is read
+    // anyway, so the reader gets one message and not a cascade out of a tree the
+    // parser refused to build.
+    {"braces for a value with the type annotated",
+     "fn i32 main() { let a: [3]i32 = {1, 2, 3}; return 0; }\n", ParseErrorCode::BraceWithoutType},
+    {"nested braces inside an initializer",
+     "fn i32 main() { let a: [2][3]i16 = {{1, 2, 3}, {4, 5, 6}}; return 0; }\n",
+     ParseErrorCode::BraceWithoutType},
 };
 
 [[nodiscard]] std::string deepInput() {

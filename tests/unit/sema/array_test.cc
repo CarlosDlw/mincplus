@@ -284,5 +284,129 @@ TEST(ArrayTest, AConstPointerStillWritesThroughItsValue) {
   EXPECT_TRUE(reassign.hasError("sema-assign-to-const"));
 }
 
+// --- what a file-scope array is worth --------------------------------------------
+//
+// Step 8 of `arrays.md`: the ICE's array case. The record is a **shape** -- the
+// element type, the count, and a list *or* a splat -- and these are the four
+// properties that makes it worth anything: the elements are values, a fill is one
+// record whatever its count, nesting recurses, and a non-constant element is
+// refused by the sentence that names it.
+
+TEST(ArrayTest, AFileScopeTableIsPublishedAsAListOfValues) {
+  SemaFixture f;
+  f.source("const TABLE: [3]i32 = [10, 20, 30];\n"
+           "fn i32 main() { return TABLE[1]; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 0u) << f.firstError().message;
+
+  const sema::GlobalInfo* table = f.globalOf("TABLE");
+  ASSERT_NE(table, nullptr);
+  EXPECT_EQ(sema::toString(table->value), "aggregate");
+  EXPECT_EQ(f.bindingType("TABLE"), "[3]i32");
+  EXPECT_FALSE(table->splat);
+  ASSERT_EQ(table->elements.size(), 3u);
+  // Each element is the *same kind of record* a scalar binding publishes, one
+  // level down -- which is what lets the lowering build an element with the same
+  // function it builds a binding with.
+  for (std::size_t i = 0; i < table->elements.size(); ++i) {
+    EXPECT_EQ(sema::toString(table->elements[i].kind), "int");
+    EXPECT_EQ(table->elements[i].intValue.signedValue(), static_cast<std::int64_t>(10 * (i + 1)));
+    EXPECT_EQ(f.spellingOfType(table->elements[i].type), "i32");
+  }
+}
+
+TEST(ArrayTest, AFillIsOneRecordWhateverItsCount) {
+  // The property the record exists for: a fill is a shape. A pass that expanded
+  // it would publish a million records here, and the compiler's cost would be the
+  // *type's* count rather than the source's length.
+  SemaFixture f;
+  f.source("const BIG = [1048576]u8{0; 1048576};\n"
+           "const SEVEN = [4]i32{7; 4};\n"
+           "fn i32 main() { return SEVEN[3] + BIG[0]; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 0u) << f.firstError().message;
+
+  const sema::GlobalInfo* big = f.globalOf("BIG");
+  ASSERT_NE(big, nullptr);
+  EXPECT_TRUE(big->splat);
+  EXPECT_EQ(big->elements.size(), 1u);
+  EXPECT_EQ(sema::toString(big->elements.front().kind), "int");
+  EXPECT_EQ(big->elements.front().intValue.signedValue(), 0);
+
+  const sema::GlobalInfo* seven = f.globalOf("SEVEN");
+  ASSERT_NE(seven, nullptr);
+  EXPECT_TRUE(seven->splat);
+  ASSERT_EQ(seven->elements.size(), 1u);
+  EXPECT_EQ(seven->elements.front().intValue.signedValue(), 7);
+}
+
+TEST(ArrayTest, ANestedInitializerIsAnElementOfItsOwnKind) {
+  // `[[1, 2, 3], [4, 5, 6]]` at `[2][3]i32`: the element is an aggregate, the
+  // record recurses, and the *inner* records are the same structure again -- the
+  // thing that makes `[2][3]bool` and `[2][3]i32` one implementation.
+  // The annotation is what gives the *outer* literal its type; the inner ones
+  // take it from the element type, which is the whole of what decision 22 buys.
+  SemaFixture f;
+  f.source("const GRID: [2][3]i32 = [[1, 2, 3], [4, 5, 6]];\n"
+           "fn i32 main() { return GRID[1][2]; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 0u) << f.firstError().message;
+
+  const sema::GlobalInfo* grid = f.globalOf("GRID");
+  ASSERT_NE(grid, nullptr);
+  EXPECT_FALSE(grid->splat);
+  ASSERT_EQ(grid->elements.size(), 2u);
+  EXPECT_EQ(sema::toString(grid->elements[0].kind), "aggregate");
+  ASSERT_EQ(grid->elements[0].elements.size(), 3u);
+  EXPECT_EQ(grid->elements[0].elements[2].intValue.signedValue(), 3);
+  EXPECT_EQ(grid->elements[1].elements[0].intValue.signedValue(), 4);
+
+  // And a *nested fill* is a fill one level down: legal, and not a special case
+  // the record refuses for lack of a form.
+  SemaFixture filled;
+  filled.source("const ROWS = [2][3]i16{[1, 2, 3]; 2};\n"
+                "fn i32 main() { return ROWS[1][0]; }\n");
+  ASSERT_TRUE(filled.build());
+  ASSERT_EQ(filled.errorCount(), 0u) << filled.firstError().message;
+  const sema::GlobalInfo* rows = filled.globalOf("ROWS");
+  ASSERT_NE(rows, nullptr);
+  EXPECT_TRUE(rows->splat);
+  ASSERT_EQ(rows->elements.size(), 1u);
+  EXPECT_EQ(sema::toString(rows->elements.front().kind), "aggregate");
+  EXPECT_FALSE(rows->elements.front().splat);
+  EXPECT_EQ(rows->elements.front().elements[1].intValue.signedValue(), 2);
+}
+
+TEST(ArrayTest, AnArrayOfStrHoldsOneAddressPerElement) {
+  // A `str` element is a `Literal`: an address the compiler writes and the
+  // lowering reads from the literal itself, not a value this stage folds.
+  SemaFixture f;
+  f.source("const NAMES = [2]str{\"aa\", \"bb\"};\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.errorCount(), 0u) << f.firstError().message;
+
+  const sema::GlobalInfo* names = f.globalOf("NAMES");
+  ASSERT_NE(names, nullptr);
+  ASSERT_EQ(names->elements.size(), 2u);
+  EXPECT_EQ(sema::toString(names->elements[0].kind), "literal");
+  EXPECT_TRUE(names->elements[0].node.valid());
+  EXPECT_FALSE(names->elements[0].negated);
+}
+
+TEST(ArrayTest, ANonConstantElementIsRefusedOnceAndWithoutCascading) {
+  SemaFixture f;
+  f.source("fn i32 g();\n"
+           "const BAD = [2]i32{1, g()};\n"
+           "fn i32 main() { return BAD[0]; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 1u) << f.firstError().message;
+  EXPECT_TRUE(f.hasError("sema-global-not-constant"));
+  // The sentence is about the call, which is the thing to change -- not about the
+  // initializer or the binding.
+  EXPECT_NE(f.firstError().message.find("a call is not a constant"), std::string::npos)
+      << f.firstError().message;
+}
+
 } // namespace
 } // namespace minc::test

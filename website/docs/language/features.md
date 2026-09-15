@@ -70,12 +70,11 @@ first-class types; the examples use the primitive names. See
 - [ ] Pointers — deliberately complete and C-level, see
       [Pointers and raw memory](#pointers-and-raw-memory)
 - [x] Fixed-size arrays — `[N]T` with the count part of the type, no decay,
-      value semantics, and both literal forms (`[1, 2, 3]` typed by its context,
+      value semantics, both literal forms (`[1, 2, 3]` typed by its context,
       `[3]i32{1, 2, 3}` complete, `[_]u8{...}` with the count from the elements,
-      `[64]u8{0; 64}` as a fill). Element access, the constant bounds check and
-      the by-value copy are in; a **file-scope** array initializer is not yet —
-      `const TABLE = [...]` waits for the aggregate value record
-      (`docs/architectures/arrays.md`, step 8)
+      `[64]u8{0; 64}` as a fill), element access with the constant bounds check,
+      the by-value copy, and **file scope** — `const TABLE = [_]i32{1, 2, 3};` is
+      a table like any local one. See [Arrays](/language/arrays)
 - [ ] Slices (pointer + length) `[]T` — **reserved**: the spelling parses today and
       is refused with a sentence, so no `.mx` file can mean something else by it in
       the meantime (`docs/architectures/arrays.md` decision 17)

@@ -82,6 +82,17 @@ enum class IRDiagnosticCode : std::uint8_t {
   Alignment,
   // An operation the language defines as a trap was emitted bare.
   UnguardedOp,
+  // An object this function would place in its own frame is larger than
+  // `kMaxStackObjectBytes`. A limit and not a bug: the frame is a subtraction
+  // from the stack pointer, and the failure without the limit is a segfault at
+  // the first instruction of the function. The sentence names the size, the
+  // bound, and the place that asked for the slot.
+  ObjectTooLarge,
+  // A file-scope initializer whose bytes this compiler will not write out one
+  // element at a time (`kMaxInitializerBytes`). A limit and not a bug: the row it
+  // exists for is a non-zero fill, whose count is a number in the type. A zero
+  // fill never reaches it -- that one is a single constant of any count.
+  InitializerTooLarge,
 };
 
 struct IRDiagnosticCodeInfo {

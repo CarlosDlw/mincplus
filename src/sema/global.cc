@@ -49,11 +49,12 @@ namespace {
 // it in a test. Same shape as `access.cc`'s, for the same reason.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' tables.
-constexpr std::array<GlobalValueKindInfo, 4> kGlobalValueKindInfos{{
+constexpr std::array<GlobalValueKindInfo, 5> kGlobalValueKindInfos{{
     {GlobalValueKind::Zero, "zero"},
     {GlobalValueKind::Int, "int"},
     {GlobalValueKind::Literal, "literal"},
     {GlobalValueKind::Null, "null"},
+    {GlobalValueKind::Aggregate, "aggregate"},
 }};
 // NOLINTEND(readability-identifier-naming)
 
@@ -298,6 +299,84 @@ void Checker::checkGlobal(GlobalBinding& binding) {
   binding.decided = true;
 }
 
+Checker::IceValue Checker::evalAggregate(ast::AstId expr) const {
+  // No sign bit and no parameter for one: a unary sign on an array is refused by
+  // the checker, so the flag `evalInitializer` carries for a literal has nothing
+  // to mean here. An aggregate is a *shape*, and a shape has no sign.
+  IceValue out;
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  if (operands.empty()) {
+    return notConstant(expr);
+  }
+  // The typed form's first operand is its `Type` node; the context form's type
+  // came from the binding and lives in the record. The same split the checker
+  // makes, because it is the same tree.
+  const std::size_t first = kindOf(operands.front()) == ast::NodeKind::Type ? 1U : 0U;
+  const std::span<const ast::AstId> elements(operands.data() + first, operands.size() - first);
+  if (elements.empty()) {
+    return notConstant(expr);
+  }
+
+  out.kind = GlobalValueKind::Aggregate;
+  out.node = expr;
+  out.splat = hasFillSeparator(expr);
+  if (out.splat) {
+    // A fill: the value is the one element, walked exactly as a list entry is.
+    // The count is the type's and stays there -- this record is a *shape*.
+    //
+    // A nested fill is a fill too: `[2][3]i32{[1, 2, 3]; 2}` is `elements` of one
+    // record whose own `splat` is set, which is the same recursion one level down
+    // and not a special case -- the element of the outer array *is* an aggregate,
+    // and this record has a form for an aggregate.
+    IceValue filled = evalInitializer(elements.front());
+    if (!filled.ok) {
+      // The element's own refusal, and not a fresh one about the whole
+      // initializer: the sentence and the caret have to be about the expression
+      // that stopped being a constant -- `g()` -- because that is the one the
+      // reader changes. Re-wrapping it here would answer "this is not a constant a
+      // file-scope object can be initialized with", which is true, useless, and
+      // points at eleven characters of table instead of at the call.
+      return filled;
+    }
+    GlobalElementValue element;
+    element.kind = filled.kind;
+    element.intValue = filled.value;
+    element.node = filled.node;
+    element.negated = filled.negated;
+    element.type = out_.typed.typeOf(elements.front());
+    element.elements = filled.elements;
+    element.splat = filled.splat;
+    out.elements.push_back(std::move(element));
+    return out;
+  }
+
+  for (const ast::AstId element : elements) {
+    // One level down, and one level deeper when that element is itself a list:
+    // the same function, because an element is an initializer of its own type.
+    const IceValue value = evalInitializer(element);
+    if (!value.ok) {
+      // The element's own sentence, exactly as the fill's value propagates its own
+      // above: the offender is inside the element, and the *first* element that is
+      // not constant is the one worth naming (depth-first, source order, the same
+      // rule `notConstant` uses when it descends into an operand).
+      return value;
+    }
+    GlobalElementValue record;
+    record.kind = value.kind;
+    record.intValue = value.value;
+    record.node = value.node;
+    record.negated = value.negated;
+    record.type = out_.typed.typeOf(element);
+    // Both fields of the aggregate shape, and unconditionally: an element that is
+    // not an aggregate holds no elements and is not a splat, which is what the
+    // zero value of both already says.
+    record.elements = value.elements;
+    record.splat = value.splat;
+    out.elements.push_back(std::move(record));
+  }
+  return out;
+}
+
 Checker::IceValue Checker::evalInitializer(ast::AstId expr, bool negated) const {
   IceValue out;
   if (!expr.valid()) {
@@ -334,6 +413,17 @@ Checker::IceValue Checker::evalInitializer(ast::AstId expr, bool negated) const 
   }
   default:
     break;
+  }
+
+  // An aggregate, before the `isConstant` test and not after it. That fact is
+  // deliberately false for an array -- the checker refuses to claim a value it
+  // has no record for (`arrays.md` decision 15, step 8) -- so the question here
+  // is the one this walk is: is every element one of the values above? The
+  // recursion below is the whole rule, which is what makes "an array is constant"
+  // the same sentence as "its elements are", with no second notion of constness.
+  if (kindOf(expr) == ast::NodeKind::TypedInitializer ||
+      kindOf(expr) == ast::NodeKind::ArrayLiteral) {
+    return evalAggregate(expr);
   }
 
   const ExprInfo& facts = out_.typed.infoOf(expr);
@@ -539,6 +629,12 @@ void Checker::publishGlobal(const GlobalBinding& binding) {
   info.intValue = binding.value.value;
   info.node = binding.value.node;
   info.negated = binding.value.negated;
+  // The aggregate's *shape*, copied and never re-derived: the lowering reads this
+  // record instead of re-walking the tree for what makes an element constant,
+  // because that walk is this pass's rule and a second copy of it is the copy
+  // that disagrees (`arrays.md` decision 15, step 8).
+  info.elements = binding.value.elements;
+  info.splat = binding.value.splat;
   out_.typed.addGlobal(info);
 }
 

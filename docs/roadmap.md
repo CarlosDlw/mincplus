@@ -372,19 +372,27 @@ which also records the reversal.
       parameter mapped to `*T` at the boundary —
       ([`architectures/arrays.md`](architectures/arrays.md)); `[]T` is reserved
       for slices and parses with a sentence
-- [x] Fixed-size arrays **implemented** (steps 1–7 of
+- [x] Fixed-size arrays **implemented** (steps 1–9 of
       [`architectures/arrays.md`](architectures/arrays.md)): the type, its
       interning with the count in the identity, `sizeOf`/`alignOf`, the syntax
       run in the grammar and in the checker, element access with the constant
-      bounds check, the by-value shape (caller copy + pointer, `sret`), and both
+      bounds check, the by-value shape (caller copy + pointer, `sret`), both
       literal forms — `[1, 2, 3]` typed by its context, `[3]i32{1, 2, 3}`
       complete, `[_]u8{...}` with the count from the elements, `[64]u8{0; 64}`
-      as a splat that is never expanded. Proven end to end: `mincc run` on a
-      program that fills, copies, passes and indexes arrays
-- [ ] Fixed-size arrays **at file scope**: the aggregate value record the
-      initializer-constant-expression walk and `ir/declarations.cc` need for
-      `const TABLE = [_]i32{...};`, with the splat kept as a shape (step 8), plus
-      the reserved `[]T`/`..` sentences (step 10) and the language page (step 9)
+      as a splat that is never expanded — and **file scope too**: the aggregate
+      value record (a list or a splat, recursive) and the constant `ir` emits
+      for it, so `const TABLE = [_]i32{...};` is read like any other object.
+      Proven end to end: `mincc run` on a program that fills, copies, passes and
+      indexes arrays, at file scope and inside a body
+- [x] The two array **bounds**, in `ir` where the cost is the compiler's own: a
+      frame object over `kMaxStackObjectBytes` and a non-zero fill over
+      `kMaxFillElements` are each refused once, by name, with the fix in the
+      sentence (decisions 27, 28 of
+      [`architectures/arrays.md`](architectures/arrays.md)) — while a zero fill
+      of any count stays legal, because it is one constant
+- [ ] The reserved `..` spelling: `a[1..2]` deserves the *reserved* sentence
+      `[]T` already has (step 10 of
+      [`architectures/arrays.md`](architectures/arrays.md))
 - [x] **Raw pointers** (stage one of
       [`architectures/memory.md`](architectures/memory.md)): `*T` at any depth,
       `&x` on a **modifiable** lvalue, `*p` and `p[i]` as places, element-scaled

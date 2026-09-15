@@ -79,6 +79,9 @@ Five failure modes recur, and every one of them is a decision in this record:
 | **25** | **No operator accepts an array except `=` and the subscript.** `==`, `!=`, the relational, the arithmetic and the bitwise operators are each refused *by name*, with the element-wise alternative in the sentence | C's `==` on two arrays compares addresses (through decay) and is one of the language's oldest bugs; element-wise `==` over a `[N]f32` is a NaN question nobody has decided here; and `==` for an aggregate has to be decided for `struct` fields at the same time, in the record that introduces them. `=` is not an operator question: it is the copy decision 3 already made |
 | **26** | **The access obligation gains the extent**: the `a[i]` form records the *array* type it indexes (so the `getelementptr` has an element type) alongside the element type it produces, and the count the type gives. `-fcheck`'s extent guard reads it; a `*p` and a parameter's `a[i]` stay `foreign` | This is the one check C structurally cannot make — its array is a pointer by the time anyone could check — and the one `runtime.cc`'s guard was written for ("an `object`-provenance extent", `ir.md` decision 27). It is also why `a[i]` is *stronger* than `*p` in the same program: the object is named here, so the module can state its bounds |
 
+| **27** | **A written-out fill is bounded, and a zero fill is exempt**: a non-zero fill may not exceed `kMaxFillElements` (2²⁰), while `[1 << 40]u8{0; …}` compiles to one `zeroinitializer` | LLVM's `splat` is a *vector* expression, so an array fill has to be materialised one `Constant*` per element — and the count of a fill is a number in the **type**, which the source can make arbitrarily large in ten characters. The exemption is not a courtesy: a zero fill is one constant whatever the count, so the bound would be refusing work the compiler does not do. What the bound buys is that the compiler's cost is a function of the source and not of a number in it |
+| **28** | **The frame is bounded too**: an object this function would place in its own frame may not exceed `kMaxStackObjectBytes` (16 MiB), refused at the declaration, at the two places a slot is created (a local binding, and a by-value argument's caller-side copy) | Decision 14 promised this and the promise is worth restating where it is enforced: without it `let a: [1 << 40]u8;` builds a terabyte `alloca`, the backend emits a stack subtraction that size, and the failure is a segfault at the function's first instruction — a bug handed to a debugger instead of to a diagnostic. The by-value *parameter* has no slot of its own (13 says its storage is the pointer it arrived as), which is why the *caller's* copy is the second call site and not the callee's binding |
+
 ## The surface
 
 ```minc
@@ -165,23 +168,32 @@ smaller than this record first planned.
 | `backend` | nothing: data is data, and the object writer already emits `.data`/`.bss` |
 | `cinterop` | the boundary's array rule: C's `T a[N]` parameter is `*T`; a `[N]T` parameter on `extern` is refused by name (decision 11). The aggregate classification is that record's |
 | `driver` | nothing: `mincc ir` already prints the module, and `sizeof` (the operator that makes a layout visible) is its own item |
-| `support/limits.h` | `kMaxStackObjectBytes`, with the human-readable form and the `static_assert` the project's rule requires |
+| `support/limits.h` | `kMaxStackObjectBytes` and `kMaxFillElements`, each with the human-readable form and the `static_assert` the project's rule requires; the two bound a frame and a written-out fill, which is why they are separate numbers and not one |
 | docs | a language page for arrays (`arrays.md` beside `pointers.md`), plus the feature checklist, and `types.md`'s conversion section saying that arrays do not convert |
 
 ### What has landed
 
-Steps **1–7** are implemented and tested: the type and its interning, layout and
+Steps **1–9** are implemented and tested: the type and its interning, layout and
 spelling (`type_test.cc`), the syntax run in the grammar and the reader
 (`array_test.cc`, `initializer_test.cc`), element access with the constant bounds
 check, the by-value shape in **both** directions (a caller copy for a parameter,
-`sret` for a return — `lower_test.cc` pins both), and both literal forms with the
-exact length, the fill, `[_]` and the splat that is never expanded. `mincc run` on
-`examples/014_arrays.mx` is the end-to-end proof.
+`sret` for a return — `lower_test.cc` pins both), both literal forms with the
+exact length, the fill, `[_]`, the aggregate **value record** (a list or a splat,
+recursive, with the element's own type), the constant `ir` emits for it
+(`global_test.cc` in both stages), and the page a reader starts from. `mincc run`
+on `examples/014_arrays.mx` is the end-to-end proof, and it now writes its tables
+at file scope as well as inside `main`.
 
-Steps **8–10** are the remaining work: the aggregate value record the
-initializer-constant-expression walk and `ir/declarations.cc` need for a
-file-scope `const TABLE = [_]i32{...}`, the reserved `[]T`/`..` sentences, and the
-language page (which exists, with the two gaps above stated in it).
+Step **10** is the remaining work: the `..` half of the reserved spellings. `[]T`
+already parses and is refused by name; `a[1..2]` is a parse error today, and it
+deserves the same *reserved* sentence rather than "expected `]`".
+
+Two bounds landed with step 8, and they are decisions rather than details
+(27, 28): a **frame** object may not exceed `kMaxStackObjectBytes` (16 MiB) and a
+non-zero **fill** may not exceed `kMaxFillElements` (2²⁰). Both are enforced in
+`ir` -- the stage where the frame and the constant are the compiler's own cost --
+with one message each, and both stop the walk so that one refusal cannot become a
+trail of `ir-internal` complaints about symbols that were never emitted.
 
 ## The implementation, in the order it lands
 
@@ -236,6 +248,9 @@ diagnostic or a scan, never a convention.
 | An aggregate in the ABI, assumed by the front end | Zig on MIPS struct returns, Crystal on AMD64/ARM64, Odin's ARM32, .NET's ARM64, Inko under optimisation — all shipped wrong code from a front end that trusted LLVM's aggregate convention | decision 13's revision: the internal shape *is* the MEMORY-class shape (caller copy + pointer, `sret` for a return), so the ABI is `cinterop`'s attributes and not a second lowering — step 5 |
 | A big object copy written as an instruction chain | Every front end that built an `insertvalue` chain per element: compile time grows with the count, and the count is unfriendly input | one `memcpy` with a constant length per object copy (15/13) — step 5, asserted as *one* memory intrinsics call, not a golden file |
 | A splat *expanded* by the compiler | The constant folders that turn `[0; 1<<20]` into a million values before the backend sees the zero fill | the value record is a **shape** — element type, count, a list *or* a splat — and never the bytes (15) — step 8, tested with a count whose expansion would be visible in the compile time |
+| A count in the *type* deciding the compiler's cost | every front end that materialises a range designator: `int a[1000000] = {[0 ... 999999] = 7};` costs the compiler a million operands and the guard against it is always an afterthought | a non-zero fill is written out and **bounded** at `kMaxFillElements`, with the count, the bound and the fix in the sentence (27) — and a zero fill is exempt because it is *one* constant, which is why `[1 << 40]u8{0; …}` still compiles |
+| A frame the source chose the size of | `let a: [1 << 40]u8;` is eleven characters, and the alloca is a terabyte: LLVM builds it, the backend emits the subtraction, and the crash is at the first instruction of the function | `kMaxStackObjectBytes` (28), asked at the two places a slot is created — a local binding and a by-value argument's caller copy — so the refusal lands on the declaration |
+| Braces where the language has none | C's habit is `int a[3] = {1, 2, 3};`, so the first thing a reader writes in an annotated binding is `{1, 2, 3}` — and a parser that says "expected an expression" there teaches nothing about the two characters to swap | `parse-brace-without-type`, at the two positions where a `{` cannot be a block (an element, and the value of an annotated binding), with the group still read as the literal it was meant to be |
 | A half-initialized object that nobody sees | C: "fewer initializers means zero-fill" is how an array ends up partially written with no diagnostic at all | exact length, one explicit fill (9, 10) — step 6 |
 | A partially initialized object read as if whole | rustc's init analysis exists for this; C considers it undefined and says nothing | object-level definite assignment with the fix in the sentence (23) — step 3, using the flow pass that already refuses an unassigned scalar |
 | A loop bound that goes stale | C: `sizeof(a)/sizeof(a[0])` and the `ARRAY_SIZE` macro, because the count is not readable from the language | the bound never affects the type, and `[_]` makes the count come from the list at the *definition*; `len(a)` is listed as the companion of `sizeof` and arrives with it — step 9's example writes the count once |
@@ -283,6 +298,13 @@ the table is the work list, one row per module and per mini-behaviour.
 
 | Claim | Checked by |
 | --- | --- |
+| A file-scope table is a **list of values** | `array_test.cc`: `const TABLE: [3]i32 = [10, 20, 30];` publishes `aggregate`, three `int` elements, each with its own type and no `splat` |
+| A **fill is one record** whatever the count | the same file: `[1048576]u8{0; 1048576}` publishes `splat` with **one** element — the property that makes the compiler's cost the source's and not the type's |
+| A nested initializer **recurses**, including a nested fill | `[[1, 2, 3], [4, 5, 6]]` gives an element of kind `aggregate` with its own three records; `[2][3]i16{[1, 2, 3]; 2}` gives an aggregate element whose own `splat` is set |
+| An element that is not constant is refused **once, at the element** | `[2]i32{1, g()}` is one `sema-global-not-constant` whose sentence is about the *call*, not about the table |
+| The module: a table, a zero fill and a `bool` array | `ir/global_test.cc`: `[i32 10, i32 20, i32 30]`, `zeroinitializer` for a fill of 2²⁰, and `[3 x i8]` (never `[3 x i1]`) for `[3]bool` |
+| **The two bounds are bounds** | `[2097152]u8{7; 2097152}` is one `ir-initializer-too-large`, and `[1 << 40]u8{0; …}` still compiles as one `zeroinitializer`; `let big: [16777217]u8;` is one `ir-object-too-large` while exactly `kMaxStackObjectBytes` builds |
+| A `{` with no type in front of it is a sentence, not four | `= {1, 2, 3}` and `{{1, 2, 3}, …}` are `parse-brace-without-type`, once each, with the group read as the literal it was meant to be |
 | `[N]T` is a type, `[4]i32` equals `[4]int`, and `[4]i32` is not `[8]i32` | `sema` tests over the store, in the shape of the existing type-identity tests |
 | The count survives the tree | a parse test that reads `*[4]i32`, `[4]*i32` and `[2][3]i32` and asserts the structure and the spelling of each |
 | A count of zero, an empty `[]`, and a missing element type each have their own code and sentence | one input per parse/validate code, from the same enumeration sweep the other stages use |
@@ -301,7 +323,7 @@ the table is the work list, one row per module and per mini-behaviour.
 | The runtime index is the checked build's | a program that reads `a[i]` with a runtime `i` out of range: defined-but-unreported in a release build, a reported trap under `-fcheck` (the shape § *The checked build* already uses) |
 | The stack limit | an object just under and just over `kMaxStackObjectBytes`, asserting the second is refused and names `alloc` |
 | The module's shape | `ir` tests: `[N x i32]` for the type, `[N x i8]` for `[N]bool`, the alignment on every access, `getelementptr` **without** `inbounds`, one `memcpy` for a copy, and the scan clean |
-| A file-scope array is a value and not `constant` | the `globals` tests, extended with the array kinds — `zeroinitializer`, a `ConstantDataArray`, a nested `ConstantArray` — and the `ir` assumption scan unchanged |
+| A file-scope array is a value and not `constant` | the `globals` tests, extended with the array kinds — `zeroinitializer`, a `ConstantArray` whose operands are at the *storage* form of the element, and a nested `ConstantArray` — and the `ir` assumption scan unchanged |
 | `-g` names the elements | a debug test that finds the `DICompositeType` with its `DISubrange` for an array binding |
 | The boundary refuses what it cannot lower | an `extern` declaration with a `[N]T` parameter is refused by name; a C-shaped `T a[N]` parameter is `*T` |
 | The examples still compile and run | a new `examples/014_arrays.mx` (a sum over an array, a 2D table, a file-scope `const` table, `&a[0]` into a helper) in the corpus `make examples` runs |
@@ -364,7 +386,9 @@ the table is the work list, one row per module and per mini-behaviour.
 - LLVM *Language Reference*, the **`byval` and `sret` parameter attributes** —
   the shape decision 13 revised towards, and the attributes `cinterop` will
   choose from: <https://llvm.org/docs/LangRef.html#parameter-attributes>
-- LLVM *Language Reference*, **`ConstantAggregateZero`** and
-  **`ConstantDataArray`** — the two constants a zero fill and a byte-shaped
-  literal become, with no element list built (decision 15):
+- LLVM *Language Reference*, **`ConstantAggregateZero`** — the one constant a
+  zero fill becomes, whatever its count, and the reason decision 27 exempts it:
   <https://llvm.org/docs/LangRef.html#constantaggregatezero-constant>
+- LLVM *Language Reference*, the **`splat` constant expression** — "only for
+  vectors", which is why a non-zero *array* fill has to be written out at all:
+  <https://llvm.org/docs/LangRef.html#constant-expressions>

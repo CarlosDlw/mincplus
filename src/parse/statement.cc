@@ -212,7 +212,18 @@ void Parser::parseBinding() {
   }
   if (at(lex::TokenKind::Equal)) {
     bump();
-    parseExpr();
+    // A `{` here is the C habit of bracing the initializer -- `let a: [3]i32 =
+    // {1, 2, 3};` -- and it is the one position where the reading is not
+    // ambiguous: after `=` there is no block, so the token has exactly one
+    // meaning and the sentence about which grouping is which can be said. (The
+    // general expression position has no such case on purpose: `if { b(); }` is a
+    // missing condition followed by the block, and answering it with a sentence
+    // about braces would turn one mistake into four messages.)
+    if (at(lex::TokenKind::LBrace)) {
+      parseBraceGroup();
+    } else {
+      parseExpr();
+    }
   }
 }
 

@@ -98,12 +98,46 @@ table[0] = 1;       // error: `table` is a `const` binding
 let p: *i32 = &table[0];   // error: the same rule, one level down
 ```
 
+## At file scope
+
+A table is written the same way at the top of a file, and its bytes are the
+compiler's -- there is nothing to run before `main`:
+
+```minc
+const DAYS = [_]u32{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+const SQUARES: [4]i32 = [1, 4, 9, 16];
+const ZERO_ROW = [4]i32{0; 4};
+const YEAR: [2][2]i32 = [[1, 2], [3, 4]];
+```
+
+Elements are read exactly like a local table's, and `const` still protects the
+*name*: neither `SQUARES` nor `SQUARES[0]` may be assigned.
+
+The elements are *values the compiler writes*, and that is the whole rule: an
+integer folded by the same reader `#if` uses, a float or a `str` read from its own
+spelling, and a whole binding read from an earlier one -- in any order, so a table
+may be written above the constant it uses.
+
+What cannot be there is anything with no value before the program starts, and each
+one is refused with the sentence that says *what* it was: a call, an indexed
+access (which reads memory), a dereference, a `let`, and the address of an object.
+
+### Two limits, and why they are not surprises
+
+- **A frame object may be at most 16 MiB.** `let a: [1 << 40]u8;` is storage in a
+  frame, and a frame is a subtraction from the stack pointer. The refusal names
+the size and comes at the declaration.
+- **A non-zero fill is written out, up to 2²⁰ elements.** `[64]u8{0; 64}` is one
+  constant whatever the count -- a zero fill costs nothing -- but
+  `[2097152]u8{7; 2097152}` has to be materialised element by element, and the
+  language says where that stops instead of letting it be a slow build. A list is
+  never limited this way: its length is what you wrote.
+
 ## What is not here yet
 
-- **A file-scope array initializer** (`const TABLE = [_]i32{...};`) is not
-  implemented yet: it needs the aggregate value record the initializer-constant-
-  expression walk reads, and it is the next step of the design
-  (`docs/architectures/arrays.md`, step 8).
+- **The `..` of a slice range** (`a[1..2]`) is a parse error today. Slices are
+  reserved, and `a[1..2]` will get the same *reserved* sentence `[]T` already has
+  before anything can be meant by it.
 - **Slices** (`[]T`, a pointer and a length together) are **reserved**: the
   spelling parses and is refused with a sentence, so no program can mean anything
   else by it in the meantime.

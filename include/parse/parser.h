@@ -209,6 +209,15 @@ public:
   // implementations would be two places for that to drift.
   CompletedMarker parseArrayLiteral();
   CompletedMarker parseTypedInitializer();
+  // One element of an initializer, in either grouping (`parseInitializerElements`
+  // is the loop over these). A separate function because of the `{` recovery:
+  // one place reads "what starts an element", and one place owns the sentence.
+  void parseElement();
+  // A `{...}` where a type was expected to come first: refused by name, and read
+  // as the `ArrayLiteral` the reader meant, so one mistake stays one message.
+  // Called from the two positions a stray brace can appear in -- an element, and
+  // a whole value -- which is what keeps the sentence in one place.
+  CompletedMarker parseBraceGroup();
   void parseInitializerElements(lex::TokenKind closer);
 
   void parseExpr();

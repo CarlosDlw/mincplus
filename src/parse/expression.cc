@@ -170,6 +170,13 @@ CompletedMarker Parser::parsePrimary() {
     // so nothing downstream has to guess which of the two it was handed.
     return atTypedInitializer() ? parseTypedInitializer() : parseArrayLiteral();
   }
+  // **No `LBrace` case here, deliberately.** A `{` where a primary expression
+  // would start is ambiguous and the common reading is not the mistaken one:
+  // `if { b(); }` is a missing condition followed by the block. The sentence for
+  // braces around a value therefore lives where a value is *required* and a block
+  // cannot follow -- an element of an initializer (`parseElement`) and the value
+  // of an annotated binding (`statement.cc`) -- and not at the general position,
+  // where it would turn one missing condition into four messages.
   default: {
     error("expected an expression", ParseErrorCode::ExpectedExpression);
     // An empty `Error` node keeps the tree total without consuming anything;
@@ -243,7 +250,7 @@ void Parser::parseInitializerElements(lex::TokenKind closer) {
   if (at(closer)) {
     return;
   }
-  parseExpr();
+  parseElement();
   if (at(lex::TokenKind::Semicolon)) {
     bump();
     parseExpr();
@@ -254,8 +261,47 @@ void Parser::parseInitializerElements(lex::TokenKind closer) {
     if (at(closer)) {
       break; // the trailing comma
     }
-    parseExpr();
+    parseElement();
   }
+}
+
+void Parser::parseElement() {
+  // One element of an initializer, in either grouping.
+  //
+  // A `{` here is C's nested-braces spelling, and it is not this language's: the
+  // braces belong to a *type* (`[3]i32{1, 2, 3}`) and a group of elements is a
+  // value, written with the same brackets its type is (`[1, 2, 3]`). Leaving it to
+  // `parseExpr` would answer with "expected an expression" at a token that starts
+  // an expression everywhere else, and the reader would be looking for a missing
+  // operand rather than at the two characters to swap.
+  //
+  // The group is read anyway, and as the `ArrayLiteral` it was meant to be: one
+  // refusal, and a tree whose shape still says what the reader wrote, so the
+  // checker does not add a second complaint about an element it cannot type.
+  if (!at(lex::TokenKind::LBrace)) {
+    parseExpr();
+    return;
+  }
+  parseBraceGroup();
+}
+
+CompletedMarker Parser::parseBraceGroup() {
+  // One sentence for both positions a stray `{` can appear in -- an element, and
+  // a whole value -- because it is one mistake: the braces of an initializer
+  // belong to its *type* (`[3]i32{1, 2, 3}`), and a group of elements is a value,
+  // written with the brackets its type is (`[1, 2, 3]`).
+  error("`{` comes after a type, as in `[3]i32{1, 2, 3}`: a group of elements is a value, and "
+        "it is written with brackets -- `[1, 2, 3]` -- or the binding gets the type and the "
+        "group needs none",
+        ParseErrorCode::BraceWithoutType);
+  // Read as the `ArrayLiteral` it was meant to be. One refusal, and a tree whose
+  // shape still says what the reader wrote: an annotated binding then types it,
+  // and the checker has nothing to add about an element it cannot name.
+  Marker group = start();
+  bump(); // `{`
+  parseInitializerElements(lex::TokenKind::RBrace);
+  expect(lex::TokenKind::RBrace);
+  return group.complete(SyntaxKind::ArrayLiteral);
 }
 
 CompletedMarker Parser::parseArrayLiteral() {

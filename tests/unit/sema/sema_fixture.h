@@ -193,6 +193,13 @@ public:
     }
     return store_.spelling(typed().typeOf(node));
   }
+  // A type as the language spells it, for the tests that compare an element's
+  // recorded type against the one the annotation wrote -- the two are the same
+  // `TypeId` and asserting the *spelling* is how a failure prints something a
+  // reader can act on instead of an index.
+  [[nodiscard]] std::string spellingOfType(sema::TypeId id) const {
+    return store_.spelling(id);
+  }
   // The published value of a **file-scope** binding: what the lowering writes as
   // the object's bytes. Null when the unit has no binding with that name, which
   // is how a test tells `Zero` apart from "not a global at all".

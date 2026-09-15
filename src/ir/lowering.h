@@ -353,6 +353,30 @@ private:
   // both forms and deliberately not arithmetic: a float's sign bit, and a
   // two's-complement negation for an integer wider than the 64-bit core.
   [[nodiscard]] llvm::Constant* negatedConstant(llvm::Constant* value);
+  // The bytes of an aggregate initializer, from the *shape* `sema` recorded: one
+  // constant per element, or one written `count` times when the record says the
+  // initializer was a fill. `elements` and `splat` are the whole input, and the
+  // tree is never re-walked here -- what makes an element constant is `sema`'s
+  // rule, and a second copy of it is the copy that disagrees (`arrays.md` 15).
+  [[nodiscard]] llvm::Constant* aggregateConstant(const sema::GlobalInfo& info);
+  [[nodiscard]] llvm::Constant*
+  aggregateConstant(std::span<const sema::GlobalElementValue> elements, bool splat,
+                    sema::TypeId type, support::Span at);
+  // One element of the shape above, at the *storage* form of `type`: a `bool` is
+  // an `i1` as a value and a byte as an object, and that difference is one level
+  // down in an array of `bool`.
+  [[nodiscard]] llvm::Constant* elementConstant(const sema::GlobalElementValue& element,
+                                                sema::TypeId type, support::Span at);
+  // The storage form of a constant value: `i1` -> `i8` for a `bool`, and the same
+  // rule element-wise for an array of them. `nullptr` when the two disagree, with
+  // the internal error already recorded.
+  [[nodiscard]] llvm::Constant* constantToStorage(llvm::Constant* value, sema::TypeId type,
+                                                  support::Span at);
+  // Whether an object of this type may live in a frame, and the diagnostic when it
+  // may not (`kMaxStackObjectBytes`). One function for the two places a slot is
+  // created -- a local binding and a by-value argument's caller-side copy -- so the
+  // two cannot answer differently about the same object.
+  [[nodiscard]] bool frameObjectFits(sema::TypeId type, ast::AstId at);
 
   // --- the runtime -------------------------------------------------------------
   //

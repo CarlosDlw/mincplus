@@ -76,6 +76,15 @@ enum class ParseErrorCode : std::uint8_t {
   // should have been, and the group is closed anyway so one missing `]` does not
   // turn the rest of the declaration into a second diagnostic.
   ExpectedArrayCountClose,
+  // A `{` with no type in front of it: `let a: [3]i32 = {1, 2, 3};`, and the same
+  // mistake nested one level down, `[2][3]i16{{1, 2, 3}, ...}`, and at a fill's
+  // value. The two groupings are not interchangeable and the sentence says which
+  // is which: `{...}` comes *after* a type (`[3]i32{1, 2, 3}`), while a group of
+  // elements is a value and is written with the same brackets its type is
+  // (`[1, 2, 3]`). Without this code the reader who wrote C's braces gets
+  // "expected an expression" at a token that starts an expression everywhere
+  // else, which teaches nothing about the characters to change.
+  BraceWithoutType,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

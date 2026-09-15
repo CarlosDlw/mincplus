@@ -274,5 +274,110 @@ TEST(IrGlobalTest, DebugInformationNamesAFileScopeObject) {
   EXPECT_NE(text.find("isLocal: true"), std::string::npos) << text;
 }
 
+// --- the aggregate initializer ---------------------------------------------------
+//
+// Step 8 of `arrays.md`, from the module's side: the bytes of a file-scope array.
+// Three shapes, and the third is the one the design exists for -- a fill whose
+// count is a number in the type, which has to be *one* constant and not `count`
+// of them.
+
+TEST(IrGlobalTest, AFileScopeTableBecomesAConstantArray) {
+  IrFixture f;
+  f.source("const TABLE: [3]i32 = [10, 20, 30];\n"
+           "const GRID: [2][3]i32 = [[1, 2, 3], [4, 5, 6]];\n"
+           "fn i32 main() { return TABLE[1] + GRID[0][2]; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_TRUE(f.moduleBuilt()) << f.module();
+  EXPECT_EQ(f.violations(), 0u);
+
+  const std::string text = f.module();
+  // A value and never an instruction: the object's bytes are written here, which
+  // is what `globals.md` decision 2 promises and what the scan above proves.
+  EXPECT_NE(text.find("@TABLE = global [3 x i32] [i32 10, i32 20, i32 30]"), std::string::npos)
+      << text;
+  // The alignment is the type's own, and it is stated rather than left to the
+  // target's choice, because every access through the object carries the same
+  // number and the invariant scan compares the two.
+  EXPECT_NE(text.find("@TABLE = global [3 x i32]"), std::string::npos) << text;
+  // A read through the object, one `getelementptr` per dimension and no decay.
+  EXPECT_NE(text.find("load i32, ptr getelementptr ([3 x i32], ptr @TABLE, i64 0, i64 1)"),
+            std::string::npos)
+      << text;
+}
+
+TEST(IrGlobalTest, AZeroFillIsOneConstantWhateverItsCount) {
+  // The property `arrays.md` decision 15 promises and this test is the proof of:
+  // `[1 << 20]u8{0; 1 << 20}` emits `zeroinitializer`, **one** constant, and the
+  // compiling time of this file is the compiling time of the one below it.
+  IrFixture f;
+  f.source("const BIG = [1048576]u8{0; 1048576};\n"
+           "const SMALL = [4]u8{0; 4};\n"
+           "fn i32 main() { return BIG[0] + SMALL[0]; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_TRUE(f.moduleBuilt()) << f.module();
+  EXPECT_EQ(f.violations(), 0u);
+
+  const std::string text = f.module();
+  EXPECT_NE(text.find("@BIG = global [1048576 x i8] zeroinitializer"), std::string::npos) << text;
+  EXPECT_NE(text.find("@SMALL = global [4 x i8] zeroinitializer"), std::string::npos) << text;
+}
+
+TEST(IrGlobalTest, ANonZeroFillAndABoolArrayAreWrittenAtTheStorageForm) {
+  IrFixture f;
+  f.source("const ONES = [3]i32{7; 3};\n"
+           "const FLAGS = [3]bool{true, false, true};\n"
+           "fn i32 main() { return ONES[0] + (FLAGS[1] ? 1 : 0); }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_TRUE(f.moduleBuilt()) << f.module();
+  EXPECT_EQ(f.violations(), 0u);
+
+  const std::string text = f.module();
+  EXPECT_NE(text.find("@ONES = global [3 x i32] [i32 7, i32 7, i32 7]"), std::string::npos) << text;
+  // A `bool` is a bit as a value and a byte as an object (`memory.md`, *Objects*),
+  // and an array of them is that difference one level down. Emitting `[3 x i1]`
+  // here would be a store between two types -- LLVM's undefined behaviour, and
+  // nothing it reports.
+  EXPECT_NE(text.find("@FLAGS = global [3 x i8]"), std::string::npos) << text;
+  EXPECT_EQ(text.find("[3 x i1]"), std::string::npos) << text;
+}
+
+TEST(IrGlobalTest, AFillPastTheBudgetIsRefusedOnceAndByName) {
+  // A bound and not a crash: the count of a fill is a number in the *type*, so
+  // `[2097152]u8{7; 2097152}` is eleven characters of source and two million
+  // elements of work. The refusal is one message about the fill, at the fill, and
+  // the binding it belongs to does not produce a second one about a missing
+  // symbol.
+  IrFixture f;
+  f.source("const BIG = [2097152]u8{7; 2097152};\n"
+           "fn i32 main() { return BIG[0]; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.moduleBuilt());
+  EXPECT_TRUE(f.hasError("ir-initializer-too-large")) << f.module();
+  ASSERT_EQ(f.diagnostics().size(), 1u);
+  EXPECT_NE(f.diagnostics().front().message.find("zero fill costs nothing"), std::string::npos)
+      << f.diagnostics().front().message;
+}
+
+TEST(IrGlobalTest, AFrameObjectPastTheBudgetIsRefusedAtItsDeclaration) {
+  // The record's decision 14: an object too large for a frame is refused where it
+  // is declared. Without it this file builds an `alloca` of 16 MiB + 1 and the
+  // failure is a segfault at the first instruction of `main`.
+  IrFixture f;
+  f.source("fn i32 main() { let big: [16777217]u8; return big[0]; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_FALSE(f.moduleBuilt());
+  EXPECT_TRUE(f.hasError("ir-object-too-large")) << f.module();
+  ASSERT_EQ(f.diagnostics().size(), 1u);
+  EXPECT_NE(f.diagnostics().front().message.find("frame"), std::string::npos)
+      << f.diagnostics().front().message;
+
+  // Exactly at the bound is an object the frame holds, and it is the same
+  // comparison: `<=` and not `<`.
+  IrFixture fits;
+  fits.source("fn i32 main() { let big: [16777216]u8; return big[0]; }\n");
+  ASSERT_TRUE(fits.build());
+  EXPECT_TRUE(fits.moduleBuilt()) << fits.module();
+}
+
 } // namespace
 } // namespace minc::test

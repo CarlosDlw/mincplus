@@ -219,6 +219,204 @@ void Lowering::declareGlobals() {
   }
 }
 
+// --- the aggregate initializer ---------------------------------------------------
+//
+// One function per question, and the four of them are the whole of what an
+// aggregate value is:
+//
+//   `aggregateConstant`  the array, from the recorded shape (a list or a splat)
+//   `elementConstant`    one element, at the storage form of its own type
+//   `constantToStorage`  the `bool`-is-a-byte difference, one level down too
+//   `frameObjectFits`    the frame bound, at the two places a slot is created
+//
+// The recursion is the point. `[2][3]bool{[true, false, true], [false, true,
+// false]}` is four levels of the same two questions -- is this an array, and is
+// the element a byte or a bit -- and every one of them is answered by looking at
+// the *record*, never by looking for a pattern in the tree. That is what makes
+// the file-scope path and the runtime path agree about what an element is: they
+// do not share a walk, they share the answer.
+
+llvm::Constant* Lowering::aggregateConstant(const sema::GlobalInfo& info) {
+  return aggregateConstant(info.elements, info.splat, info.type, spanOf(info.decl));
+}
+
+llvm::Constant* Lowering::aggregateConstant(std::span<const sema::GlobalElementValue> elements,
+                                            bool splat, sema::TypeId type, support::Span at) {
+  llvm::Type* shape = storageType(type);
+  auto* array = shape == nullptr ? nullptr : llvm::dyn_cast<llvm::ArrayType>(shape);
+  if (array == nullptr || !types_.known(type)) {
+    fatal(at, IRDiagnosticCode::Internal,
+          "an aggregate value was recorded for a type this stage cannot map to an array");
+    return nullptr;
+  }
+  if (elements.empty() || (splat && elements.size() != 1)) {
+    fatal(at, IRDiagnosticCode::Internal,
+          "an aggregate value was recorded with " + std::to_string(elements.size()) +
+              (splat ? " elements for a fill" : " elements"));
+    return nullptr;
+  }
+  const std::uint64_t count = array->getNumElements();
+  const sema::TypeId elementType = types_.elementOf(type);
+
+  llvm::Constant* piece = elementConstant(elements.front(), elementType, at);
+  if (piece == nullptr) {
+    return nullptr;
+  }
+
+  if (splat) {
+    // The zero fill first, and before the budget, because it is the one case
+    // whose cost is **not** the count: one `ConstantAggregateZero` stands for any
+    // number of zeroed elements. Putting the budget above it would refuse
+    // `[1 << 40]u8{0; ...}`, which is a legal object and the reader's own decision
+    // about its size.
+    if (piece->isNullValue()) {
+      return llvm::ConstantAggregateZero::get(array);
+    }
+    // A non-zero fill, which is the one place in the file-scope path where the
+    // compiler's cost is decided by a number in the *type* rather than by the
+    // source: LLVM's `splat` exists for vectors and not for arrays, so the
+    // elements have to be written out. `kMaxFillElements` is the stated bound, and
+    // the sentence names the count, the bound and the fix.
+    if (count > support::kMaxFillElements) {
+      // `fatal` and not `errorAt`: the walk stops, and it has to. An object with no
+      // initializer is a symbol this module then reads as missing -- a `load` of it
+      // in a body becomes "this place is not a binding this function owns", which is
+      // a second message about one mistake and an `ir-internal` about a program that
+      // is not buggy. One refusal, one sentence.
+      fatal(at, IRDiagnosticCode::InitializerTooLarge,
+            "this fill writes " + std::to_string(count) + " elements of `" +
+                types_.spelling(elementType) +
+                "`, and this compiler writes a non-zero fill "
+                "out one element at a time: " +
+                std::string(support::kMaxFillElementsText) +
+                " is the most it will materialise. A zero fill costs nothing at any count, so "
+                "`[N]" +
+                types_.spelling(elementType) + "{0; N}` stays available");
+      return nullptr;
+    }
+    return llvm::ConstantArray::get(
+        array, std::vector<llvm::Constant*>(static_cast<std::size_t>(count), piece));
+  }
+
+  if (elements.size() != count) {
+    // A list whose length is not the type's is one the checker refused; reaching
+    // here means the record and the type disagree, which is a bug in this compiler
+    // and not a statement about the program.
+    fatal(at, IRDiagnosticCode::Internal,
+          "an aggregate value records " + std::to_string(elements.size()) + " elements for a `" +
+              types_.spelling(type) + "`");
+    return nullptr;
+  }
+  std::vector<llvm::Constant*> pieces;
+  pieces.reserve(elements.size());
+  pieces.push_back(piece);
+  for (std::size_t i = 1; i < elements.size(); ++i) {
+    llvm::Constant* next = elementConstant(elements[i], elementType, at);
+    if (next == nullptr) {
+      return nullptr;
+    }
+    pieces.push_back(next);
+  }
+  return llvm::ConstantArray::get(array, pieces);
+}
+
+llvm::Constant* Lowering::elementConstant(const sema::GlobalElementValue& element,
+                                          sema::TypeId type, support::Span at) {
+  llvm::Type* shape = storageType(type);
+  if (shape == nullptr) {
+    fatal(at, IRDiagnosticCode::Internal,
+          "an element of an aggregate initializer has a type this stage cannot map");
+    return nullptr;
+  }
+  switch (element.kind) {
+  case sema::GlobalValueKind::Zero:
+    // No initializer at all, or an element the checker read as zero: the bytes are
+    // the object's, so this is the type's zero and not a conversion.
+    return llvm::Constant::getNullValue(shape);
+  case sema::GlobalValueKind::Null:
+    if (!shape->isPointerTy()) {
+      fatal(at, IRDiagnosticCode::Internal, "`null` as an element of a non-pointer array");
+      return nullptr;
+    }
+    return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(shape));
+  case sema::GlobalValueKind::Int:
+    // Built at the *element's* storage form, exactly as a scalar binding's value
+    // is: a `[3]bool{true, false, true}` is three `i8`s and not three `i1`s.
+    return intConstant(element.intValue, type);
+  case sema::GlobalValueKind::Literal: {
+    // Read from the literal's own spelling by the reader that already existed for
+    // it -- a float, a `str` (whose bytes are their own private object, so the
+    // element is that object's address), or an integer wider than the core.
+    const Value literal = lowerLiteral(element.node);
+    auto* constant = llvm::dyn_cast_or_null<llvm::Constant>(literal.v);
+    if (constant == nullptr) {
+      return nullptr;
+    }
+    if (element.negated) {
+      constant = negatedConstant(constant);
+    }
+    // The element's own type and the type the value was built at are the same
+    // type whenever the checker accepted the initializer -- a deferred literal
+    // takes its type from the element, so there is nothing to convert. The
+    // conversion is written anyway and is the same call the scalar path makes:
+    // leaving it out would mean this stage *assumes* the two, and an assumption
+    // about types is the one kind this stage refuses to carry.
+    return constantToStorage(convertConstant(constant, element.type, type), type, at);
+  }
+  case sema::GlobalValueKind::Aggregate:
+    // One level down, the same function: an element that is an array is an array.
+    return aggregateConstant(element.elements, element.splat, type, at);
+  }
+  return nullptr;
+}
+
+llvm::Constant* Lowering::constantToStorage(llvm::Constant* value, sema::TypeId type,
+                                            support::Span at) {
+  if (value == nullptr) {
+    return nullptr;
+  }
+  llvm::Type* shape = storageType(type);
+  if (shape == nullptr) {
+    return nullptr;
+  }
+  if (value->getType() == shape) {
+    return value;
+  }
+  // The one representation difference in the language: a `bool` is an `i1` as a
+  // value and a byte as an object (`memory.md`, *Objects*).
+  if (value->getType() == llvm::Type::getInt1Ty(context_) && shape == byteType()) {
+    // `getCast` and not a hand-built `zext` expression: it folds, so the result is
+    // a `ConstantInt` and not a `ConstantExpr` the object writer would have to
+    // evaluate.
+    return llvm::ConstantExpr::getCast(llvm::Instruction::ZExt, value, shape);
+  }
+  // And the same difference one level down, for the same reason `toStorage` has
+  // the loop: `[4]bool` is `[4 x i1]` as a value and `[4 x i8]` as an object, and
+  // a store between the two types is undefined behaviour that LLVM does not
+  // report. Recursive, so `[2][3]bool` is the same rule twice.
+  auto* from = llvm::dyn_cast<llvm::ArrayType>(value->getType());
+  auto* to = llvm::dyn_cast<llvm::ArrayType>(shape);
+  if (from != nullptr && to != nullptr && from->getNumElements() == to->getNumElements()) {
+    const sema::TypeId element = types_.elementOf(type);
+    std::vector<llvm::Constant*> pieces;
+    pieces.reserve(static_cast<std::size_t>(to->getNumElements()));
+    for (std::uint64_t i = 0; i < to->getNumElements(); ++i) {
+      llvm::Constant* piece = value->getAggregateElement(static_cast<unsigned>(i));
+      piece = constantToStorage(piece, element, at);
+      if (piece == nullptr) {
+        return nullptr;
+      }
+      pieces.push_back(piece);
+    }
+    return llvm::ConstantArray::get(to, pieces);
+  }
+  fatal(at, IRDiagnosticCode::Internal,
+        "an initializer value of type `" + types_.spelling(type) +
+            "` reached the lowering in "
+            "a form that is not its storage form");
+  return nullptr;
+}
+
 llvm::ConstantInt* Lowering::intConstant(support::ConstInt value, sema::TypeId type) {
   llvm::Type* shape = storageType(type);
   if (shape == nullptr || !shape->isIntegerTy()) {
@@ -323,6 +521,12 @@ llvm::Constant* Lowering::globalInitializer(const sema::GlobalInfo& info) {
     }
     return convertGlobalValue(info, constant, literal.type);
   }
+  case sema::GlobalValueKind::Aggregate:
+    // The elements, from the *shape*: one constant per element, or one written
+    // `count` times. No walk of the tree, no re-test of constness, and no
+    // expansion of a zero fill in particular -- `[1 << 20]u8{0; ...}` is one
+    // `zeroinitializer` whatever its count (`arrays.md` decision 15).
+    return aggregateConstant(info);
   case sema::GlobalValueKind::Int: {
     // The value was folded at the *expression's* type -- the literal's, or the
     // operation type of the arithmetic -- and the object's type may be another of
