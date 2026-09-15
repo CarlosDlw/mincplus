@@ -1,0 +1,75 @@
+name: Language proposal
+description: Propose a change to the language itself — syntax, a type, a semantic rule, or a decision that is still open.
+title: "lang: "
+labels: ["language"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The language has a written checklist in `README.md`, with every feature
+        marked **decided**, **planned** or **open**, and a design record in
+        `docs/architectures/` for each area. A proposal is the thing that changes
+        that checklist, so please read the entry you are proposing to change
+        first — and the record for the stage that would own it.
+
+        Two questions decide most proposals here: **which stage owns each fact
+        the feature needs**, and **is the change a smaller one than the
+        alternative that adds a second way to say the same thing**.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What changes?
+      description: The proposal in a few sentences, with a code example if it has syntax.
+      render: minc
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why is it worth it?
+      description: What it makes possible, what it prevents, and what it costs the reader of a program who does not know the feature.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: status
+    attributes:
+      label: What does the checklist say today?
+      description: The entry in `README.md` for this area, as it stands.
+      options:
+        - Planned — the design is fixed, only the implementation is missing
+        - Open (`[?]`) — the design needs a decision, and this is it
+        - Decided one way, and this proposal changes that decision
+        - Nothing in the checklist mentions it
+    validations:
+      required: true
+
+  - type: textarea
+    id: stage
+    attributes:
+      label: Which stage owns the new facts?
+      description: |
+        Name them, and name the stage that computes each: a token the lexer must
+        learn, a node the parser must produce, a type the checker must decide, an
+        access or an assumption the lowering must honour. A fact two stages would
+        compute means the earlier stage should own it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What else could do the job?
+      description: Other spellings, other semantics, a library solution, or doing nothing. What the market's languages do, with links, if that is why you prefer this.
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: What happens to programs that exist today?
+      description: A change to how a program is read or checked. Say plainly if a previously valid program stops compiling, and whether that is the point.
+    validations:
+      required: true

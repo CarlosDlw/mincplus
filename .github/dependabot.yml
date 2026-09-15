@@ -1,0 +1,30 @@
+# Two ecosystems have dependencies, and no more: the documentation site's npm
+# tree, and the actions the CI workflow uses. The compiler itself has none
+# beyond LLVM, and GTest is pinned by the build -- so there is nothing here for
+# C++, and a pull request that adds a dependency to the compiler is a design
+# decision rather than a bump.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request for the whole Docusaurus set: they are released
+      # together and a site that mixes versions is not a site anybody tested.
+      docusaurus:
+        patterns:
+          - "@docusaurus/*"
+      # And one for everything else, so a minor bump does not arrive as a queue.
+      site:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@docusaurus/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

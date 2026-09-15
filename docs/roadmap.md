@@ -5,6 +5,19 @@ what `.mx` will actually have — lives in the [README](../README.md#language-fe
 
 Legend: `[x]` done · `[ ]` planned · `[?]` open decision that changes scope.
 
+## Where this stands
+
+Every stage of the pipeline exists and runs: § 0–§ 7 and § 9 are implemented, and
+the unchecked items inside them are the ones that wait on the **language
+surface** rather than on the pipeline — aggregates, casts, `sizeof`, the C
+declarator grammar, `switch`. § 8 (C interoperability) is the one stage
+deliberately not started: it needs the C type model on this side of the boundary,
+which is what the remaining items in § 3 and § 5 produce. § 10–§ 13 are the work
+after that.
+
+The order below is still the order. A stage is added where the pipeline puts it,
+not appended to the end of this file.
+
 Design targets: a compiler that runs on Linux, macOS, and Windows (Clang, GCC,
 MSVC); an LLVM-based backend kept isolated so the front end never depends on
 it; and targets named by **LLVM triple**, so *what* the compiler emits for is a
@@ -20,7 +33,7 @@ than appended to the end of this file. `lower`, `validate` and `resolve` are
 their own stages because name resolution must *finish* before a body can be
 type-checked, which is what section 4 is about.
 
-## 0. Foundation (current)
+## 0. Foundation
 
 - [x] `support/` — spans, lines, UTF-8 (decoding, validation, BOM), sources,
       diagnostics, arena, interning, `Expected`
@@ -707,12 +720,19 @@ the two cannot disagree about what the pipeline means.
 
 ## 13. Release and maintenance
 
-- [ ] Versioning policy and `CHANGELOG.md`
+- [x] Versioning policy and `CHANGELOG.md`: SemVer, with the `0.x` allowance for
+      an incompatible change documented on both sides; the version is
+      single-sourced in `CMakeLists.txt` and printed by `mincc --version`; the
+      changelog is in [Keep a Changelog](https://keepachangelog.com) form
 - [ ] Packaging: install layout, `mincc` on `PATH`, tarballs/installers
 - [ ] Reproducible builds
-- [ ] `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md`
+- [x] `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`,
+      `CODE_OF_CONDUCT.md`, the issue and pull-request templates, and Dependabot
+      for the two ecosystems that have dependencies
 - [ ] Release automation: tag → CI artifacts
-- [ ] Docs: language reference, CLI reference, C-interop guide
+- [x] Docs: the language reference as a site (`website/`, built by `make docs`
+      and checked by a CI job), whose `tools/cli` page is the CLI reference. The
+      **C-interop guide** is § 8's and arrives with the C type model
 
 ## Definition of done
 

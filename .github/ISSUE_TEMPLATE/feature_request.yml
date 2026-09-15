@@ -1,0 +1,50 @@
+name: Feature request
+description: Something the compiler should do that it does not — a flag, a diagnostic, a tool, a build or documentation improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template is for the **compiler and its tools**. If you are proposing
+        a change to the *language* — new syntax, a new type, a semantic rule —
+        use the **Language proposal** template instead: the language has a
+        written checklist of what is decided, and a proposal is the thing that
+        changes it.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The situation you are in, not the solution yet. A concrete example is worth more than a description of one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should happen instead?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the project?
+      options:
+        - The command line (`mincc`)
+        - A diagnostic (message, caret, code)
+        - The build, the presets, or the gates
+        - The documentation (the site in `website/`, or `docs/`)
+        - Performance
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What else did you consider?
+      description: Including "do nothing" and why that is not enough.
+    validations:
+      required: false

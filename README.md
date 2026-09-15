@@ -1,10 +1,64 @@
 # minc+
 
-Minimal C with extras and full C interoperability.
+[![ci](https://github.com/mincplus/mincplus/actions/workflows/ci.yml/badge.svg)](https://github.com/mincplus/mincplus/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![platforms: Linux | macOS | Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue.svg)
+![standard: C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
+![backend: LLVM](https://img.shields.io/badge/backend-LLVM-blue.svg)
+
+**Minimal C with extras and full C interoperability.**
+
+minc+ is a small systems programming language and the compiler that implements
+it. C is the baseline, not a stripped-down imitation of it: a translation unit,
+functions, raw pointers, `extern` declarations and a purely textual preprocessor
+look deliberate, because a C programmer is the reader it is written for. What it
+changes is the small set of things C leaves to the programmer's memory or to the
+optimizer's imagination — explicit types, explicit memory, specified evaluation
+order, arithmetic that wraps instead of surprising, and a closed list of the
+assumptions the compiler may hand to the backend.
 
 The **language reference** — what a `.mx` file means, and what `mincc` does — is
 the documentation site in `website/` (`make docs` to build it). The compiler's own
 design records are in `docs/`, next to the code they describe.
+
+## Quick start
+
+```sh
+git clone <repository> && cd mincplus
+cmake --preset dev && cmake --build --preset dev
+```
+
+```sh
+$ cat > hello.mx <<'EOF'
+fn i32 main()
+{
+  return 42;
+}
+EOF
+$ ./build/dev/src/driver/mincc run hello.mx
+$ echo $?
+42
+```
+
+`mincc check hello.mx` prints nothing and exits 0 when a file is correct, which
+is what makes it usable in a script. Every command is documented in
+[`website/docs/tools/cli.md`](website/docs/tools/cli.md).
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Platforms](#platforms)
+- [Status](#status)
+- [Language features](#language-features)
+- [Documentation](#documentation)
+- [Layout](#layout)
+- [Build](#build)
+- [Checks](#checks)
+- [Conventions](#conventions)
+- [Cross-platform notes](#cross-platform-notes)
+- [Getting help](#getting-help)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Platforms
 
@@ -29,7 +83,10 @@ identically on every platform; the concrete guarantees are in
 
 ## Status
 
-Scaffold v0.4: the `src/support` foundation, the lexer (`src/lex`), the
+**v0.1.0 — pre-release. The pipeline is complete end to end; what is missing is
+language surface.**
+
+The `src/support` foundation, the lexer (`src/lex`), the
 preprocessor (`src/pp`), the parser and syntax tree (`src/parse`, `src/syntax`),
 the lowered AST and the type checker (`src/ast`, `src/resolve`, `src/sema`), the
 LLVM lowering (`src/ir`), the LLVM backend (`src/backend/llvm`), and the `mincc`
@@ -621,6 +678,36 @@ which is where the algorithm that depends on them lives.
 - [ ] Doc comments feeding generated documentation
 - [ ] Deprecation and stability attributes
 
+## Documentation
+
+Three kinds of writing live in this repository, and each has one reader:
+
+| Where | What | Who reads it |
+| --- | --- | --- |
+| `website/` | The **language reference**: what a `.mx` file means, and what each tool does. Built with `make docs`. | Someone writing a program |
+| `README.md` | What the project is, what exists today, and how to build it. The language-feature checklist below is the authoritative list of what is *decided*, *planned* and *open*. | Someone deciding whether to use it |
+| `docs/` | The **design records**: why each stage is shaped the way it is, what the alternatives were, what the market does. `docs/architecture.md` is the map — the module graph, the pipeline, where the platform branch is. | Someone changing the compiler |
+
+The split is deliberate: a design record is read while reading the code and goes
+stale with it, while a reference has to be true of the *language*, not of this
+week's implementation. Anything unimplemented is marked as such on the site, on
+the page that would otherwise describe it.
+
+The per-stage records, if you are about to change something:
+
+[`lexer.md`](docs/architectures/lexer.md) ·
+[`preprocessor.md`](docs/architectures/preprocessor.md) ·
+[`parser.md`](docs/architectures/parser.md) ·
+[`resolve.md`](docs/architectures/resolve.md) ·
+[`sema.md`](docs/architectures/sema.md) ·
+[`memory.md`](docs/architectures/memory.md) ·
+[`never.md`](docs/architectures/never.md) ·
+[`ir.md`](docs/architectures/ir.md) ·
+[`codegen.md`](docs/architectures/codegen.md) ·
+[`cli.md`](docs/architectures/cli.md) ·
+[`builtins.md`](docs/architectures/builtins.md) ·
+[`extern.md`](docs/architectures/extern.md)
+
 ## Layout
 
 - `src/support/` — spans, sources, diagnostics, arena, expected, interning.
@@ -799,11 +886,18 @@ their research references -- are in
 
 ## Build
 
-Requires CMake 3.28+, Ninja, a C++20 compiler (Clang, GCC, or MSVC), and
-GTest. GTest is found through the CMake package config, then `pkg-config`,
-then a pinned `FetchContent` download; pass `-DMINC_FETCH_GTEST=OFF` to forbid
-the download. ccache is used when present. The CMake presets are the source of
-truth for every flag; the `Makefile` is a shortcut over them and nothing else.
+Requires CMake 3.28+, Ninja, a C++20 compiler (Clang, GCC, or MSVC), the **LLVM
+development files** (the IR and the backend are LLVM's), and GTest. GTest is
+found through the CMake package config, then `pkg-config`, then a pinned
+`FetchContent` download; pass `-DMINC_FETCH_GTEST=OFF` to forbid the download.
+ccache is used when present. The CMake presets are the source of truth for every
+flag; the `Makefile` is a shortcut over them and nothing else.
+
+LLVM's *build configuration* is part of its ABI, so a mismatch is a problem the
+configure step reports rather than a link that half-works: this compiler is built
+with RTTI on, exceptions off, and `LLVM_ENABLE_ASSERTIONS` off (which is what
+`LLVM_ENABLE_ABI_BREAKING_CHECKS` follows). A distribution LLVM — `llvm-dev`,
+Homebrew's `llvm`, the official Windows installer — has that configuration.
 
 ```sh
 cmake --preset dev      # dev (Debug) | release | ci | sanitize
@@ -903,3 +997,35 @@ These are contracts, not aspirations — the test suite enforces the first three
   plain text instead of escape soup.
 - **Standard input.** `mincc lex -` and `mincc parse -` read stdin in binary
   mode on Windows, so a piped file is byte-identical to opening it.
+
+## Getting help
+
+Ask in [Discussions](https://github.com/mincplus/mincplus/discussions), or open
+an issue using the template that matches — the forms ask for the two things that
+make a compiler bug quick to fix: the smallest file that shows it, and the exact
+command. Anything about a build or a wrong answer should start with the output of
+`mincc -vV`, which is the version, the host, the default target and the LLVM
+version in one block.
+
+[`SUPPORT.md`](SUPPORT.md) says which question goes where, and where the answer
+probably already is.
+
+## Contributing
+
+Contributions are welcome, and the ones that help most are not always code: a bug
+report that reproduces, an example in `examples/`, a diagnostic that could say
+something clearer. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the setup, the gates,
+the house rules, and the order to do things in when the change is a language
+feature.
+
+Every participant is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+MIT. See [`LICENSE`](LICENSE). Contributions are accepted under the same terms;
+there is no CLA.
+
+Security bugs are handled privately — see [`SECURITY.md`](SECURITY.md), which
+includes what counts as a security bug in a compiler (wrong code first, crashes
+second).

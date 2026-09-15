@@ -1,0 +1,102 @@
+name: Bug report
+description: The compiler crashed, refused something it should accept, or produced a program that behaves differently from what the language says.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The two things that make a compiler bug quick to
+        fix are **the smallest file that shows it** and **the exact command**.
+        If you think the bug is exploitable — a crash on a malformed input, a
+        module LLVM's verifier rejects, wrong code from a program a user did not
+        write — please use
+        [private reporting](https://github.com/mincplus/mincplus/security/advisories/new)
+        instead.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of bug is it?
+      options:
+        - A crash, a hang, or a sanitizer finding in `mincc` itself
+        - Wrong code — it compiles, but the program does not do what the language says
+        - A valid program is refused (error where there should be none)
+        - An invalid program is accepted (no error where there should be one)
+        - A diagnostic is wrong, misleading, or points at the wrong place
+        - A build, link, or toolchain problem
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happens, and what did you expect instead?
+      description: If it is a wrong-code bug, what did the program print, and what should it have printed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: The smallest `.mx` file that shows it
+      description: As small as you can make it — a file that fits on one screen is usually the whole bug.
+      render: minc
+      placeholder: |
+        fn i32 main()
+        {
+          return 0;
+        }
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: The command
+      placeholder: mincc check repro.mx
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: The output
+      description: Paste it as it appeared. `--color=never` keeps the escapes out of a paste.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: "`mincc -vV`"
+      description: The version, the binary, the host, the default target and the LLVM version, in one block.
+      render: text
+      placeholder: |
+        mincc 0.1.0
+        binary:         mincc
+        host:           x86_64-unknown-linux-gnu
+        default target: x86_64-unknown-linux-gnu
+        LLVM:           22.1.8
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Where you built it, and with what
+      description: OS and compiler, if it is not already obvious from the host triple. Say so if the bug only happens on one platform.
+      placeholder: Windows 11, MSVC 19.4x — or Ubuntu 24.04, GCC 14, built with `--preset ci`
+    validations:
+      required: false
+
+  - type: textarea
+    id: ir
+    attributes:
+      label: The IR, if the bug is about generated code
+      description: "`mincc ir repro.mx` output. It is the fastest way to see which instruction is wrong."
+      render: llvm
+    validations:
+      required: false
