@@ -31,12 +31,19 @@ const config: Config = {
     hooks: {
       onBrokenMarkdownLinks: 'throw',
     },
+    mermaid: true,
   },
 
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],
   },
+
+  // Client modules run on every page load. The Prism registration adds
+  // minc+ syntax highlighting to every ` ```minc ` code block on the site.
+  clientModules: [
+    './src/client/modules/prism.ts',
+  ],
 
   presets: [
     [
@@ -45,6 +52,9 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
+          // "Edit this page" on every doc page, linking to the source file on
+          // GitHub so a reader can propose a fix without leaving the page.
+          editUrl: 'https://github.com/CarlosDlw/mincplus/edit/main/website/',
         },
         // No blog: an announcement that goes stale is worse than no
         // announcement, and the release notes belong with the release.
@@ -55,6 +65,24 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
+
+  // Local offline search. No external service, no API key.
+  // The index is built at build time and served as a static JSON blob.
+  plugins: [
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        indexDocs: true,
+        indexBlog: false,
+        indexPages: false,
+        language: 'en',
+      },
+    ],
+  ],
+
+  // Mermaid diagrams: architecture, pipeline, data flow. Disabled by default
+  // (themeClassNames), user toggled via the navbar button.
+  themes: ['@docusaurus/theme-mermaid'],
 
   themeConfig: {
     colorMode: {
@@ -72,6 +100,12 @@ const config: Config = {
           sidebarId: 'languageSidebar',
           position: 'left',
           label: 'Documentation',
+        },
+        // The GitHub link on the right side of the navbar.
+        {
+          href: 'https://github.com/CarlosDlw/mincplus',
+          label: 'GitHub',
+          position: 'right',
         },
       ],
     },
@@ -93,12 +127,32 @@ const config: Config = {
             {label: 'Diagnostics', to: '/tools/diagnostics'},
           ],
         },
+        {
+          title: 'Community',
+          items: [
+            {label: 'GitHub', href: 'https://github.com/CarlosDlw/mincplus'},
+            {label: 'Discussions', href: 'https://github.com/CarlosDlw/mincplus/discussions'},
+          ],
+        },
       ],
       copyright: `Copyright © ${new Date().getFullYear()} minc+ contributors. Licensed under the MIT License.`,
     },
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
+      // Custom language for minc+ syntax highlighting.
+      additionalLanguages: [],
+      magicComments: [
+        {
+          className: 'code-block-highlight-line',
+          line: 'highlight-next-line',
+        },
+      ],
+    },
+
+    // Mermaid configuration: dark theme matches the site's dark mode.
+    mermaid: {
+      theme: {light: 'neutral', dark: 'dark'},
     },
   } satisfies Preset.ThemeConfig,
 };
