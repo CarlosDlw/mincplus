@@ -281,5 +281,6 @@ are not there at all:
 - `#include` of C headers — `#include` itself works, on `.mx` headers
 - the standard library, the checked build, and its runtime guards
 
-The `README.md` in the repository carries the authoritative checklist, marked
-*decided* / *planned* / *open*, and `docs/roadmap.md` tracks what is next.
+The [feature checklist](/language/features) carries the authoritative list,
+marked *decided* / *planned* / *open*, and `docs/roadmap.md` tracks what is
+next.

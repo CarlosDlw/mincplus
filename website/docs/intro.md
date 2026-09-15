@@ -64,6 +64,8 @@ $ echo $?
 - **[A tour of the language](/getting-started/tour)** — the whole surface in one
   page.
 - **[Types](/language/types)** — the reference proper starts here.
+- **[Feature checklist](/language/features)** — what is decided, what is
+  planned, and what is still an open question, in one page.
 
 ## What is not here
 

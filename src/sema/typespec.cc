@@ -62,7 +62,8 @@ constexpr std::string_view kCSpecifiers[] = {"signed", "unsigned", "short", "lon
 // than folded into the state machine below, because `uint` is not "unsigned
 // applied to something" -- it is another way to write `unsigned int`, and the
 // only difference a reader should ever see is the spelling they typed. Kept to
-// exactly what `README.md` promises: the combined `uint`, and the compiler's
+// exactly what the feature checklist promises: the combined `uint`, and the
+// compiler's
 // `__int128` extension, which needs two words on the unsigned side.
 struct Alias {
   std::string_view words[2];

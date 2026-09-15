@@ -761,8 +761,9 @@ by the command that proves the stage.
 ## Decisions
 
 The ones this stage had to make, each with the reason and the cost of the other
-answer. They are recorded in the `README.md` checklist (section *Types* and
-*Scopes and names*), which is the user-facing copy.
+answer. They are recorded in the language feature checklist
+(`website/docs/language/features.md`, sections *Types* and *Scopes and names*),
+which is the user-facing copy.
 
 | # | Question | Decision | If the other way |
 | --- | --- | --- | --- |

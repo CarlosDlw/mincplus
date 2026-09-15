@@ -36,10 +36,10 @@ are usually most useful:
 - **A compiler change.** New syntax, a new check, a new lowering, a performance
   problem. Start with an issue if the design is not already decided.
 
-Read `README.md` first — it says what exists today and, in the language-feature
-checklist, what is *decided*, what is *planned* and what is still *open*. A pull
-request for a feature marked `[?]` (open) will be sent back to that decision
-before it is reviewed as code.
+Read `README.md` first for what exists today, and the
+[feature checklist](website/docs/language/features.md) for what is *decided*,
+what is *planned* and what is still *open*. A pull request for a feature marked
+`[?]` (open) will be sent back to that decision before it is reviewed as code.
 
 ## Getting set up
 
@@ -80,22 +80,31 @@ all of them:
 gate that fails is the one that failed. The `docs` and `examples` targets are not
 part of it: one needs Node, the other builds the compiler.
 
-Two notes that save time and are not obvious:
+Three notes that save time and are not obvious:
 
+- **ccache is the difference between ~106 s and ~4 s** for the same clean build.
+  `make ccache` reports the hit rate; `make ccache-tune` raises the limit
+  (`CCACHE_SIZE=20G make ccache-tune`), because the 5 GiB default is small for
+  four presets — entries get evicted and paid for twice.
 - **`dev` and `ci` do not share a cache.** They differ only by `-Werror`, which
   ccache keys on, so iterating in `dev` and running `make gates` before a commit
   costs one build of each. Running `make dev` *and* `make ci` pays twice.
 - **clang-tidy is the slowest gate** (minutes, not seconds). `make tidy` uses
-  `run-clang-tidy -j` when it is installed.
+  `run-clang-tidy -j` when it is installed — same checks, same
+  `--warnings-as-errors`, same non-zero exit on a finding — which is ~6m20s
+  against ~1m50s on the reference machine.
 
 ## House rules
 
-The full list is in [`README.md#conventions`](README.md#conventions). The ones
-that decide most reviews:
+These are conventions and not preferences, and they decide most reviews:
 
-- **English**, everywhere: code, comments, commit messages, docs.
+- **English**, everywhere: code, comments, commit messages, docs. Identifiers
+  are meaningful English words.
 - **No god-files.** One responsibility per file, split before a file grows past a
   few hundred lines. If a change makes a file do two things, it is two files.
+- **No exceptions in utility code.** A recoverable failure is an `Expected<T, E>`
+  (alias `Fallible<T>`); `Arena` reports exhaustion with `nullptr`.
+- **`[[nodiscard]]`** on anything whose result must be observed.
 - **A rule that two stages need lives in the stage that owns the fact**, not in
   each of them. A rule copied into two modules is two answers waiting to differ.
 - **Errors are values.** With the one exception of the driver, a stage library
@@ -112,11 +121,11 @@ that decide most reviews:
 
 The order matters, and it is the order that keeps the pipeline honest:
 
-1. **Decide what the feature means, in writing.** Add it to the language-feature
-   checklist in `README.md` with its status, and if it needs an argument — a
-   choice against what the market does, a rule with a consequence — write a
-   record in `docs/architectures/`. A feature whose design is not written down is
-   not ready to be implemented.
+1. **Decide what the feature means, in writing.** Add it to the
+   [feature checklist](website/docs/language/features.md) with its status, and if
+   it needs an argument — a choice against what the market does, a rule with a
+   consequence — write a record in `docs/architectures/`. A feature whose design
+   is not written down is not ready to be implemented.
 2. **Say which stage owns each fact.** Every fact is computed once, in the stage
    with the information to compute it, and every stage below *reads* it: a
    conversion, a type width, an access obligation, a signature, which declaration
@@ -197,7 +206,8 @@ A pull request is ready when:
 - every new behaviour has a test, including the case that must *not* work;
 - the documentation is updated, including the site, and anything unimplemented is
   marked as such;
-- if the change affects the language, the `README.md` checklist is updated.
+- if the change affects the language, the
+  [feature checklist](website/docs/language/features.md) is updated.
 
 Reviewers look for: the fact belonging to the right stage, the rule existing
 once, the error being a value, the comment explaining why, and the test proving

@@ -6,8 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        The language has a written checklist in `README.md`, with every feature
-        marked **decided**, **planned** or **open**, and a design record in
+        The language has a written checklist on the documentation site, at
+        `website/docs/language/features.md`, with every feature marked
+        **decided**, **planned** or **open**, and a design record in
         `docs/architectures/` for each area. A proposal is the thing that changes
         that checklist, so please read the entry you are proposing to change
         first — and the record for the stage that would own it.
@@ -37,7 +38,7 @@ body:
     id: status
     attributes:
       label: What does the checklist say today?
-      description: The entry in `README.md` for this area, as it stands.
+      description: The entry on the checklist for this area, as it stands.
       options:
         - Planned — the design is fixed, only the implementation is missing
         - Open (`[?]`) — the design needs a decision, and this is it

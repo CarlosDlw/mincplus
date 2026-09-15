@@ -714,7 +714,8 @@ warnings inside them are dropped at the report step while errors are not.
   is the command that proves them.
 - **sema** (`src/sema`) is the first stage that consumes a tree where every
   name already denotes a declaration, so nothing in it searches a scope. Its
-  subject is types, filtered by the type checklist in `README.md`, plus the two
+  subject is types, filtered by the type checklist in
+  `website/docs/language/features.md`, plus the two
   flow questions this grammar answers exactly — reachability (`terminates`,
   which is why a missing `return` is reported here) and definite assignment
   (`src/sema/check_flow.cc`, which is why a read of a binding nobody assigned is

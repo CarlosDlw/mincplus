@@ -77,8 +77,8 @@ binary that does not match the sources.
   in the *program*, is documented as such, and does not become the compiler's
   vulnerability. See `docs/architectures/memory.md`.
 - **A feature that does not exist yet.** Arrays, aggregates, casts and the
-  standard library are marked as unimplemented in `README.md` and on the
-  documentation site; a program that needs one failing to compile is expected.
+  standard library are marked as unimplemented on the documentation site; a
+  program that needs one failing to compile is expected.
 - **A diagnostic that is unhelpful, or a missing warning.** Those are bugs, and
   ordinary issues are the right place for them.
 - **Anything that requires the attacker to already run code as the user.**

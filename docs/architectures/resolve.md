@@ -641,8 +641,9 @@ Exit codes follow the rest of the driver: `Failure` when there are errors,
 ## Decisions the language owns
 
 These are **semantics**, not implementation, so they belong to the language; they
-are recorded here *and* in the `README.md` language checklist (section *Scopes
-and names*), which is the user-facing copy. Each was open when this record was
+are recorded here *and* in the language feature checklist
+(`website/docs/language/features.md`, section *Scopes and names*), which is the
+user-facing copy. Each was open when this record was
 written and was decided in favour of the recommendation the algorithm above
 assumes, because that algorithm depends on it. The rejected answer is kept beside
 each one: it is the reason, and it is what a later reader needs in order to

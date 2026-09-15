@@ -36,7 +36,9 @@ LLVM:           22.1.8
 
 - **The language reference** — `website/` in this repository, `make docs` to build
   it. What a `.mx` file means, page by page, with anything unimplemented marked
-  as such.
+  as such. Its
+  [feature checklist](website/docs/language/features.md) is the authoritative
+  list of what is decided, planned and still open.
 - **`README.md`** — what the project is, what exists today, and how to build it.
 - **`docs/architecture.md`** and `docs/architectures/` — why the compiler is
   shaped the way it is. These are the records to read before changing a stage.

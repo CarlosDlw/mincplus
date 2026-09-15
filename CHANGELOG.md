@@ -100,9 +100,10 @@ jobs.
 The language is missing its *surface*, not its pipeline. Arrays, `struct`,
 `union`, `enum`, member access, casts, `sizeof`/`alignof`, `switch`, `do`/`while`,
 `goto`, file-scope bindings, `static`, `volatile`, defining a variadic function,
-and the standard library. `README.md` carries the authoritative checklist, marked
-*decided* / *planned* / *open*; the documentation site marks each unimplemented
-construct on the page that would describe it.
+and the standard library. The
+[feature checklist](website/docs/language/features.md) on the documentation site
+carries the authoritative list, marked *decided* / *planned* / *open*, and each
+unimplemented construct is marked on the page that would describe it.
 
 [Unreleased]: https://github.com/mincplus/mincplus/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/mincplus/mincplus/releases/tag/v0.1.0

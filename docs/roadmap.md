@@ -1,7 +1,8 @@
 # Implementation roadmap
 
 The build order for the compiler itself. The **language** feature checklist —
-what `.mx` will actually have — lives in the [README](../README.md#language-features).
+what `.mx` will actually have — lives on the documentation site, at
+[`website/docs/language/features.md`](../website/docs/language/features.md).
 
 Legend: `[x]` done · `[ ]` planned · `[?]` open decision that changes scope.
 
@@ -281,7 +282,7 @@ resolve) and lowers the AST to HIR before type checking; Roslyn runs
       is a diagnostic rather than a stack overflow
 - [x] Language decisions A–F recorded in
       [`architectures/resolve.md`](architectures/resolve.md#decisions-the-language-owns)
-      and in the [README language checklist](../README.md#scopes-and-names):
+      and in the [language feature checklist](../website/docs/language/features.md):
       order-independent file scope, the outer binding in a `let` initializer, no
       nested `fn`, shadowing allowed and warned under `-Wshadow`, `goto`/labels
       and visibility deferred with their name spaces reserved

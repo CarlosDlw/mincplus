@@ -1,0 +1,386 @@
+---
+title: Feature checklist
+---
+
+# Feature checklist
+
+What `.mx` is, and what it will be. This is the whole surface of the language in
+one place — the authoritative list of what is **decided**, what is **planned**,
+and what is still an **open** question. It is not the build order: the order the
+compiler is built in is `docs/roadmap.md` in the repository.
+
+Legend: `[x]` **decided** — the design is fixed · `[ ]` **planned** · `[?]`
+**open** — needs a decision.
+
+"Decided" is about the *design*, not about whether the compiler implements it
+yet. Implementation status is `docs/roadmap.md`; on this site, a page that
+describes something the compiler does not do yet says so in a **Not implemented
+yet** note.
+
+Start from the project's identity: a *minimal C* dialect — C is the baseline, not
+a stripped-down imitation of it — plus a small, documented set of extras, and
+full C interoperability in both directions.
+
+## Syntax and files
+
+- [x] `.mx` source files compiled by `mincc`
+- [x] `fn` function declaration form (`fn i32 main() { ... }`), as in
+      `examples/001_main_func.mx`
+- [x] `extern fn` declarations — a function defined elsewhere (another unit, a
+      library, the C runtime): `extern fn i32 puts(s: str);`, as in
+      `examples/010_extern.mx`
+- [x] Variadic declarations (`extern fn i32 printf(fmt: str, ...);`), with the
+      ABI's default argument promotions at the call site, as in
+      `examples/011_variadics.mx`; a *definition* may not be variadic
+      (`va_start` does not exist yet)
+- [x] Block statements and `return`
+- [x] `//` line comments
+- [x] `let` bindings are **mutable**, with a colon type annotation or
+      inference (`let x: i32 = 0;` / `let y = 10;`), as in
+      `examples/002_variables.mx`
+- [x] `const` bindings are **immutable** and have the same shape as `let`:
+      `const x: i32 = 0;` or `const y = 10;` — no separate `mut`/`var`
+- [ ] C-style function and declaration syntax alongside `fn`
+- [ ] Doc comments attached to declarations
+- [ ] Attributes/annotations on declarations `[?]`
+
+## Types
+
+Primitive names state their width instead of inheriting C's
+implementation-defined ones. Both this set and the C spellings below are
+first-class types; the examples use the primitive names. See
+[Types](/language/types).
+
+- [x] Signed integers: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`
+- [x] Unsigned integers: `u8`, `u16`, `u32`, `u64`, `u128`, `usize`
+- [x] Floats: `f32`, `f64`, `f80`
+- [x] `bool`
+- [x] `char` — a distinct 8-bit byte type represented as `u8`, always
+      unsigned (see *C-compatible type names*)
+- [x] `str` — NUL-terminated, C-like; a scalar type, not `char*` yet
+- [x] `void` — a return type and (later) `void*`; never a value type: no
+      object has it and no arithmetic is defined on it
+- [x] `!` — the bottom type, and a return type only: a function declared
+      `fn ! name(...)` never returns to its caller. A call to one *is* an
+      expression of type `!`, which converts into every other type, so it can be
+      an argument, an assigned value or the arm of a `?:`, and the code after it
+      is unreachable. The body is checked (a reachable `return`, or a body that
+      can reach its end, is an error) and the promise is never inferred. See
+      [The bottom type](/language/never)
+- [ ] Pointers — deliberately complete and C-level, see
+      [Pointers and raw memory](#pointers-and-raw-memory)
+- [ ] Fixed-size arrays
+- [ ] Slices (pointer + length) `[?]`
+- [ ] `struct`
+- [ ] `union`
+- [ ] `enum` constants and tagged unions `[?]`
+- [ ] Function types and function pointers
+- [ ] Type aliases
+- [x] `const` bindings (see *Syntax and files*); immutability is a binding
+      property, not a type qualifier yet
+- [ ] Optional/nullable types and null safety `[?]`
+- [ ] Tuples `[?]`
+- [ ] Generics / parametric types `[?]`
+
+`f80` is the x87 80-bit extended format. It is in the set because that is what
+C's `long double` is on System V AMD64, and it is the one type whose support is
+per target: a target without x87 has no LLVM type for it, so the IR refuses it by
+name (`ir-unsupported-type`, naming the type and the triple) instead of
+substituting a narrower one.
+
+### C-compatible type names
+
+The C spellings are a second, interchangeable way to name the same types, so
+`.mx` code can be written in C style and C headers map onto it cleanly.
+
+- [x] `int`, `uint`, `short`, `long`, `signed`, `unsigned`, `float`, `double`
+- [x] Multi-word forms: `long int`, `long long int`, `unsigned long long int`,
+      `short int`, `signed char`, `unsigned int`, ...
+- [x] Widths follow the **target ABI**, not a fixed table, so linking against C
+      behaves as the ABI requires
+- [x] Interchangeable with the primitive names in declarations
+- [ ] A portability lint (off by default) for ABI-dependent C spellings in code
+      built for more than one target
+
+Mapping on the current interop target (System V AMD64, LP64):
+
+| C spelling | `.mx` type | Note |
+| --- | --- | --- |
+| `char` | `char` (`u8`) | raw byte 0..255; signedness is not inherited |
+| `signed char` | `i8` | the signed byte escape hatch |
+| `unsigned char` | `u8` | |
+| `short` | `i16` | |
+| `int` | `i32` | |
+| `long`, `long long` | `i64` | both 64-bit on LP64 |
+| `unsigned int`, `unsigned long` | `u32`, `u64` | |
+| `float`, `double` | `f32`, `f64` | |
+| `long double` | `f80` | x87 extended, 80-bit |
+| `size_t` / `ssize_t`, `ptrdiff_t` | `usize` / `isize` | pointer-sized |
+| `__int128` / `unsigned __int128` | `i128` / `u128` | compiler extension in C |
+
+**`char` is unsigned — decided.** `.mx` `char` is a distinct 8-bit type whose
+representation is `u8`; it never inherits C's implementation-defined
+signedness (signed on x86-64, unsigned on ARM). The reason is that `str` is a
+NUL-terminated byte string and UTF-8 code units are 0..255, so sign-extending
+a byte is a bug generator rather than a feature. Consequences:
+
+- C `char` maps to `.mx` `char`: the value crossing the boundary is the raw
+  byte, so `str` indexing agrees with C bytes in both directions.
+- C `signed char` maps to `i8`. Code that depends on C's signed-`char`
+  behavior must say `i8` explicitly; the sign is never implicit.
+- `char` stays **distinct** from `i8`/`u8`, mirroring C, so `char*` and `u8*`
+  are not silently interchangeable and conversions between them are explicit.
+
+**`long`, `unsigned long`, and `long double` are ABI-dependent — accepted.**
+That is inherent to C's names, not a `.mx` quirk: `long` is 64-bit on LP64
+(System V AMD64) and 32-bit on LLP64 (Windows x64), and `long double` is
+80-bit on SysV but 64-bit under MSVC. The resolution is to keep the C
+spellings for C-facing declarations and to treat them as non-portable by
+definition; code that must compile unchanged for more than one target uses the
+fixed-width primitives (`i32`, `i64`, `isize`) instead. Note the contrast with
+`isize`/`usize`: they are pointer-sized too, but they are *named* for that
+intent, which is exactly what makes them portable where `long` is not.
+
+### Conversions and literal typing
+
+The design record is `docs/architectures/sema.md` (`#conversions`), and these are
+the language decisions it makes. They are *semantics*, so they are recorded here
+as well.
+
+- [x] A type is an **identity, not a spelling**: `i32`, `int` and `signed int`
+      are one type, so the C spellings are interchangeable rather than merely
+      accepted
+- [x] **Narrowing is implicit at assignment** (initializer, assignment,
+      argument, `return`), as in C — there are no casts yet, and a documented
+      example must compile. A `-Wconversion` lint is designed for, off by
+      default
+- [x] **Integer and float literals are context-typed**: `let x: u8 = 255;` is a
+      `u8` with no conversion, and `let x = 7;` / `let y = 1.5;` default to
+      `i32` / `f64`. A literal that does not fit the type its context gives it is
+      an **error**, not a silent truncation (unlike C)
+- [x] `char` literals are `char` and string literals are `str` — never `i32`
+      or a byte array
+- [x] Integer promotions follow C (smaller than `i32` widens to `i32`) and the
+      usual arithmetic conversions follow C17 6.3.1.8, with ranks by width
+- [x] **A condition must be `bool`** — an arithmetic value does not implicitly
+      convert (`x != 0` is the explicit form). C's "any scalar is a condition"
+      is rejected
+- [x] `bool` is **not arithmetic**: `!`, `&&`, `||`, `==`, `!=` are defined; a
+      promotion to `int` as in C is not
+- [x] `str` is **not arithmetic** and `==`/`!=` on it are **refused**, because
+      C's `s1 == s2` compares addresses — content comparison is a library call
+- [x] A `const` name is an lvalue but **not modifiable**; assigning to it or
+      applying `++`/`--` is an error
+- [x] A non-`void` function that can reach its end without returning a value is
+      an error, not C's undefined behavior with a warning
+- [x] `main`, when declared, must be `fn i32 main()`
+
+## Pointers and raw memory
+
+Pointer control is complete and unchecked by design. `minc+` has to express
+allocators, buffers, device registers, and anything else that sits on top of
+the C ABI, so raw pointers are a first-class language feature and not a
+hidden escape hatch.
+
+The rules underneath it — what an object is, what a pointer carries, what
+aliasing may be assumed, alignment, lifetime, and what counts as a violation
+rather than as undefined behavior — are decided in `docs/architectures/memory.md`
+in the repository, and **stage one of that model is implemented**: `*T`, `&x`,
+`*p`, `p[i]`, the stepping, the comparison, `null` and `*void`, with the
+per-access provenance record the checker publishes for the lowering to read.
+Everything below is what lands on top of that model. See
+[Pointers](/language/pointers) and [The memory model](/language/memory-model).
+
+**Pointer types**
+
+- [x] Pointers to any object type, at any depth (`**T`, `***T`)
+- [ ] Function pointers, including calling through them
+- [x] `void*` (untyped) as `*void`; pointers to incomplete/opaque types still to
+      come
+- [ ] Qualifiers on the pointee, if `const`/`volatile` land `[?]`
+- [x] Pointer syntax: `*T` in type position, a positional prefix constructor that
+      cannot collide with multiplication
+
+**Addressing and access**
+
+- [x] Address-of `&` and dereference `*`
+- [ ] Member access through a pointer
+- [ ] Array-to-pointer decay, `&a[0]`
+- [x] Raw loads and stores through a pointer; type punning still to come
+
+**Arithmetic and comparison**
+
+- [x] `p + n`, `p - n`, `p1 - p2`, `++p` / `--p`, `p[i]`
+- [x] Element-based scaling by `sizeof(*p)`, not byte stepping
+- [x] Pointer comparison and ordering
+- [x] `isize` as the pointer-difference type
+
+**Conversions and casts**
+
+- [ ] Pointer to integer and integer to pointer, sized by `usize`/`isize`
+- [ ] Explicit reinterpret cast between pointer types
+- [ ] `void*` to and from any object pointer `[?]` (implicit, C style, or cast)
+- [ ] Function pointer to and from `void*` `[?]`
+- [ ] `str` to and from `char*`, plus byte views (`u8*`/`i8*`) over any object
+
+**Aliasing, alignment, and optimization**
+
+- [ ] Every object is byte-addressable; `u8*` and `char*` may alias anything
+- [ ] `restrict` / noalias annotation `[?]`
+- [ ] Volatile accesses for memory-mapped I/O `[?]`
+- [ ] Aligned vs unaligned access guarantees `[?]`
+- [x] The pointer provenance/aliasing rules the optimizer may assume — decided,
+      and published per access by the checker as `Object` or `Foreign`; the
+      module scan that enforces the closed list lands with the lowering
+
+**Safety model**
+
+- [x] Raw pointers are unchecked and need no keyword — no borrow checker, but
+      every access carries a written obligation (an access is **defined** where
+      it stays inside the object; it is the obligation that is the programmer's)
+- [ ] Null dereference: a checked-build trap rather than undefined behavior
+- [ ] Optional non-null pointer type `[?]`
+- [x] Bounds are the programmer's responsibility: `*T` carries no length
+
+## Declarations and modules
+
+- [x] Top-level functions, including `main`
+- [x] Function parameters, written `name: type` — the same shape as `let`, and
+      only that: the C order `type name` is rejected rather than guessed at
+- [ ] Global variables, constants
+- [ ] `extern` declarations bound to C symbols
+- [ ] Visibility (`pub` / `private`) and namespaces
+- [ ] Module system and imports `[?]`
+- [ ] Variadic functions, including calling C variadics
+- [ ] Default arguments or named arguments `[?]`
+
+## Scopes and names
+
+How a name is tied to the declaration it means. These are *semantic* decisions,
+so they are recorded here as well as in `docs/architectures/resolve.md`
+(`#decisions-the-language-owns`), which is where the algorithm that depends on
+them lives.
+
+- [x] A file-scope name is visible **independently of order** (as in Go's
+      package block, not C's point of declaration): a call may name a function
+      defined further down, and mutual recursion needs no prototype
+- [x] A `let`/`const` initializer sees the **outer** binding, not the one being
+      declared (`let x = x + 1;` shadows; `let x = x;` is the outer `x`, never
+      the uninitialized new one)
+- [x] Scopes are lexical and block-based; a block is a scope, and a function's
+      parameters form one with its body's outermost block
+- [x] Declaration-before-use is **not** required within a scope's *body*, but a
+      `let` is in scope from the statement after it, as in C
+- [x] `fn` **cannot** be declared inside a `fn` — the grammar has no nesting
+- [x] Shadowing is **allowed**; diagnosed only under `-Wshadow`
+- [x] Unused declarations are diagnosed under `-Wunused`
+- [ ] `goto` and labels — the `Label` name space is reserved, the feature is
+      not
+- [ ] Visibility (`pub`/`private`) filters lookup rather than nesting scopes
+
+## Statements and control flow
+
+See [Statements](/language/statements).
+
+- [x] Blocks and `return`
+- [x] `if` / `else` / `else if` — the condition takes no parentheses (and accepts
+      them), and each arm is a block
+- [x] `while`, and C-style `for` (`for init; cond; step`), parentheses optional
+- [ ] `do`/`while`
+- [ ] Range/`for`-in iteration `[?]`
+- [ ] C `switch` and/or pattern `match` `[?]`
+- [x] `break` / `continue`
+- [ ] Labels on `break` / `continue` `[?]`
+- [ ] `goto` and labels (C compatibility)
+- [ ] `defer` `[?]`
+- [ ] Assertions and checked runtime conditions
+
+## Expressions and operators
+
+See [Expressions](/language/expressions) and the
+[operator table](/reference/operators).
+
+- [x] Arithmetic, bitwise, comparison, and logical operators with C precedence
+- [x] Short-circuit `&&` / `||` — parsed and typed (`bool` operands, `bool`
+      result); the short-circuit *evaluation* is the IR's
+- [x] **No undefined behaviour in integer arithmetic**: signed and unsigned
+      overflow wrap (two's complement), and the lowering must not emit `nsw`
+- [x] **Integer edges are diagnosed where they are constant and defined where
+      they are not**: a constant that does not fit its type, a division or
+      remainder by zero, `INT_MIN / -1`, and a shift count that is negative or
+      at or past the width are all errors at compile time and traps at runtime
+      (`INT_MIN % -1` is `0`) — never a value the optimizer may invent
+- [x] **Evaluation order is specified**: operands and argument lists evaluate
+      strictly left to right, and `&&`/`||`/`?:` evaluate only the side taken
+      (C leaves the order unspecified)
+- [x] Assignment and compound assignment, with the left side checked to be a
+      modifiable place
+- [x] Conditional expression `?:`, with both branches unified to one type
+- [ ] Casts
+- [ ] `sizeof`, `alignof`
+- [ ] Address-of and dereference (full set in *Pointers and raw memory*)
+- [ ] Member access and indexing
+- [ ] Slicing syntax `[?]`
+- [x] Literals: integers (bases, suffixes), floats, chars, strings — read by
+      one shared reader, so the type checker and the preprocessor cannot
+      disagree about what `0x10` or `0755` means
+- [ ] Escape sequences, raw and multiline strings `[?]`
+- [ ] String interpolation/formatting `[?]`
+
+## Memory and lifetime
+
+- [ ] Manual allocation interoperating with C (`malloc` / `free`)
+- [ ] Allocators/arenas exposed to the language `[?]`
+- [ ] Deterministic cleanup (`defer` or destructors) `[?]`
+- [ ] Move semantics `[?]`
+- [ ] Ownership/borrow checking `[?]`
+
+## Error handling
+
+- [ ] C-style error codes and `errno`
+- [ ] `Option` / `Result` types `[?]`
+- [ ] Error propagation (`?` / `try`) `[?]`
+- [ ] Panics vs. recoverable errors `[?]`
+
+## C interoperability (language surface)
+
+- [x] C calling convention and ABI — taken from the target's **triple** and
+      provided by the LLVM backend rather than written here, so adding a target
+      does not add an ABI implementation
+- [ ] Calling C functions from `.mx`
+- [ ] Exporting `.mx` symbols that C can call
+- [ ] Struct layout compatibility, passing and returning aggregates by value
+- [ ] Function pointers interoperating with C callbacks
+- [ ] `char*` / `void*` / C string interop
+- [ ] Opaque C types and forward declarations
+- [ ] Importing C headers `[?]`
+- [ ] Declaring links to libraries from source `[?]`
+- [ ] Variadic C functions
+- [ ] Bitfields `[?]`
+
+## Standard library surface
+
+- [ ] Core types: string, slice, optional/result
+- [ ] I/O (print, files)
+- [ ] Collections (list, map)
+- [ ] Math and string utilities
+- [ ] Formatting
+
+## Safety
+
+- [ ] Bounds-checked indexing, with an opt-out `[?]`
+- [x] **Definite assignment**: a `let` with no initializer holds no value until
+      an assignment reaches the read on *every* path, and reading it is
+      `sema-use-before-assignment` — an error, as in Java, C# and Swift, not C's
+      warning-if-you-are-lucky; the accepted side of the rule, including the
+      `while true` plus `break` idiom, is
+      `examples/008_definite_assignment.mx`
+- [ ] Overflow checks in debug builds `[?]`
+- [ ] Null safety `[?]`
+- [ ] Type safety at C-interop boundaries `[?]`
+
+## Tooling exposed in the language
+
+- [ ] In-language tests (`test` blocks) `[?]`
+- [ ] Doc comments feeding generated documentation
+- [ ] Deprecation and stability attributes

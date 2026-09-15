@@ -89,9 +89,9 @@ can say "no undefined behavior the programmer cannot see" and mean it.
 
 The order that keeps the pipeline honest:
 
-1. **Write down what the feature means**, in the language-feature checklist in
-   `README.md` (decided / planned / open) and, when it needs an argument, in a
-   design record.
+1. **Write down what the feature means**, in the
+   [feature checklist](/language/features) (decided / planned / open) and, when
+   it needs an argument, in a design record.
 2. **Decide which stage owns each fact** the feature needs. A fact belongs to the
    stage with the information to compute it, and every stage below reads it.
 3. **Grammar first, then types, then lowering** — a change that starts in the IR

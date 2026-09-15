@@ -31,6 +31,7 @@ const sidebars: SidebarsConfig = {
         'language/never',
         'language/memory-model',
         'language/preprocessor',
+        'language/features',
       ],
     },
     {

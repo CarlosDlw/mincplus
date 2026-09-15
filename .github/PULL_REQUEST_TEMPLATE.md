@@ -27,8 +27,9 @@ before and after.
       offset that must not be accepted
 - [ ] An example in `examples/` if the change is visible to a `.mx` file
 - [ ] The documentation is updated — the site in `website/` for the language,
-      `docs/` for the design, and `README.md`'s checklist if a feature's status
-      changed
+      `docs/` for the design, and the
+      [feature checklist](../website/docs/language/features.md) if a feature's
+      status changed
 - [ ] Nothing unimplemented is described as if it worked, anywhere
 
 ## Notes for the reviewer
