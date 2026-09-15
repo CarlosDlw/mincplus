@@ -362,6 +362,20 @@ which also records the reversal.
       are done (`i8`..`i128`, `u8`..`u128`, `f32`/`f64`/`f80`, `bool`, `char`,
       `str`, `void`, `int`/`long`/`long long int`/… per target ABI, with `char`
       fixed unsigned rather than inheriting C's sign)
+- [x] Fixed-size arrays **designed**: `[N]T` with the count in the type, no
+      decay (ever), value semantics, no VLA and no zero-length or flexible
+      arrays, the context-typed `[...]` and the complete `T{...}` as the two
+      literal forms with `[_]` as the only count inference (outermost), the
+      element's *complete* size and alignment as the layout rule,
+      `a[i]` as an access with a statically known extent (a constant index out of
+      range is a diagnostic, not a trap), the stack-object limit, and C's array
+      parameter mapped to `*T` at the boundary —
+      ([`architectures/arrays.md`](architectures/arrays.md)); `[]T` is reserved
+      for slices and parses with a sentence
+- [ ] Fixed-size arrays **implemented**: the type and its interning, the syntax
+      run, the two literal forms, the element/index rules, the layout, and the
+      `ir` mapping — the work list is the per-module table in
+      [`architectures/arrays.md`](architectures/arrays.md)
 - [x] **Raw pointers** (stage one of
       [`architectures/memory.md`](architectures/memory.md)): `*T` at any depth,
       `&x` on a **modifiable** lvalue, `*p` and `p[i]` as places, element-scaled

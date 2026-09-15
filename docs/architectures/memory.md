@@ -472,6 +472,12 @@ accesses" rather than "valid"), and it is also the only rule that survives
   and this is recorded so nobody "optimizes" it later: `const x: i32 = 5;` and
   `let x: i32 = 5;` produce the same object, and only the name is protected.
 
+  For an aggregate the rule is about **places**, and it reaches one level
+  further: `TABLE[0] = 1` and `&TABLE[0]` are refused, exactly as `&c` is
+  (`arrays.md` decision 24), while the bytes stay unprotected — a pointer to the
+  same object can arrive from another unit, which is why the IR may still store
+  through one.
+
 ### Lifetime
 
 - A **stack object's** lifetime is its scope, except that taking its address and
@@ -636,7 +642,7 @@ pointer are marked.
 | Where | What it gains | Why here |
 | --- | --- | --- |
 | `include/sema/type.h` | **shipped:** `TypeKind::Pointer` has its body — a `pointee` `TypeId`. Qualifiers (`const`, `volatile`) still arrive with the syntax that spells them | The kind was reserved from the start, so landing the surface was a *body* and not a `case` — and `ir.md`'s mapper now maps `Pointer` to `ptr` instead of refusing it by name |
-| `include/sema/type_store.h` | **shipped:** `pointerTo` interning, plus `sizeOf`/`alignOf` for a pointer | One place owns sizes and alignments; the pointer width already existed (it is what `str` used). Array layout arrives with arrays |
+| `include/sema/type_store.h` | **shipped:** `pointerTo` interning, plus `sizeOf`/`alignOf` for a pointer; array layout is decided (the element's **complete** size × the count, the element's alignment) and lands with the syntax | One place owns sizes and alignments; the pointer width already existed (it is what `str` used). The layout rule is [`arrays.md`](arrays.md) decision 6, because `p + 1` landing on the next element *is* a memory rule |
 | `src/sema/check_expr.cc` | **shipped:** `&`, `*`, `[]`, and the lvalue/modifiable-lvalue rules they extend | The lvalue machinery was already there (`const` assignment, `++`/`--`, parens) |
 | `src/sema/check_flow.cc` | **shipped:** the initialization half of the access rule, for objects whose address is taken | It was already the pass that owns "is this byte written" |
 | **`src/sema/access.cc`** (the record) | **shipped:** `TypedFile::accesses()` — an `AccessObligation` per dereference, with `accessAt(node)` | **The lowering may not re-derive an alignment or a provenance fact**, exactly as it may not re-derive a conversion. The shape, and the two fields deliberately narrower than this model, are in the section below |
@@ -664,10 +670,13 @@ So `sema` publishes, per access node:
 
 ```
 struct AccessObligation {
-  ast::AstId place;      // the `*p` or the `p[i]` the lowering is standing on
+  ast::AstId place;      // the `*p`, the `p[i]` or the `a[i]` the lowering stands on
   TypeId type;           // what is accessed, which is the size and the alignment
   AccessKind kind;       // ordinary | unaligned | volatile
   ProvenanceKind provenance; // object | foreign
+  // The count of the object the place is inside, when this stage can prove one;
+  // `0` is "not known", which is every `*p`. Added by `arrays.md` decision 26.
+  std::uint64_t extent = 0;
 };
 ```
 
@@ -753,7 +762,7 @@ The design's cost is a deliberate trade, and it is stated so it can be audited:
 
 Same standard as `ir.md`'s five rules: mechanical, not "be careful".
 
-1. **`TypeKind::Array` is still a refusing `case`** in `ir.md`'s type mapper (`ir-unsupported-type`), and `Pointer`, which used to be, is now a body — which is the mechanism working: the change was one `case`, the mapper is exhaustive with no `default:`, and a kind nobody handled is a build error rather than a silent gap.
+1. **`TypeKind::Array` is still a refusing `case`** in `ir.md`'s type mapper (`ir-unsupported-type`), and `Pointer`, which used to be, is now a body — which is the mechanism working: the change was one `case`, the mapper is exhaustive with no `default:`, and a kind nobody handled is a build error rather than a silent gap. What the array case will *say* is decided ([`arrays.md`](arrays.md), including the storage type of an array of `bool` and the aggregate ABI the boundary refuses).
 2. **A new producer of `Place` is a compile error** while the table in
    `values.h` is exhaustive with no `default:`.
 3. **A new access kind is a compile error** in `AccessKind`'s switch, and a
@@ -815,7 +824,7 @@ Same standard as `ir.md`'s five rules: mechanical, not "be careful".
 | 12 | **Globals are zero-initialized**; stack objects are not | It is the C ABI's `.bss`, and a language that left it unspecified would make every `extern` global ambiguous |
 | 13 | **The lowering never emits `undef` or `poison`**, and does not adopt LLVM's dead-stack-load exception | Reading unwritten bytes must be the same error in every build; the exception makes it pass-dependent |
 | 14 | **A pointer remains a valid value after its object dies**; the access does not | It is LLVM's rule, and it is what keeps comparison, arithmetic and tagging defined |
-| 15 | **`const` protects a name, not memory** | Inferring `readonly` from it would make a `const` binding's object different from a `let`'s, which the ABI and the user both see |
+| 15 | **`const` protects a name, not memory** — and for an aggregate it protects every *place* reached through the name: an element store and an element's address are refused (`arrays.md` decision 24) | Inferring `readonly` from it would make a `const` binding's object different from a `let`'s, which the ABI and the user both see |
 | 16 | **Comparison ignores provenance**; ordering on two addresses is defined | Two addresses are two numbers; C's UB here is one of the refusals above |
 | 17 | **`volatile` is an access property, not a barrier**; `atomic` is a different feature | Getting this wrong is the most common memory-model bug in C-family code |
 | 18 | **Concurrency is reserved**, DRF + SC atomics, and a race is a detectable violation | The shape constrains the future design; the checked build is why a race is findable rather than theoretical |

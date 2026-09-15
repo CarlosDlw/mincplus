@@ -69,8 +69,12 @@ first-class types; the examples use the primitive names. See
       [The bottom type](/language/never)
 - [ ] Pointers — deliberately complete and C-level, see
       [Pointers and raw memory](#pointers-and-raw-memory)
-- [ ] Fixed-size arrays
-- [ ] Slices (pointer + length) `[?]`
+- [ ] Fixed-size arrays — `[N]T` with the count part of the type, no decay, and
+      two literal forms (`[1, 2, 3]` typed by its context, `[3]i32{1, 2, 3}`
+      complete); **designed**, with the record in `docs/architectures/arrays.md`
+- [ ] Slices (pointer + length) `[]T` — **reserved**: the spelling parses today and
+      is refused with a sentence, so no `.mx` file can mean something else by it in
+      the meantime (`docs/architectures/arrays.md` decision 17)
 - [ ] `struct`
 - [ ] `union`
 - [ ] `enum` constants and tagged unions `[?]`
@@ -211,7 +215,9 @@ Everything below is what lands on top of that model. See
 
 - [x] Address-of `&` and dereference `*`
 - [ ] Member access through a pointer
-- [ ] Array-to-pointer decay, `&a[0]`
+- [ ] Arrays and `&a[0]` — **decided: there is no implicit decay.** An array is
+      a value and a pointer is named (`&a[0]`, `&a`), so `sizeof` cannot lie
+      about a parameter and a bound can be checked
 - [x] Raw loads and stores through a pointer; type punning still to come
 
 **Arithmetic and comparison**

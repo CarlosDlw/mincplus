@@ -282,10 +282,15 @@ above, and four items long:
 
 ```
 struct AccessObligation {
-  ast::AstId place;          // the `*p` or the `p[i]` the lowering is standing on
+  ast::AstId place;          // the `*p`, the `p[i]` or the `a[i]` the lowering stands on
   TypeId type;               // what is accessed: its size and its alignment
   AccessKind kind;           // ordinary | unaligned | volatile
   ProvenanceKind provenance; // object | foreign
+  // The count of the object the place is inside, when `sema` could prove one;
+  // `0` is "not known", which is every `*p`. Arrives with `[N]T`
+  // (`arrays.md` decision 26), and it is the half of the checked build's
+  // extent guard that the module can answer on its own.
+  std::uint64_t extent = 0;
 };
 ```
 
@@ -1173,7 +1178,10 @@ other stages' artifacts are.
   is there.
 - **Aggregates and the C calling convention for them**, which belong to
   `src/cinterop` with their own record (§ *`str`, globals, and the ABI
-  question*). A *scalar* variadic call, on the other hand, is built here already:
+  question*). What an aggregate *is* — `[N]T`'s layout, its two literal forms, the
+  access obligation for `a[i]`, and the refusal of an array across the boundary
+  by value — is [`arrays.md`](arrays.md), which also says why that refusal is the
+  seam rather than a gap. A *scalar* variadic call, on the other hand, is built here already:
   the function type's marker becomes `FunctionType::get(..., isVarArg)`, the call
   site states the same type (`call i32 (ptr, ...) @printf(...)`), and the
   argument promotions arrive as ordinary recorded conversions — which is also
