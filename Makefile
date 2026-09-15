@@ -135,9 +135,9 @@ format-check:
 	@echo "format clean"
 
 # clang-tidy cannot consume a GNU compile database (GCC emits flags it does not
-# understand), so this configures a clang build of its own -- and does not build
-# it, which is why the target is cheap and why it can run before the sanitizer
-# job has finished.
+# understand), so this configures a clang build of its own -- which is quick,
+# because the analysis reads `compile_commands.json` and nothing here builds the
+# tree. That is also why it can run before the sanitizer job has finished.
 #
 # The analysis is the expensive half: the path-sensitive checks cost seconds per
 # file, and one clang-tidy invocation walks its files one at a time. That is
@@ -146,8 +146,17 @@ format-check:
 # non-zero exit on a finding -- so the only thing that changes is how long the
 # gate takes. It is a separate binary, so where it is missing the sequential
 # invocation is the fallback rather than a build error.
+# Tests are off in this configure, and that is not only about time. The analysis
+# is over `src/`, and the file filter below is `src/.*\.cc` -- unanchored, so it
+# matches any path with `/src/` in it. A test build puts a *downloaded*
+# googletest in the compile database at
+# `build/tidy/_deps/googletest-src/googletest/src/gtest-all.cc`, which is such a
+# path: the gate then analyzed GoogleTest, reported its identifiers against this
+# project's naming convention, and failed with 24,352 findings that nobody can
+# act on. Without tests there is no third-party source in the database, and the
+# filter means what it says.
 tidy:
-	$(CMAKE) --preset ci -DCMAKE_CXX_COMPILER=$(TIDY_CXX) -B build/tidy
+	$(CMAKE) --preset ci -DMINC_ENABLE_TESTS=OFF -DCMAKE_CXX_COMPILER=$(TIDY_CXX) -B build/tidy
 	@if command -v $(RUN_CLANG_TIDY) >/dev/null 2>&1; then \
 	  $(RUN_CLANG_TIDY) -clang-tidy-binary $(CLANG_TIDY) -p build/tidy -j $(JOBS) -quiet \
 	    -warnings-as-errors '*' 'src/.*\.cc'; \
