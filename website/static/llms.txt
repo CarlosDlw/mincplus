@@ -1,0 +1,36 @@
+# minc+
+
+> A systems programming language: C's shape, without C's surprises. Explicit types, explicit memory, specified evaluation order, and no undefined behaviour the programmer cannot see. LLVM backend, Linux/macOS/Windows.
+
+minc+ is a minimal C dialect with a small, documented set of extras and full C interoperability as a goal. A translation unit, functions, raw pointers, `extern` declarations and a purely textual preprocessor look deliberate, because a C programmer is the reader it is written for.
+
+## Getting started
+
+- [Installation](https://carlosdlw.github.io/mincplus/getting-started/install): build the compiler from source
+- [Hello, world](https://carlosdlw.github.io/mincplus/getting-started/hello-world): the pipeline, end to end
+- [A tour of the language](https://carlosdlw.github.io/mincplus/getting-started/tour): the whole surface in one page
+
+## The language
+
+- [Source files](https://carlosdlw.github.io/mincplus/language/source): encoding, line endings, file extension
+- [Types](https://carlosdlw.github.io/mincplus/language/types): i8-i128, u8-u128, f32/f64/f80, bool, char, str, void, !, pointers, C-compatible names
+- [Variables](https://carlosdlw.github.io/mincplus/language/variables): let (mutable), const (immutable), type annotation or inference
+- [Expressions](https://carlosdlw.github.io/mincplus/language/expressions): arithmetic, bitwise, comparison, logical, conditional, assignment
+- [Statements](https://carlosdlw.github.io/mincplus/language/statements): if/else, while, for, break/continue, blocks, return
+- [Functions](https://carlosdlw.github.io/mincplus/language/functions): fn, extern fn, variadic, parameters written name: type
+- [Pointers](https://carlosdlw.github.io/mincplus/language/pointers): raw, unchecked, C-level, with provenance per access
+- [Never type](https://carlosdlw.github.io/mincplus/language/never): fn ! f() — the bottom type, proved divergent
+- [Memory model](https://carlosdlw.github.io/mincplus/language/memory-model): object provenance, access obligations, checked builds
+- [Preprocessor](https://carlosdlw.github.io/mincplus/language/preprocessor): #define, #include, #if, macros, provenance that survives expansion
+- [Feature checklist](https://carlosdlw.github.io/mincplus/language/features): what is decided, planned, and open
+
+## Reference
+
+- [Grammar](https://carlosdlw.github.io/mincplus/reference/grammar): formal grammar
+- [Operators](https://carlosdlw.github.io/mincplus/reference/operators): precedence and associativity table
+
+## Tools
+
+- [CLI reference](https://carlosdlw.github.io/mincplus/tools/cli): mincc lex, pp, parse, resolve, check, ir, build, run
+- [Diagnostics](https://carlosdlw.github.io/mincplus/tools/diagnostics): error codes, carets, notes
+- [Architecture](https://carlosdlw.github.io/mincplus/tools/architecture): the pipeline, module graph, stage contracts
