@@ -170,6 +170,22 @@ void Lowering::lowerReturn(ast::AstId stmt) {
     builder_.CreateUnreachable();
     return;
   }
+  // An aggregate is returned by **writing the caller's object**: the destination
+  // arrived as the first argument, so the value is one store and the `ret` is
+  // `void` (`arrays.md` decision 13). Nothing is spilled into the callee's frame
+  // first, which is the point -- a `[1 << 20]i32` return moves through the
+  // caller's storage, not through a copy of it.
+  if (types_.isAggregate(currentReturn_)) {
+    if (sretPointer_ == nullptr) {
+      fatal(spanOf(stmt), IRDiagnosticCode::Internal,
+            "a function returning an aggregate has no destination to write");
+      builder_.CreateUnreachable();
+      return;
+    }
+    storePlace(Place{sretPointer_, currentReturn_}, value, ast::AstId{});
+    builder_.CreateRetVoid();
+    return;
+  }
   builder_.CreateRet(value.v);
 }
 

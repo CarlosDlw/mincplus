@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 #include "lex/token_stream.h"
 
@@ -45,6 +46,18 @@ public:
     if (index_ < significant_.size()) {
       ++index_;
     }
+  }
+
+  [[nodiscard]] std::string_view textOf(std::uint32_t n) const override {
+    const std::size_t index = index_ + static_cast<std::size_t>(n);
+    if (index >= significant_.size()) {
+      return {};
+    }
+    // From the token's own offset and length, and not from a span: a token's
+    // span is the *written* one (a macro body, a header), which is where a caret
+    // belongs and is not necessarily where these bytes are in this text.
+    const lex::Token& token = stream_->significantAt(index);
+    return stream_->text().substr(token.offset, token.length);
   }
 
   [[nodiscard]] support::Span spanOfCurrent() const override {

@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -203,10 +204,43 @@ private:
   // the conversion record follows: a rule recomputed a stage later is a second
   // copy of the rule, and the two copies are what disagree.
 
-  // The obligation belonging to a place that reaches memory through a pointer.
-  // `place` is the `*p` or the `p[i]` itself, so the binding between the record
-  // and the node the lowering stands on is the identity and not a search.
-  void recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance);
+  // The obligation belonging to a place that reaches memory through a pointer or
+  // through an array. `place` is the `*p`, the `p[i]` or the `a[i]` itself, so
+  // the binding between the record and the node the lowering stands on is the
+  // identity and not a search.
+  //
+  // `extent` is the count of the object the place is inside, or 0 for "not
+  // known" -- a `*p` and a subscript through a pointer have no number to give,
+  // and a subscript of a named array has the type's (`arrays.md` decision 26).
+  void recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance,
+                    std::uint64_t extent = 0);
+  // The provenance of an array subscript, which is not `provenanceOf`'s
+  // question: `provenanceOf` asks what allocation a *pointer value* came from,
+  // and an array is not a pointer value. This asks what allocation the *place*
+  // `a[i]` is inside, which is the object `a` names -- unless `a` is a
+  // parameter, whose storage came in from the caller (`arrays.md` decision 26).
+  [[nodiscard]] ProvenanceKind arrayProvenanceOf(ast::AstId base) const;
+
+  // --- the two questions about a place ----------------------------------------
+  //
+  // *Which declaration does this place belong to* and *which object does this
+  // store give a value* are different questions, and an array is where they stop
+  // being the same question (`arrays.md` decisions 23, 24).
+
+  // The declaration a **store** assigns. Sees through parentheses and stops at a
+  // name: storing into an element of an array does not assign the array.
+  [[nodiscard]] std::optional<resolve::DefId> defOfStoreTarget(ast::AstId expr) const;
+  // The declaration a **place** belongs to, for the rules that are about
+  // permission. `*p` is not a place of `p`'s and neither is `p[i]` -- but
+  // `a[i]` *is* a place of `a`'s when `a` is an array, because the element lives
+  // inside the object the binding names.
+  //
+  // Both are declared here rather than in one function with a flag because the
+  // call sites differ by question and not by convenience: `checkModifiable` and
+  // `checkAddressOf` want the wide answer (a `const` table's element is not
+  // writable), `markAssigned` wants the narrow one (an element store assigns
+  // nothing).
+  [[nodiscard]] std::optional<resolve::DefId> defOfPlace(ast::AstId expr) const;
 
   // Where the pointer an expression produces comes from, as far as this stage can
   // **prove**. `Object` only for the address of an object this unit named, moved
@@ -269,6 +303,26 @@ private:
   [[nodiscard]] TypeId checkDeref(ast::AstId expr, ExprInfo& info);
   // `a[i]`, which the language defines as `*(a + i)`.
   [[nodiscard]] TypeId checkIndex(ast::AstId expr, ExprInfo& info);
+  // `[...]` and `T{...}`. The list form has no type of its own until its context
+  // gives it one; the typed form carries its type and checks its elements against
+  // it, which is where the exact length and the fill rules live.
+  //
+  // `checkArrayLiteral` takes the context's type because that is where the list
+  // form's type comes from; the typed form carries its own.
+  [[nodiscard]] TypeId checkArrayLiteral(ast::AstId expr, TypeId expected, ExprInfo& info);
+  [[nodiscard]] TypeId checkTypedInitializer(ast::AstId expr, ExprInfo& info);
+  // Whether the `;` of a filled initializer is written, which is the one thing
+  // that tells a fill from a list.
+  [[nodiscard]] bool hasFillSeparator(ast::AstId expr) const;
+  // The one sentence for an initializer with nothing in it.
+  void errorEmptyInitializer(ast::AstId consumer);
+  // The rules every list of elements obeys, shared by both literal forms. The
+  // type is the *caller's* answer: for the list form it is the consumer's, and
+  // for the typed form it is the one the literal wrote (with `_` resolved from
+  // the element count before this runs).
+  [[nodiscard]] TypeId checkElements(ast::AstId consumer, std::span<const ast::AstId> elements,
+                                     std::uint8_t operandBase, bool isFill, TypeId arrayType,
+                                     ExprInfo& info);
   [[nodiscard]] TypeId checkBinary(ast::AstId expr, ExprInfo& info);
   // `++p` / `--p` / `p++` / `p--` on a *pointer*: one element step, which is
   // `p + 1` / `p - 1` with the same scaling and the same void rule. `nullopt`
@@ -481,9 +535,6 @@ private:
   [[nodiscard]] bool isConstDef(resolve::DefId id) const;
   // The declaration a `PathExpr` denotes, resolved by the stage below.
   [[nodiscard]] std::optional<resolve::DefId> defOfPath(ast::AstId pathExpr) const;
-  // The same, seen through parentheses -- the `const` question, which is asked
-  // about a *place* and not about a path.
-  [[nodiscard]] std::optional<resolve::DefId> defOfPlace(ast::AstId expr) const;
   // A name to put in a message about `expr`: its spelling when it is a path,
   // and a description otherwise, so no diagnostic says "this expression" about
   // something the reader can see is a name.

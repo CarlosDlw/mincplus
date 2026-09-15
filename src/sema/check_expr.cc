@@ -62,6 +62,18 @@ namespace {
   return types.get(type).kind == TypeKind::IntLiteral;
 }
 
+// Is a *constant* index inside `[0, count)`? The comparison is made in the
+// index's own signedness, which is the whole point of keeping the bits and the
+// signedness apart in `ConstInt`: `p[-1]` is below the range and `p[4294967295u]`
+// is above it, while the same 32 bits read the other way would be one of each.
+[[nodiscard]] bool indexInRange(support::ConstInt index, std::uint64_t count) {
+  if (index.isUnsigned) {
+    return index.bits < count;
+  }
+  const std::int64_t value = index.signedValue();
+  return value >= 0 && static_cast<std::uint64_t>(value) < count;
+}
+
 [[nodiscard]] bool isIntegerOnly(Tag kind) {
   switch (kind) {
   case kTokPercent:
@@ -176,6 +188,12 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
     break;
   case ast::NodeKind::CallExpr:
     type = checkCall(expr, info);
+    break;
+  case ast::NodeKind::ArrayLiteral:
+    type = checkArrayLiteral(expr, expected, info);
+    break;
+  case ast::NodeKind::TypedInitializer:
+    type = checkTypedInitializer(expr, info);
     break;
   default:
     // A reserved kind (`MacroCall`, `TokenTree`, `Attribute`) the grammar does
@@ -556,14 +574,51 @@ TypeId Checker::checkIndex(ast::AstId expr, ExprInfo& info) {
   if (types_.isError(baseType) || types_.isError(indexType)) {
     return kTypeError;
   }
+  // `a[i]` on an **array**: an element of an object whose count is in its type.
+  // This is the check C cannot make and this language can (`arrays.md` decision
+  // 7), and it is the same node as `p[i]` on purpose -- one subscript, two
+  // kinds of base, and neither decays into the other.
+  if (types_.isArray(baseType)) {
+    if (!isIntegerOperand(types_, indexType)) {
+      error(index, SemaErrorCode::IndexNotInteger,
+            "`[]` needs an integer index; `" + types_.spelling(indexType) + "` is not one");
+      return kTypeError;
+    }
+    // The index is materialised at the pointer index width, exactly as it is for
+    // `p[i]`: the `getelementptr` index has one width, and recording the
+    // conversion here keeps the sign extension out of the lowering.
+    (void)checkOperand(expr, 1, index, types_.signedInt(types_.target().pointerBits));
+
+    const TypeId element = types_.elementOf(baseType);
+    const std::uint64_t count = types_.countOf(baseType);
+    // A constant index outside the object is a diagnostic, not a trap, and it
+    // costs no analysis at all: the count is a number in the type and the index
+    // is a number in the literal.
+    const ExprInfo& indexInfo = out_.typed.infoOf(index);
+    if (indexInfo.hasIntValue && !indexInRange(indexInfo.value, count)) {
+      error(index, SemaErrorCode::IndexOutOfRange,
+            "index " + valueText(indexInfo.value) + " is out of range for `" +
+                types_.spelling(baseType) + "`: a constant index goes from 0 to " +
+                std::to_string(count - 1));
+      return kTypeError;
+    }
+    info.isLvalue = true;
+    info.isConstant = false;
+    info.hasIntValue = false;
+    // The record carries the element type *and the count*, which is the extent
+    // the checked build bounds-checks against when the base is an object this
+    // unit named (26).
+    recordAccess(expr, element, arrayProvenanceOf(base), count);
+    return element;
+  }
   if (!types_.isPointer(baseType)) {
     // C also accepts `i[p]`, because for C it is `*(i + p)` and addition is
     // commutative. It is a curiosity of C's definition and not of the operation,
     // and this language says so instead of accepting it: the reader who wrote it
     // meant `p[i]` with the operands the other way round.
     error(base, SemaErrorCode::DerefNotPointer,
-          "`[]` needs a pointer on the left and an integer index; `" + types_.spelling(baseType) +
-              "` is not a pointer");
+          "`[]` needs an array or a pointer on the left and an integer index; `" +
+              types_.spelling(baseType) + "` is not one");
     return kTypeError;
   }
   if (!isIntegerOperand(types_, indexType)) {
@@ -762,6 +817,229 @@ bool Checker::foldBinary(Tag op, const ExprInfo& left, const ExprInfo& right, Ex
   }
   out.hasIntValue = true;
   return true;
+}
+
+// --- array literals ----------------------------------------------------------
+
+TypeId Checker::checkArrayLiteral(ast::AstId expr, TypeId expected, ExprInfo& info) {
+  // `[1, 2, 3]`: the list form, whose type the **context** gives it -- the same
+  // rule the number literals follow, and the reason a `let` can write a binding's
+  // type on the left and the value on the right.
+  //
+  // Deliberately not a deferred *type* the way `IntLiteral` is. A number needs
+  // one because it flows through operators that must find the common type of
+  // operands nobody has typed yet; an array literal cannot be an operand of any
+  // operator (`arrays.md` decision 25), so the only thing it can meet is a
+  // consumer that already has the type -- and `expected` is exactly that
+  // consumer's type, handed down by `checkOperand`. No second typing mechanism,
+  // and no way for two answers to coexist.
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  const bool isFill = hasFillSeparator(expr);
+  if (!types_.known(expected) || types_.isError(expected)) {
+    // No context to decide it, and that is a refusal rather than a guess: the
+    // count is part of the *type* of an object whose type this language writes
+    // down, and an inferred one would be a number that appears nowhere in the
+    // source (`arrays.md` decision 8).
+    error(expr, SemaErrorCode::LiteralTypeUnknown,
+          "the type of this array literal is not known here: annotate it (`let a: [3]i32 = "
+          "[1, 2, 3];`) or name the type in the literal (`[_]i32{1, 2, 3}`)");
+    info = ExprInfo{};
+    return kTypeError;
+  }
+  if (!types_.isArray(expected)) {
+    error(expr, SemaErrorCode::InitializerShape,
+          "this is an array of elements and its place here is `" + types_.spelling(expected) +
+              "`: an array does not convert to anything else");
+    info = ExprInfo{};
+    return kTypeError;
+  }
+  return checkElements(expr, operands, 0, isFill, expected, info);
+}
+
+TypeId Checker::checkTypedInitializer(ast::AstId expr, ExprInfo& info) {
+  // `[3]i32{1, 2, 3}`, `[_]u8{...}`, `[64]u8{0; 64}`. The type is written, so
+  // nothing is inferred and nothing is deferred: the element rules below are the
+  // whole of it, and they are the five that C's zero-fill habit gets wrong (`arrays.md`
+  // decision 9).
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  if (operands.empty()) {
+    return kTypeError;
+  }
+  const ast::AstId typeNode = operands.front();
+  if (kindOf(typeNode) != ast::NodeKind::Type) {
+    // The grammar builds a typed initializer with a `Type` as its first operand,
+    // and a tree that does not is a compiler bug and not a program: the shape
+    // was checked by the builder, so this is a `return` and not a diagnostic.
+    return kTypeError;
+  }
+  const std::vector<TypePart> parts = typeParts(typeNode);
+  const bool isFill = hasFillSeparator(expr);
+  const std::span<const ast::AstId> elements(operands.data() + 1, operands.size() - 1);
+  if (elements.empty()) {
+    // Before the type is read, and not after: for `[_]` the count *is* the number
+    // of elements, so an empty list has no count to read -- and "the count is at
+    // least 1" would be a sentence about the spelling the reader did write
+    // instead of about the value they did not.
+    errorEmptyInitializer(expr);
+    return kTypeError;
+  }
+
+  // The count a `[_]` needs, and where it is legal. Only the outermost part is
+  // ever `_`, and only a *list* can supply it: a fill writes its own count, and
+  // two numbers for one thing is one number too many.
+  const bool inferred = !parts.empty() && parts.front().isArray && parts.front().countInferred;
+  std::optional<std::uint64_t> inferredCount;
+  if (inferred) {
+    if (isFill) {
+      error(expr, SemaErrorCode::InitializerShape,
+            "`_` takes the count from the elements that are written, so a filled "
+            "initializer names the count: `[64]u8{0; 64}`");
+      return kTypeError;
+    }
+    inferredCount = static_cast<std::uint64_t>(elements.size());
+  }
+
+  const TypeSpecResult spec = readType(parts, types_, inferredCount);
+  if (!spec.ok) {
+    error(typeNode,
+          spec.unknownWord.empty() ? SemaErrorCode::MalformedType : SemaErrorCode::UnknownType,
+          spec.message);
+    setType(typeNode, kTypeError);
+    return kTypeError;
+  }
+  if (!spec.type.valid()) {
+    reportLimit(typeNode);
+    setType(typeNode, kTypeError);
+    return kTypeError;
+  }
+  setType(typeNode, spec.type);
+  if (!types_.isArray(spec.type)) {
+    // Unreachable, and kept as a `return` rather than a diagnostic for a reason
+    // worth writing down: the parser recognizes a typed initializer only when the
+    // type run starts with `[N]`, so the constructor that introduces this node is
+    // the array's. The general `T{...}` -- and with it the sentence about braces
+    // being for aggregates and not for scalars -- arrives with the first
+    // non-array aggregate, which is where a *type name* followed by `{` stops
+    // being ambiguous with a block (`arrays.md`).
+    return kTypeError;
+  }
+
+  return checkElements(expr, elements, 1, isFill, spec.type, info);
+}
+
+bool Checker::hasFillSeparator(ast::AstId expr) const {
+  // The `;` is the whole difference between a list and a fill, and it is read
+  // from the tokens because an *operand* list cannot tell them apart: `{a, b}`
+  // and `{a; b}` hold two operands each.
+  for (const ast::AstId child : file_.childrenOf(expr)) {
+    if (file_.at(child).isToken() && tagOf(kindOf(child)) == kTokSemicolon) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void Checker::errorEmptyInitializer(ast::AstId consumer) {
+  // One sentence, in one place, because both forms can write an empty group and
+  // the repair is the same: an array's value is written out, and "many of the
+  // same" is the fill.
+  error(consumer, SemaErrorCode::InitializerShape,
+        "this initializer has no elements: an array's value is written out, and an array of "
+        "zeroes has one spelling -- the fill, `[N]T{v; N}`");
+}
+
+TypeId Checker::checkElements(ast::AstId consumer, std::span<const ast::AstId> elements,
+                              std::uint8_t operandBase, bool isFill, TypeId arrayType,
+                              ExprInfo& info) {
+  // The whole of what a list of elements has to get right, for **both** literal
+  // forms: the two differ only in where the type comes from, so sharing this is
+  // what keeps `[3]i32{1, 2, 3}` and `let a: [3]i32 = [1, 2, 3];` from being two
+  // sets of rules that can drift apart.
+  if (elements.empty()) {
+    errorEmptyInitializer(consumer);
+    return kTypeError;
+  }
+  if (isFill && elements.size() < 2) {
+    // `{v;}` -- a fill with no count. The parser's `expect` has already said what
+    // is missing, and the node is still well formed enough to be read, so this
+    // stops before a count that is not there rather than diagnosing twice.
+    return kTypeError;
+  }
+
+  const TypeId elementType = types_.elementOf(arrayType);
+  const std::uint64_t count = types_.countOf(arrayType);
+
+  if (isFill) {
+    // The value, checked against the element type, and the count, read by the
+    // compiler. The count is *not* a stored value: the fill is a shape, and the
+    // lowering writes it as a splat without the program ever holding the number
+    // (`arrays.md` decision 15).
+    const auto valueOperand = static_cast<std::uint8_t>(operandBase);
+    const TypeId valueType = checkOperand(consumer, valueOperand, elements[0], elementType);
+    checkAssignable(valueType, elementType, elements[0], SemaErrorCode::InvalidAssignment,
+                    " in this initializer");
+    const ast::AstId countNode = elements[1];
+    (void)checkExpr(countNode, kInvalidType);
+    const ExprInfo& countFacts = out_.typed.infoOf(countNode);
+    if (!countFacts.isConstant || !countFacts.hasIntValue) {
+      error(countNode, SemaErrorCode::InitializerShape,
+            "the count of a filled initializer has to be a number this compiler can read, "
+            "like `[64]u8{0; 64}`");
+      return kTypeError;
+    }
+    if (static_cast<std::uint64_t>(countFacts.value.bits) != count) {
+      // Two numbers for one thing, and this is the check that turns a
+      // copy-and-paste off-by-one into a diagnostic instead of a silently short
+      // or long object.
+      error(countNode, SemaErrorCode::InitializerShape,
+            "this fill writes " + valueText(countFacts.value) + " elements and the type has " +
+                std::to_string(count) +
+                ": an array's length is exact, and the two numbers have "
+                "to be the same one");
+      return kTypeError;
+    }
+    info = ExprInfo{};
+    return arrayType;
+  }
+
+  if (elements.size() != count) {
+    // Exact length, with the fix in the sentence. C's "fewer initializers means
+    // zero-fill" is how an array ends up half written with no diagnostic at all,
+    // and it is the one convention this language will not inherit.
+    error(consumer, SemaErrorCode::InitializerShape,
+          "this initializer writes " + std::to_string(elements.size()) + " elements and `" +
+              types_.spelling(arrayType) + "` has " + std::to_string(count) +
+              ": an array's length is exact -- write every element, or write a fill as in "
+              "`[" +
+              std::to_string(count) + "]" + std::string(types_.spelling(elementType)) + "{v; " +
+              std::to_string(count) + "}`");
+    return kTypeError;
+  }
+
+  // Every element, checked against the element type. A nested initializer is
+  // checked by the same code one level down -- `checkOperand` hands its own
+  // expected type down -- which is what makes ragged input impossible: a row is
+  // an initializer of the row's type, and no initializer has a length of its own.
+  bool allConstant = true;
+  for (std::size_t i = 0; i < elements.size(); ++i) {
+    const ast::AstId element = elements[i];
+    const auto operand = static_cast<std::uint8_t>(operandBase + i);
+    const TypeId written = checkOperand(consumer, operand, element, elementType);
+    checkAssignable(written, elementType, element, SemaErrorCode::InvalidAssignment,
+                    " in this initializer");
+    if (!out_.typed.infoOf(element).isConstant) {
+      allConstant = false;
+    }
+  }
+  info = ExprInfo{};
+  // Deliberately *not* `isConstant`, even when every element is one. An
+  // aggregate's constant-ness is a property of its **shape** -- element type,
+  // count, the list or the splat -- and that record is what the file-scope step
+  // adds (`arrays.md` decision 15, step 8). Until it exists, a value that names no
+  // value is exactly what the initializer-constant-expression walk must not be
+  // handed: the walk reads `isConstant` and then asks for the value.
+  static_cast<void>(allConstant);
+  return arrayType;
 }
 
 TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {

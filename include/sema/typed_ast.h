@@ -137,13 +137,25 @@ enum class ProvenanceKind : std::uint8_t {
 // its -- and the lowering reads those from the store rather than from the
 // pointer's own type.
 struct AccessObligation {
-  // The place-expression the access goes through: a `*p` or a `p[i]`.
+  // The place-expression the access goes through: a `*p`, a `p[i]` or an
+  // `a[i]` where `a` is an array.
   ast::AstId place;
   // The type being accessed. Its size is the access's width and its alignment is
   // the access's alignment, so a lowering that reads them re-derives nothing.
   TypeId type = kInvalidType;
   AccessKind kind = AccessKind::Ordinary;
   ProvenanceKind provenance = ProvenanceKind::Foreign;
+  // How many elements the object the place is *inside* has, when this stage can
+  // prove one: an array subscript always can, because the count is in the type.
+  // `0` is "not known", which is every `*p` -- a pointer's extent is not a
+  // number this stage can see.
+  //
+  // It is the half of the checked build's guard that the module can answer on
+  // its own: `object` provenance *plus* a count is a bounds check the lowering
+  // can emit without a shadow memory (`arrays.md` decision 26, `ir.md`). A
+  // subscript through a pointer keeps its `foreign` answer and no guard, which
+  // is why the two spellings of "element i" are not the same program here.
+  std::uint64_t extent = 0;
 };
 
 // The stable name of an access kind, in one table with the enumeration so a kind

@@ -217,26 +217,49 @@ void Parser::parseParam() {
   param.complete(SyntaxKind::Param);
 }
 
-// How many tokens a type run has, from the current position. A run is `*` and
-// identifier tokens and nothing else, which is the same shape everything below
-// reads and the same shape a `Type` node holds.
+// How many tokens a type run has, from the current position. A run is `*`,
+// `[N]` and identifier tokens, which is the same shape everything below reads and
+// the same shape a `Type` node holds.
 //
-// The `*` is deliberately *not* given a meaning here. A pointer type is a
-// sema question -- the parser does not know which words are type names and
-// this stage is not allowed to know -- so the run is collected whole and the
-// rules about where a `*` may sit live in `sema/typespec.cc`, which is the only
-// place that can say "a pointer is written `*T`" and mean it.
+// None of the three is given a meaning here. A pointer or an array type is a
+// sema question -- the parser does not know which words are type names and this
+// stage is not allowed to know -- so the run is collected whole and the rules
+// about where a `*` or a `[N]` may sit live in `sema/typespec.cc`, which is the
+// only place that can say "a pointer is written `*T`" and mean it.
+//
+// A *malformed* group -- `[` with no count, or with no `]` -- still joins the run
+// as one token. The alternative, ending the run there, would leave the count and
+// the bracket outside the `Type` node, so the group the parser reports on would
+// not be the group the reader wrote and the tokens after it would be read as the
+// element type. A tree that does not hold the source is a tree that cannot be
+// diagnosed from.
 [[nodiscard]] static std::uint32_t typeRunLength(const Parser& parser) {
   std::uint32_t tokens = 0;
-  while (parser.nth(tokens) == lex::TokenKind::Star ||
-         parser.nth(tokens) == lex::TokenKind::Identifier ||
-         // `!`, the bottom type. It is a type *token* rather than a word, which
-         // is why it is listed beside the two the grammar already had: a run is
-         // still what a type position holds, and `!` takes part in it exactly
-         // where a word would -- `fn ! f()` is a return type and a name, and the
-         // reader below splits the run the same way it splits `fn i32 f()`.
-         parser.nth(tokens) == lex::TokenKind::Bang) {
-    ++tokens;
+  while (true) {
+    if (parser.nth(tokens) == lex::TokenKind::Star ||
+        parser.nth(tokens) == lex::TokenKind::Identifier ||
+        // `!`, the bottom type. It is a type *token* rather than a word, which
+        // is why it is listed beside the two the grammar already had: a run is
+        // still what a type position holds, and `!` takes part in it exactly
+        // where a word would -- `fn ! f()` is a return type and a name, and the
+        // reader below splits the run the same way it splits `fn i32 f()`.
+        parser.nth(tokens) == lex::TokenKind::Bang) {
+      ++tokens;
+      continue;
+    }
+    // `[N]`, all three tokens or the bracket alone.
+    if (parser.nth(tokens) == lex::TokenKind::LBracket) {
+      const lex::TokenKind counted = parser.nth(tokens + 1);
+      if ((counted == lex::TokenKind::IntegerLiteral ||
+           (counted == lex::TokenKind::Identifier && parser.text(tokens + 1) == kInferredCount)) &&
+          parser.nth(tokens + 2) == lex::TokenKind::RBracket) {
+        tokens += 3;
+        continue;
+      }
+      ++tokens;
+      continue;
+    }
+    break;
   }
   return tokens;
 }
@@ -299,6 +322,37 @@ void Parser::parseTypeAndName() {
   name.complete(SyntaxKind::Name);
 }
 
+void Parser::parseArrayCount() {
+  // Precondition: the current token is `[`.
+  bump();
+  // A number, or `_` -- the count that comes from the elements of a typed
+  // initializer (`arrays.md`). Both are *accepted as the count token* here and
+  // judged by the reader, which is the stage that knows what encloses the type:
+  // `let a: [_]i32` is an error, `let a = [_]i32{1, 2}` is not, and only the
+  // position tells them apart. Any other name is still the parse error below --
+  // the two spellings are one token kind apart, and the difference is worth
+  // keeping in the stage that can see the bracket.
+  const bool count = at(lex::TokenKind::IntegerLiteral) ||
+                     (at(lex::TokenKind::Identifier) && text(0) == kInferredCount);
+  if (count) {
+    bump();
+  } else if (!at(lex::TokenKind::RBracket)) {
+    // Not a count, and not the reserved `[]` either. The count is a literal
+    // number today (`arrays.md` decision 19), so a reader who wrote an
+    // expression has one thing to fix, and the message says which. The
+    // offending token is consumed so the `]` below is the one that belongs to
+    // this group: leaving it would make one mistake cost two sentences.
+    error("the count of an array type is a literal number, not an expression",
+          ParseErrorCode::ExpectedArrayCount);
+    bump();
+  }
+  if (at(lex::TokenKind::RBracket)) {
+    bump();
+    return;
+  }
+  error("expected `]` to close the array count", ParseErrorCode::ExpectedArrayCountClose);
+}
+
 void Parser::parseType() {
   Marker type = start();
   if (typeRunLength(*this) == 0) {
@@ -311,8 +365,20 @@ void Parser::parseType() {
   // where the position is known: this stage answers "what shape is written", and
   // `let x: !` is a shape -- a wrong one, with a sentence about why, produced by
   // the only stage that knows an object cannot have that type (`never.md`).
-  while (at(lex::TokenKind::Identifier) || at(lex::TokenKind::Star) || at(lex::TokenKind::Bang)) {
-    bump();
+  //
+  // The loop is driven by the tokens rather than by the run length above, so a
+  // malformed group -- which the length function counts differently -- still
+  // consumes exactly the tokens it read.
+  while (true) {
+    if (at(lex::TokenKind::Identifier) || at(lex::TokenKind::Star) || at(lex::TokenKind::Bang)) {
+      bump();
+      continue;
+    }
+    if (at(lex::TokenKind::LBracket)) {
+      parseArrayCount();
+      continue;
+    }
+    break;
   }
   type.complete(SyntaxKind::Type);
 }

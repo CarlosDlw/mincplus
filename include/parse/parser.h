@@ -115,6 +115,11 @@ public:
   // zero-width token of that kind so the node's shape stays stable.
   void expect(lex::TokenKind kind);
 
+  // True when the `[...]` group at the current token is the count of a typed
+  // initializer and not the start of a list. Defined in expression.cc, where
+  // the rule that decides it lives.
+  [[nodiscard]] bool atTypedInitializer() const;
+
   // -- input ----------------------------------------------------------------
   [[nodiscard]] lex::TokenKind current() const {
     return source_.current();
@@ -124,6 +129,12 @@ public:
   }
   [[nodiscard]] bool at(lex::TokenKind kind) const {
     return current() == kind;
+  }
+  // The spelling of the token `nth(n)` looks at. Read only where the text *is*
+  // the rule -- `_` as a count -- because a rule written against a spelling is a
+  // rule that changes when the lexer does.
+  [[nodiscard]] std::string_view text(std::uint32_t n) const {
+    return source_.textOf(n);
   }
   [[nodiscard]] bool atEnd() const {
     return source_.atEnd();
@@ -187,6 +198,18 @@ public:
   void parseJumpStmt(SyntaxKind kind);
   void parseType();        // type-only position (after `:`)
   void parseTypeAndName(); // `fn` return type followed by the function name
+  // One `[`, count, `]` group of a type position, always consumed whole: the
+  // group is the unit the count belongs to, and a group the parser leaves half
+  // read is a group the next construct re-reads as something else.
+  void parseArrayCount();
+
+  // The two literal forms. `parseInitializerElements` is the body both share --
+  // the comma-separated list with its trailing comma, or `value ; count` --
+  // because the only thing that separates a list from a fill is one `;`, and two
+  // implementations would be two places for that to drift.
+  CompletedMarker parseArrayLiteral();
+  CompletedMarker parseTypedInitializer();
+  void parseInitializerElements(lex::TokenKind closer);
 
   void parseExpr();
   CompletedMarker parseAssign();

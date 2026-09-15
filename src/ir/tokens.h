@@ -34,6 +34,10 @@ using Tag = std::uint16_t;
 }
 
 // Literals.
+// `;`, the one token that tells a filled initializer from a list. Read by the
+// lowering for the same reason the checker reads it: the operands alone cannot
+// say which of the two spellings produced them.
+inline constexpr Tag kTokSemicolon = tagOf(lex::TokenKind::Semicolon);
 inline constexpr Tag kTokIntegerLiteral = tagOf(lex::TokenKind::IntegerLiteral);
 inline constexpr Tag kTokFloatLiteral = tagOf(lex::TokenKind::FloatLiteral);
 inline constexpr Tag kTokCharLiteral = tagOf(lex::TokenKind::CharLiteral);

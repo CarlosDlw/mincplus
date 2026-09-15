@@ -76,6 +76,95 @@ TEST(IrLowerTest, ABoolObjectIsAByteAndABoolValueIsABit) {
   EXPECT_EQ(text.find("alloca i1"), std::string::npos);
 }
 
+TEST(IrLowerTest, AnArrayValueIsOneConstantAndASplatIsNeverExpanded) {
+  test::IrFixture fixture;
+  fixture.source("fn i32 main()\n"
+                 "{\n"
+                 "  let zeros = [1024]u8{0; 1024};\n"
+                 "  let sevens = [4]u8{7; 4};\n"
+                 "  let list = [3]i32{1, 2, 3};\n"
+                 "  let nested: [2][2]i32 = [[1, 2], [3, 4]];\n"
+                 "  return zeros[0] + sevens[3] + list[1] + nested[1][1];\n"
+                 "}\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  // A zero fill is `zeroinitializer` -- one constant of the array's *type*, and
+  // the same one whatever the count is. This is the decision that a splat is a
+  // shape: expanding 1024 elements here would make the front end's cost the
+  // count's, and the module's text its size.
+  EXPECT_NE(text.find("zeroinitializer"), std::string::npos);
+  EXPECT_EQ(text.find("i8 0, i8 0, i8 0"), std::string::npos);
+  // Every initializer is a *store of a constant*, not a chain of per-element
+  // instructions.
+  EXPECT_EQ(text.find("insertvalue"), std::string::npos);
+  EXPECT_NE(text.find("[2 x [2 x i32]]"), std::string::npos);
+  // The objects are the type's size and alignment, and the elements are read
+  // through a plain `getelementptr`.
+  EXPECT_NE(text.find("alloca [4 x i8]"), std::string::npos);
+  EXPECT_NE(text.find("alloca [1024 x i8]"), std::string::npos);
+}
+
+TEST(IrLowerTest, ABoolArrayIsBytesAsAnObjectAndBitsAsAValue) {
+  test::IrFixture fixture;
+  // The scalar rule one level down: `[4]bool` is a *value* of `[4 x i1]` and an
+  // object of `[4 x i8]`. A store compares the two types, so leaving this
+  // difference to the caller would be a wrong-typed store -- which LLVM calls
+  // undefined behaviour and reports as nothing at all.
+  fixture.source("fn i32 main()\n"
+                 "{\n"
+                 "  let flags = [4]bool{true, false, true, false};\n"
+                 "  if flags[0] { return 1; }\n"
+                 "  return 0;\n"
+                 "}\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("alloca [4 x i8]"), std::string::npos);
+  EXPECT_EQ(text.find("alloca [4 x i1]"), std::string::npos);
+  EXPECT_NE(text.find("bool.load"), std::string::npos);
+}
+
+TEST(IrLowerTest, AByValueArrayIsACallerCopyAndAPointer) {
+  test::IrFixture fixture;
+  // `arrays.md` decision 13: the shape is the ABI's MEMORY class -- the caller
+  // writes its own copy and passes its address -- so a `[1 << 20]i32` parameter
+  // is a pointer in the signature and not a megabyte in every call site's type.
+  fixture.source("fn i32 first(a: [4]i32) { return a[0]; }\n"
+                 "fn i32 main() { let t = [4]i32{1, 2, 3, 4}; return first(t); }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("define i32 @first(ptr"), std::string::npos);
+  EXPECT_NE(text.find("arg.copy"), std::string::npos);
+  // No array is ever a parameter's LLVM type, which is the whole decision.
+  EXPECT_EQ(text.find("define i32 @first([4 x i32]"), std::string::npos);
+}
+
+TEST(IrLowerTest, AnAggregateReturnIsTheCallersStorage) {
+  test::IrFixture fixture;
+  // The same decision, the other direction: the destination is the caller's
+  // object, passed first and marked `sret`, and the function returns nothing. An
+  // aggregate in the return type instead would put a megabyte of type into every
+  // call site, debug record and function pointer for a large array -- the shape
+  // five languages shipped wrong code from.
+  fixture.source("fn [3]i32 make() { return [3]i32{1, 2, 3}; }\n"
+                 "fn i32 main() { let a = make(); return a[2]; }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("define void @make(ptr sret([3 x i32])"), std::string::npos);
+  EXPECT_EQ(text.find("define [3 x i32] @make"), std::string::npos);
+  EXPECT_NE(text.find("call void @make"), std::string::npos);
+  // The result is read back out of the caller's own slot, which is where the
+  // callee wrote it.
+  EXPECT_NE(text.find("load [3 x i32]"), std::string::npos);
+}
+
 TEST(IrLowerTest, ADivisionIsGuardedAndNeverPromisesNoOverflow) {
   test::IrFixture fixture;
   fixture.source("fn i32 divide(numerator: i32, denominator: i32)\n"

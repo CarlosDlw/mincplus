@@ -460,13 +460,43 @@ void Checker::flowStoreTarget(ast::AstId place) {
   if (kindOf(current) == ast::NodeKind::PathExpr) {
     return; // a plain store: nothing here is read
   }
-  // Anything richer than a name will compute an address, and that computation
-  // reads whatever it is built from -- `*p = 1` reads `p`.
+  if (kindOf(current) == ast::NodeKind::IndexExpr) {
+    const std::vector<ast::AstId> operands = operandsOf(current);
+    if (operands.size() < 2) {
+      flowExpression(current);
+      return;
+    }
+    // The base decides which of the two spellings of `[i]` this is, and the two
+    // differ in what the store reads.
+    //
+    // An **array** is an object, and reaching one of its elements computes an
+    // address: none of its bytes are read, so `a[0] = 1` and `&a[0]` are legal on
+    // a binding that has never held a value (`arrays.md` decision 23). A
+    // **pointer** is a value, and `p[i] = v` is `*(p + i) = v`, which reads `p`.
+    if (types_.isArray(out_.typed.typeOf(operands[0]))) {
+      flowStoreTarget(operands[0]);
+    } else {
+      flowExpression(operands[0]);
+    }
+    // The index is a value in both spellings, so it is the half that has to hold
+    // one.
+    flowExpression(operands[1]);
+    return;
+  }
+  // Anything richer than a name will compute an address out of values, and that
+  // computation reads whatever it is built from -- `*p = 1` reads `p`.
   flowExpression(current);
 }
 
 void Checker::markAssigned(ast::AstId place) {
-  if (const std::optional<resolve::DefId> def = defOfPlace(place)) {
+  // `defOfStoreTarget` and not `defOfPlace`: the two questions look alike and
+  // are opposite here. A store into `a[0]` *belongs* to `a` -- which is what
+  // makes `TABLE[0] = 1` refused on a `const` table -- and it does **not** give
+  // the object a value, because the other elements were never written. Reading
+  // `a[1]` after writing `a[0]` is reading an unassigned object, and marking the
+  // whole binding here would be the analysis believing something false
+  // (`arrays.md` decisions 23, 24).
+  if (const std::optional<resolve::DefId> def = defOfStoreTarget(place)) {
     if (def->index < assigned_.size()) {
       assigned_[def->index] = true;
     }

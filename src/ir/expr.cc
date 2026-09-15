@@ -139,6 +139,10 @@ Value Lowering::lowerExpr(ast::AstId expr) {
   case ast::NodeKind::IndexExpr:
     result = lowerDerefOrIndex(expr);
     break;
+  case ast::NodeKind::TypedInitializer:
+  case ast::NodeKind::ArrayLiteral:
+    result = lowerArrayInitializer(expr);
+    break;
   default:
     fatal(spanOf(expr), IRDiagnosticCode::UnsupportedNode,
           "this expression is not lowered yet: " + std::string(parse::toString(kindOf(expr))));
@@ -323,6 +327,35 @@ Place Lowering::lowerPlace(ast::AstId expr) {
       fatal(spanOf(expr), IRDiagnosticCode::Internal, "an index has no base or no index");
       return {};
     }
+    // `a[i]` on an **array**: the element of the object itself, which is a
+    // subscript of the object and not of a pointer to it -- so the base is a
+    // *place* (the alloca, or the parameter's pointer) and not a loaded value,
+    // and the `getelementptr` is the two-index form LLVM wants for an array: the
+    // first index steps over the whole array (always 0, because the object is
+    // here) and the second steps into it.
+    //
+    // The element type of the `getelementptr` is the element's *storage* type,
+    // so an element of a `[4]bool` addresses a byte; the load below normalises it
+    // to `i1`, which is what keeps the array from being a bitfield
+    // (`arrays.md` decision 12).
+    if (types_.isArray(typeOf(operands[0]))) {
+      const Place basePlace = lowerPlace(operands[0]);
+      if (basePlace.addr == nullptr) {
+        return {};
+      }
+      const Value index = lowerOperand(expr, operands[1]);
+      if (index.v == nullptr) {
+        return {};
+      }
+      llvm::Type* arrayType = storageType(basePlace.type);
+      if (arrayType == nullptr) {
+        return {};
+      }
+      llvm::Value* zero = llvm::ConstantInt::get(indexType(), 0);
+      llvm::Value* address =
+          builder_.CreateGEP(arrayType, basePlace.addr, {zero, index.v}, "index");
+      return Place{address, types_.elementOf(basePlace.type)};
+    }
     const Value base = lowerExpr(operands[0]);
     if (base.v == nullptr) {
       return {};
@@ -422,6 +455,31 @@ Value Lowering::toStorage(const Value& value) {
   // value and a byte as an object (`memory.md`, *Objects*).
   if (value.v->getType() == boolType() && type == byteType()) {
     return Value{builder_.CreateZExt(value.v, byteType(), "bool.store"), value.type};
+  }
+  // The same difference one level down: `[4]bool` is `[4 x i1]` as a value and
+  // `[4 x i8]` as an object, and a store compares the two types -- so leaving it
+  // to the caller would be a wrong-typed store, which LLVM calls undefined
+  // behaviour and reports as nothing at all. Converted element by element, and
+  // recursively, so a `[2][3]bool` is the same rule twice.
+  auto* from = llvm::dyn_cast<llvm::ArrayType>(value.v->getType());
+  auto* to = llvm::dyn_cast<llvm::ArrayType>(type);
+  if (from != nullptr && to != nullptr && from->getNumElements() == to->getNumElements()) {
+    const sema::TypeId element = types_.elementOf(value.type);
+    llvm::Value* converted = llvm::PoisonValue::get(to);
+    for (std::uint64_t i = 0; i < to->getNumElements(); ++i) {
+      // `CreateExtractValue` on a constant folds, so a constant array takes this
+      // path with no instruction at all in the end -- SROA and the folder remove
+      // the chain the moment it reaches the destination slot.
+      llvm::Value* piece =
+          builder_.CreateExtractValue(value.v, static_cast<unsigned>(i), "element");
+      const Value stored = toStorage(Value{piece, element});
+      if (stored.v == nullptr) {
+        return value;
+      }
+      converted = builder_.CreateInsertValue(converted, stored.v, static_cast<unsigned>(i),
+                                             "aggregate.store");
+    }
+    return Value{converted, value.type};
   }
   return value;
 }
@@ -552,6 +610,120 @@ Value Lowering::lowerPostfix(ast::AstId expr) {
   storePlace(place, next, operand);
   // The *old* value: that is the whole difference between `x++` and `++x`.
   return old;
+}
+
+Value Lowering::lowerArrayInitializer(ast::AstId expr) {
+  // `[3]i32{1, 2, 3}` and its context-decided form `[1, 2, 3]` are one lowering:
+  // both are a value of the array type the record states, built here and
+  // consumed by whatever the checker said consumes it (a binding's store, a
+  // return, an argument). The elements are lowered **once**, into `pieces`, and
+  // the constant path below decides on the values that came out -- lowering a
+  // second time to test for constness is how dead instructions get into a
+  // module.
+  const sema::TypeId type = typeOf(expr);
+  const sema::TypeId element = types_.elementOf(type);
+  const std::uint64_t count = types_.countOf(type);
+  llvm::Type* aggregate = llvmType(type);
+  auto* shape = aggregate == nullptr ? nullptr : llvm::dyn_cast<llvm::ArrayType>(aggregate);
+  if (shape == nullptr || !types_.known(element) || shape->getNumElements() != count) {
+    // Unreachable: the checker refused every array whose element is not a type
+    // and every count that does not fit, and the store's own identity is what
+    // this compares against. A `return` and not a diagnostic, like the other
+    // internal-shape guards, because there is nothing a reader could repair.
+    return {};
+  }
+
+  // The `;` is the whole difference between a list and a fill, and it is read
+  // from the tokens because an operand list cannot tell them apart.
+  bool isFill = false;
+  for (const ast::AstId child : file_.childrenOf(expr)) {
+    if (file_.at(child).isToken() && tagOf(kindOf(child)) == kTokSemicolon) {
+      isFill = true;
+      break;
+    }
+  }
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  if (operands.empty()) {
+    return {};
+  }
+  // The typed form's first operand is its `Type` node; the list form's type came
+  // from its context and lives in the record alone, so its operands are all
+  // elements. One function, because everything below -- the fill, the constants,
+  // the chain -- is about the *elements* and neither form has a rule the other
+  // does not.
+  const std::size_t first = kindOf(operands.front()) == ast::NodeKind::Type ? 1U : 0U;
+  // The fill's *count* is an operand too and is deliberately not lowered: it was
+  // read by the compiler, and no program holds the number.
+  const std::span<const ast::AstId> elements(operands.data() + first, operands.size() - first);
+  if (elements.empty() || (isFill && elements.size() < 2)) {
+    return {};
+  }
+
+  std::vector<llvm::Value*> pieces;
+  if (isFill) {
+    const Value value = lowerOperand(expr, elements[0]);
+    if (value.v == nullptr) {
+      return {};
+    }
+    // The fill's value is evaluated **once** and written `count` times: the shape
+    // is the splat and not the bytes (`arrays.md` decision 15), so a fill whose
+    // value is a call calls it once.
+    pieces.assign(static_cast<std::size_t>(count), value.v);
+  } else {
+    pieces.reserve(elements.size());
+    for (const ast::AstId elementNode : elements) {
+      const Value value = lowerOperand(expr, elementNode);
+      if (value.v == nullptr) {
+        return {};
+      }
+      pieces.push_back(value.v);
+    }
+    if (pieces.size() != count) {
+      return {};
+    }
+  }
+
+  bool allConstant = true;
+  for (llvm::Value* piece : pieces) {
+    if (!llvm::isa<llvm::Constant>(piece)) {
+      allConstant = false;
+      break;
+    }
+  }
+  if (allConstant) {
+    if (isFill) {
+      auto* fillValue = llvm::cast<llvm::Constant>(pieces.front());
+      if (fillValue->isNullValue()) {
+        // The zero fill, and the reason the record forbids expanding a splat: one
+        // constant of the array's *type*, whatever the count is, and the store
+        // below is one instruction. `[1 << 20]u8{0; ...}` costs the same as
+        // `[1]u8{0; 1}`.
+        return Value{llvm::ConstantAggregateZero::get(shape), type};
+      }
+      return Value{llvm::ConstantArray::get(shape, std::vector<llvm::Constant*>(
+                                                       static_cast<std::size_t>(count), fillValue)),
+                   type};
+    }
+    std::vector<llvm::Constant*> constants;
+    constants.reserve(pieces.size());
+    for (llvm::Value* piece : pieces) {
+      constants.push_back(llvm::cast<llvm::Constant>(piece));
+    }
+    return Value{llvm::ConstantArray::get(shape, constants), type};
+  }
+
+  // Not every element is known at compile time, so the aggregate is built from
+  // the values that came out. `insertvalue` from a poison whole is what keeps
+  // this in *value* form -- the alternative, a temporary object plus a load,
+  // would materialise the storage representation and then have to convert it
+  // back. An element that is itself an aggregate (a nested initializer, or a
+  // binding holding another array) needs no handling here: it is one operand
+  // value of the right type, which is the whole point of arrays being values.
+  llvm::Value* built = llvm::PoisonValue::get(shape);
+  for (std::size_t i = 0; i < pieces.size(); ++i) {
+    built = builder_.CreateInsertValue(built, pieces[i], static_cast<unsigned>(i), "array");
+  }
+  return Value{built, type};
 }
 
 Value Lowering::lowerDerefOrIndex(ast::AstId expr) {
@@ -921,15 +1093,57 @@ Value Lowering::lowerCall(ast::AstId expr) {
   }
 
   std::vector<llvm::Value*> arguments;
+  const std::span<const sema::TypeId> params = types_.paramsOf(typeOf(callee));
   if (operands.size() > 1) {
+    std::size_t index = 0;
     for (const ast::AstId argument : operandsOf(operands[1])) {
       const Value value = lowerOperand(expr, argument);
       if (value.v == nullptr) {
         return {};
       }
-      arguments.push_back(value.v);
+      // A by-value aggregate is passed as a pointer to a copy the **caller**
+      // makes: that is what makes the argument a value (`arrays.md` decision 3),
+      // and what lets the callee have an address for it without a spill. The
+      // copy is a temporary and not the caller's own object -- an optimizer may
+      // elide it when it can prove the call does not write through the pointer,
+      // which is a licence it earns and not one this stage grants (no `byval`, no
+      // `readonly`, `noalias` or `nocapture` attribute is emitted here).
+      const sema::TypeId paramType = index < params.size() ? params[index] : sema::kInvalidType;
+      if (types_.isAggregate(paramType)) {
+        llvm::AllocaInst* copy = argumentCopy(paramType, value, argument);
+        if (copy == nullptr) {
+          return {};
+        }
+        arguments.push_back(copy);
+      } else {
+        arguments.push_back(value.v);
+      }
+      ++index;
     }
   }
+  // An aggregate result is *the caller's storage*, filled by the callee: the
+  // destination goes first and the value of the call is what was written into it
+  // (`arrays.md` decision 13). The slot lives in the entry block like every other
+  // frame slot -- a call in a loop must not grow the frame per iteration -- and
+  // the load is what turns "storage" into "value", which is the same pair of
+  // steps every object-to-value move in this stage takes.
+  const sema::TypeId returned = typeOf(expr);
+  if (types_.isAggregate(returned)) {
+    llvm::Type* slotType = storageType(returned);
+    if (slotType == nullptr) {
+      return {};
+    }
+    if (entryBlock_ != nullptr) {
+      allocaBuilder_.SetInsertPoint(entryBlock_, entryBlock_->begin());
+    }
+    locate(expr);
+    llvm::AllocaInst* destination = allocaBuilder_.CreateAlloca(slotType, nullptr, "sret");
+    destination->setAlignment(llvm::Align(alignmentOf(returned)));
+    arguments.insert(arguments.begin(), destination);
+    (void)builder_.CreateCall(functionType, calleeValue.v, arguments);
+    return loadPlace(Place{destination, returned}, ast::AstId{});
+  }
+
   // A call to a `void` function provides no value, and LLVM refuses an
   // instruction that has a name but no value -- so the name is written only when
   // there is something to name.

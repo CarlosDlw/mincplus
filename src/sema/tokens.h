@@ -45,6 +45,15 @@ using Tag = std::uint16_t;
 // `Node::is`, which takes the enum.
 inline constexpr ast::NodeKind kIdentifierNode = parse::toSyntaxKind(lex::TokenKind::Identifier);
 
+// A type position's grouping tokens. The count of an `[N]` part is read from the
+// tokens between them, so the checker names both brackets the way it names the
+// `*` it reads beside them.
+inline constexpr Tag kTokLBracket = tagOf(lex::TokenKind::LBracket);
+inline constexpr Tag kTokRBracket = tagOf(lex::TokenKind::RBracket);
+// `;`, which separates a filled initializer's value from its count. The one
+// token that tells a fill from a list, so the checker asks for it by name.
+inline constexpr Tag kTokSemicolon = tagOf(lex::TokenKind::Semicolon);
+
 // Literals.
 inline constexpr Tag kTokIntegerLiteral = tagOf(lex::TokenKind::IntegerLiteral);
 inline constexpr Tag kTokFloatLiteral = tagOf(lex::TokenKind::FloatLiteral);

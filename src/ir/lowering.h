@@ -239,6 +239,13 @@ private:
   // happened to be last.
   [[nodiscard]] llvm::AllocaInst* declareLocal(resolve::DefId def, sema::TypeId type,
                                                std::string_view name, ast::AstId at);
+  // The caller's copy of a by-value aggregate argument: the temporary an
+  // aggregate parameter points at (`arrays.md` decision 13). The slot is an
+  // entry-block `alloca` -- the copy's lifetime is the call, and a slot in the
+  // entry block is the one place a frame belongs -- while the store that fills
+  // it happens where the call is, which is why the two seats are separate.
+  [[nodiscard]] llvm::AllocaInst* argumentCopy(sema::TypeId type, const Value& value,
+                                               ast::AstId at);
   [[nodiscard]] std::optional<resolve::DefId> defOfPath(ast::AstId pathExpr) const;
   [[nodiscard]] std::optional<resolve::DefId> defAtName(ast::AstId nameNode) const;
   [[nodiscard]] std::optional<resolve::DefId> defOfPlace(ast::AstId expr) const;
@@ -304,6 +311,10 @@ private:
   // because in this grammar those nodes are *values* everywhere except in the
   // place positions an assignment or an `&` gives them.
   [[nodiscard]] Value lowerDerefOrIndex(ast::AstId expr);
+  // `[N]T{...}` and its context-decided form `[1, 2, 3]`: the array a value is
+  // written out as. A constant when every element is one, an `insertvalue` chain
+  // otherwise.
+  [[nodiscard]] Value lowerArrayInitializer(ast::AstId expr);
   // The instruction for a binary operator (or its compound spelling), at the
   // type `sema` decided the operation happens at. One function, so `x += y` and
   // `x + y` cannot choose two different instructions.
@@ -435,8 +446,24 @@ private:
   // module LLVM's verifier accepts.
   llvm::BasicBlock* entryBlock_ = nullptr;
   sema::TypeId currentReturn_ = sema::kInvalidType;
+  // The destination an aggregate-returning function writes its result into: the
+  // first argument, and `nullptr` for every function whose return is not an
+  // aggregate (`arrays.md` decision 13).
+  llvm::Value* sretPointer_ = nullptr;
 
-  std::unordered_map<std::uint64_t, llvm::AllocaInst*> locals_;
+  // The number of leading LLVM arguments that are not parameters -- one when the
+  // return type is an aggregate, zero otherwise. One place, so a parameter's
+  // index and the arity check cannot disagree.
+  [[nodiscard]] std::size_t sretOffset() const {
+    return sretPointer_ == nullptr ? 0U : 1U;
+  }
+
+  // A binding's storage, by the def that declared it. A `Value*` and not an
+  // `AllocaInst*` because a **parameter of aggregate type** is not a slot: it
+  // arrives as a pointer to the caller's copy and that pointer *is* its storage
+  // (`arrays.md` decision 13). Every other binding is an `alloca`, and this is
+  // still the one map that answers "where does this name live".
+  std::unordered_map<std::uint64_t, llvm::Value*> locals_;
   // The file-scope objects, by the def that declared them. Not cleared per
   // function: a global belongs to the unit, and one lives all the way through it.
   std::unordered_map<std::uint64_t, llvm::GlobalVariable*> globals_;

@@ -86,6 +86,16 @@ public:
   void declareBinding(llvm::AllocaInst& alloca, std::string_view name, const sema::TypeStore& types,
                       sema::TypeId type, support::Span span);
 
+  // The same, for a binding whose storage is the *value it arrived as*: an
+  // aggregate parameter, whose storage is the pointer to the caller's copy
+  // (`arrays.md` decision 13). An argument is not an instruction, so there is
+  // nothing to sit behind -- `position` is where in the entry block the record
+  // goes, which is "before the body runs", the same place an `alloca`'s record
+  // sits.
+  void declareParameterBinding(llvm::Argument& storage, std::string_view name,
+                               const sema::TypeStore& types, sema::TypeId type, support::Span span,
+                               llvm::BasicBlock::iterator where);
+
   // A file-scope object. `DIGlobalVariableExpression` is the only form of global
   // debug information LLVM has: a `GlobalVariable` with no expression is a symbol
   // the debugger cannot name, so `-g` on a file that declares constants would
@@ -105,6 +115,11 @@ private:
   // pointee is *the same* node the pointee has on its own. Keyed on the store's
   // id, which is the only thing that makes two spellings one type.
   [[nodiscard]] llvm::DIType* debugType(const sema::TypeStore& types, sema::TypeId id);
+  // One binding record: the storage, the name, the language's type, and the
+  // position. Shared so that the two spellings of "a binding" above cannot drift
+  // -- a parameter and a local have to appear to a debugger the same way.
+  void declareAt(llvm::Value& storage, std::string_view name, const sema::TypeStore& types,
+                 sema::TypeId type, support::Span span, llvm::BasicBlock::iterator where);
   // The element list of a `DISubroutineType`: element 0 is the return type, the
   // rest are the parameters, and a variadic function ends with a null entry --
   // DWARF's marker for `...`. One function because two call sites build it (a

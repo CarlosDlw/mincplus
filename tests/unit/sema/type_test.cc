@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,6 +81,130 @@ TEST(TypeStoreTest, AFunctionTypeIsIdentifiedByItsSignature) {
   EXPECT_EQ(types.spelling(first), "fn i32()");
 }
 
+TEST(TypeStoreTest, TheCountIsPartOfTheIdentity) {
+  TypeStore types;
+  const TypeId four = types.arrayOf(kTypeI32, 4);
+  ASSERT_TRUE(four.valid());
+  // Structural interning, with the count inside the structure: two `[4]i32` are
+  // one type, and a different count is a different type -- the decision every
+  // other property of an array rests on (`arrays.md` decision 1).
+  EXPECT_EQ(four, types.arrayOf(kTypeI32, 4));
+  EXPECT_NE(four, types.arrayOf(kTypeI32, 8));
+  EXPECT_NE(four, types.arrayOf(kTypeU32, 4));
+  EXPECT_NE(four, kTypeI32);
+  EXPECT_TRUE(types.isArray(four));
+  EXPECT_TRUE(types.isAggregate(four));
+  EXPECT_EQ(types.countOf(four), 4u);
+  EXPECT_EQ(types.elementOf(four), kTypeI32);
+  // What an array is not: not a scalar, not a pointer, not deferred, and it has
+  // no pointee for `pointeeOf` to answer with.
+  EXPECT_FALSE(types.isScalar(four));
+  EXPECT_FALSE(types.isPointer(four));
+  EXPECT_FALSE(types.isDeferred(four));
+  EXPECT_EQ(types.pointeeOf(four), kInvalidType);
+  // The canonical spelling is what a reader can type back, so the count is
+  // written and the element is spelled by its own rule.
+  EXPECT_EQ(types.spelling(four), "[4]i32");
+  EXPECT_EQ(types.spelling(types.arrayOf(types.arrayOf(kTypeI32, 3), 2)), "[2][3]i32");
+  EXPECT_EQ(types.spelling(types.arrayOf(types.pointerTo(kTypeI32), 4)), "[4]*i32");
+  EXPECT_EQ(types.spelling(types.pointerTo(four)), "*[4]i32");
+  // A pointer to an array and an array of pointers are two types, which is the
+  // distinction C's declarator syntax is famous for losing.
+  EXPECT_NE(types.pointerTo(four), types.arrayOf(types.pointerTo(kTypeI32), 4));
+}
+
+TEST(TypeStoreTest, TheCountIsAValueAndNotASpelling) {
+  TypeStore types;
+  // The count reaches the store already folded, so the store never sees how it
+  // was written: `[16]i32`, `[0x10]i32` and a future `[N]i32` with `const N = 16`
+  // are one call with one argument (`arrays.md` decision 19). If this were a
+  // string, two spellings of one count would be two types, and the identity the
+  // whole compiler compares would depend on how a reader typed a number.
+  const TypeId sixteen = types.arrayOf(kTypeI32, 16);
+  EXPECT_EQ(sixteen, types.arrayOf(kTypeI32, 0x10));
+  EXPECT_EQ(types.countOf(sixteen), 16u);
+  EXPECT_EQ(types.spelling(sixteen), "[16]i32");
+}
+
+TEST(TypeStoreTest, AnArrayElementMustBeAnObject) {
+  TypeStore types;
+  // Objects: an element can be stored, copied and addressed.
+  EXPECT_TRUE(types.arrayOf(kTypeI32, 4).valid());
+  EXPECT_TRUE(types.arrayOf(kTypeStr, 2).valid());
+  EXPECT_TRUE(types.arrayOf(types.pointerTo(kTypeI32), 4).valid());
+  EXPECT_TRUE(types.arrayOf(types.arrayOf(kTypeI32, 2), 3).valid());
+  EXPECT_TRUE(types.arrayOf(kTypeBool, 8).valid());
+  // And not objects: `void` and `!` produce no value, a function is not an
+  // object, the poison propagates instead of becoming an array, and a *deferred*
+  // literal has no width -- which is the one `isObject` and `isScalar` answer
+  // differently on purpose (`arrays.md` decision 21).
+  EXPECT_FALSE(types.arrayOf(kTypeVoid, 4).valid());
+  EXPECT_FALSE(types.arrayOf(kTypeNever, 4).valid());
+  EXPECT_FALSE(types.arrayOf(kTypeError, 4).valid());
+  EXPECT_FALSE(types.arrayOf(kTypeIntLiteral, 4).valid());
+  EXPECT_FALSE(types.arrayOf(kTypeFloatLiteral, 4).valid());
+  EXPECT_FALSE(types.arrayOf(types.function(kTypeVoid, {}, false), 4).valid());
+  EXPECT_TRUE(types.isScalar(kTypeIntLiteral));
+  EXPECT_FALSE(types.isObject(kTypeIntLiteral));
+  // Zero is not a count. `[0]T` has no address and no size, and the language
+  // refuses it rather than defining one (`arrays.md` decision 5).
+  EXPECT_FALSE(types.arrayOf(kTypeI32, 0).valid());
+  EXPECT_EQ(types.countOf(kTypeI32), 0u); // and 0 is not a count
+  EXPECT_EQ(types.elementOf(kTypeI32), kInvalidType);
+}
+
+TEST(TypeStoreTest, ATypeWhoseSizeIsNotANumberIsRefused) {
+  TypeStore types;
+  ASSERT_TRUE(types.arraySize(kTypeI32, 4).has_value());
+  EXPECT_EQ(*types.arraySize(kTypeI32, 4), 16u);
+  // The one checked multiply: a product that does not fit `size_t` is refused at
+  // the count, so no layout, `alloca` or `memcpy` length later has to defend
+  // against a wrapped number (`arrays.md` decision 20).
+  const std::uint64_t everything = std::numeric_limits<std::uint64_t>::max();
+  EXPECT_FALSE(types.arraySize(kTypeI64, everything).has_value());
+  EXPECT_FALSE(types.arrayOf(kTypeI64, everything).valid());
+  // A nested count overflows the same way, and the inner type is already built
+  // and valid when it does.
+  const TypeId small = types.arrayOf(kTypeI64, 2);
+  ASSERT_TRUE(small.valid());
+  EXPECT_EQ(*types.arraySize(kTypeI64, 3), 24u);
+  EXPECT_FALSE(types.arraySize(small, everything).has_value());
+  // And the largest product that does fit is accepted: the bound is the bound.
+  EXPECT_EQ(*types.arraySize(kTypeU8, everything), std::numeric_limits<std::size_t>::max());
+}
+
+TEST(TypeStoreTest, ArrayLayoutFollowsTheElement) {
+  const std::optional<TargetInfo> sysvTarget = targetFromName(kTripleLinuxAmd64);
+  ASSERT_TRUE(sysvTarget.has_value());
+  TypeStore types{*sysvTarget};
+  const TypeId ints = types.arrayOf(kTypeI32, 4);
+  ASSERT_TRUE(ints.valid());
+  EXPECT_EQ(types.sizeOf(ints), 16u);
+  EXPECT_EQ(types.alignOf(ints), 4u);
+  // Three bytes of `u8` occupy three bytes: the alignment is the *element's*, so
+  // a `[3]u8` inside a future `struct` is three bytes and not a word of padding.
+  const TypeId bytes = types.arrayOf(kTypeU8, 3);
+  EXPECT_EQ(types.sizeOf(bytes), 3u);
+  EXPECT_EQ(types.alignOf(bytes), 1u);
+  EXPECT_EQ(types.sizeOf(types.arrayOf(kTypeBool, 8)), 8u);
+  EXPECT_EQ(types.alignOf(types.arrayOf(kTypeBool, 8)), 1u);
+  // Nesting multiplies the size and keeps the innermost alignment.
+  const TypeId grid = types.arrayOf(types.arrayOf(kTypeI32, 3), 2);
+  EXPECT_EQ(types.sizeOf(grid), 24u);
+  EXPECT_EQ(types.alignOf(grid), 4u);
+  // A pointer element: the count times the pointer, aligned like one.
+  EXPECT_EQ(types.sizeOf(types.arrayOf(types.pointerTo(kTypeI32), 4)), 32u);
+  EXPECT_EQ(types.alignOf(types.arrayOf(types.pointerTo(kTypeI32), 4)), 8u);
+  // The element's *complete* size, padding included: an `f80` occupies its
+  // 16-byte slot, so two of them are 32 bytes and not 20 (`arrays.md` decision
+  // 6). Getting this wrong is a wrong answer, not a crash.
+  const TypeId wides = types.arrayOf(kTypeF80, 2);
+  EXPECT_EQ(types.sizeOf(wides), 32u);
+  EXPECT_EQ(types.alignOf(wides), 16u);
+  // A `str` is a pointer, so an array of them is an array of pointers.
+  EXPECT_EQ(types.sizeOf(types.arrayOf(kTypeStr, 2)), 16u);
+}
+
 TEST(TypeStoreTest, SizesFollowTheTarget) {
   const std::optional<TargetInfo> sysvTarget = targetFromName(kTripleLinuxAmd64);
   ASSERT_TRUE(sysvTarget.has_value());
@@ -97,6 +223,140 @@ TEST(TypeStoreTest, SizesFollowTheTarget) {
   // the specifier reader resolves, not the types themselves.
   EXPECT_EQ(windows.sizeOf(kTypeI64), 8u);
   EXPECT_EQ(windows.target().longBits, 32u);
+}
+
+TEST(TypeSpecTest, AnArrayTypeReadsInsideOut) {
+  TypeStore types;
+  TypePart star;
+  star.isStar = true;
+  TypePart four;
+  four.isArray = true;
+  four.hasCount = true;
+  four.count = 4;
+  TypePart three = four;
+  three.count = 3;
+  TypePart two = four;
+  two.count = 2;
+  TypePart word;
+  word.word = "i32";
+
+  // `[4]i32` is the element type under the count, and the count is a *value*.
+  const TypePart one[] = {four, word};
+  const TypeSpecResult array = readType(one, types);
+  ASSERT_TRUE(array.ok) << array.message;
+  EXPECT_EQ(array.type, types.arrayOf(kTypeI32, 4));
+
+  // `*[4]i32`: the array is one object and the pointer points at all of it.
+  const TypePart pointerToArray[] = {star, four, word};
+  const TypeSpecResult pointer = readType(pointerToArray, types);
+  ASSERT_TRUE(pointer.ok) << pointer.message;
+  EXPECT_EQ(pointer.type, types.pointerTo(types.arrayOf(kTypeI32, 4)));
+  EXPECT_EQ(types.spelling(pointer.type), "*[4]i32");
+
+  // `[4]*i32`: four pointers. One `*` moved across the count is the difference,
+  // and it is the difference C's declarator syntax is famous for losing.
+  const TypePart arrayOfPointers[] = {four, star, word};
+  const TypeSpecResult pointers = readType(arrayOfPointers, types);
+  ASSERT_TRUE(pointers.ok) << pointers.message;
+  EXPECT_EQ(pointers.type, types.arrayOf(types.pointerTo(kTypeI32), 4));
+  EXPECT_EQ(types.spelling(pointers.type), "[4]*i32");
+  EXPECT_NE(pointers.type, pointer.type);
+
+  // Nesting: the part nearest the words is the innermost, so `[2][3]i32` is two
+  // arrays of three and the size is the product.
+  const TypePart nested[] = {two, three, word};
+  const TypeSpecResult grid = readType(nested, types);
+  ASSERT_TRUE(grid.ok) << grid.message;
+  EXPECT_EQ(types.spelling(grid.type), "[2][3]i32");
+  EXPECT_EQ(types.sizeOf(grid.type), 24u);
+
+  // A constructor written *after* the words is one mistake, and the sentence
+  // names the side it belongs on -- the same refusal a `*i32` after the type
+  // earns, one part over.
+  const TypePart after[] = {word, four};
+  const TypeSpecResult wrongSide = readType(after, types);
+  EXPECT_FALSE(wrongSide.ok);
+  EXPECT_NE(wrongSide.message.find("`[N]` before the element type"), std::string::npos)
+      << wrongSide.message;
+
+  // A constructor with nothing under it names what is missing, rather than
+  // reporting "expected a type name" about a position the reader can see is a
+  // pointer or an array.
+  const TypePart noElement[] = {four};
+  const TypeSpecResult bare = readType(noElement, types);
+  EXPECT_FALSE(bare.ok);
+  EXPECT_NE(bare.message.find("expected the element type of the array"), std::string::npos)
+      << bare.message;
+  const TypePart noPointee[] = {star};
+  const TypeSpecResult bareStar = readType(noPointee, types);
+  EXPECT_FALSE(bareStar.ok);
+  EXPECT_NE(bareStar.message.find("expected the type the pointer points to"), std::string::npos)
+      << bareStar.message;
+}
+
+TEST(TypeSpecTest, EachArrayRefusalNamesWhatToWrite) {
+  TypeStore types;
+  TypePart word;
+  word.word = "i32";
+  TypePart group;
+  group.isArray = true;
+  TypePart letters;
+  letters.word = "void";
+
+  // `[]T`: the reserved slice spelling is its own sentence, and it says what to
+  // write today (`arrays.md` decision 17).
+  const TypePart slice[] = {group, word};
+  const TypeSpecResult reserved = readType(slice, types);
+  EXPECT_FALSE(reserved.ok);
+  EXPECT_NE(reserved.message.find("reserved spelling of a slice"), std::string::npos)
+      << reserved.message;
+  EXPECT_NE(reserved.message.find("write `[N]T`"), std::string::npos) << reserved.message;
+
+  // `[0]T`: written, and impossible. Distinct from `[]` above -- which is why the
+  // part carries `hasCount` and not just a number.
+  TypePart zero = group;
+  zero.hasCount = true;
+  zero.count = 0;
+  const TypePart emptyArray[] = {zero, word};
+  const TypeSpecResult none = readType(emptyArray, types);
+  EXPECT_FALSE(none.ok);
+  EXPECT_NE(none.message.find("count of an array type is at least 1"), std::string::npos)
+      << none.message;
+
+  // A count that no 64-bit number can hold. The fold happens where the spelling
+  // is, and the part carries the fact that it failed.
+  TypePart huge = group;
+  huge.hasCount = true;
+  huge.countOverflow = true;
+  const TypePart tooBig[] = {huge, word};
+  const TypeSpecResult wide = readType(tooBig, types);
+  EXPECT_FALSE(wide.ok);
+  EXPECT_NE(wide.message.find("has to be a number that fits in 64 bits"), std::string::npos)
+      << wide.message;
+
+  // An element that cannot be stored: `void`, `!` and a function have no object
+  // representation, so an array of one has no elements.
+  TypePart four = group;
+  four.hasCount = true;
+  four.count = 4;
+  const TypePart ofVoid[] = {four, letters};
+  const TypeSpecResult element = readType(ofVoid, types);
+  EXPECT_FALSE(element.ok);
+  EXPECT_NE(element.message.find("cannot be an array element"), std::string::npos)
+      << element.message;
+
+  // A size that is not a number: the array's own bytes have to fit, and the
+  // refusal names the count it could not honour (`arrays.md` decision 20).
+  TypePart everything = group;
+  everything.hasCount = true;
+  everything.count = std::numeric_limits<std::uint64_t>::max();
+  TypePart wide64;
+  wide64.word = "i64";
+  const TypePart impossible[] = {everything, wide64};
+  const TypeSpecResult hugeArray = readType(impossible, types);
+  EXPECT_FALSE(hugeArray.ok);
+  EXPECT_NE(hugeArray.message.find("larger than this target can address"), std::string::npos)
+      << hugeArray.message;
 }
 
 TEST(TypeSpecTest, TheBottomTypeIsAWholeRunOfItsOwn) {

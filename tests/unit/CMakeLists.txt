@@ -75,6 +75,7 @@ minc_add_executable(minc_unit_tests
     parse/syntax_kind_test.cc
     parse/parser_test.cc
     parse/statement_test.cc
+    parse/initializer_test.cc
     parse/error_codes_test.cc
     parse/examples_parse_test.cc
     syntax/tree_test.cc
@@ -96,7 +97,8 @@ minc_add_executable(minc_unit_tests
     sema/never_test.cc
     sema/flow_test.cc
     sema/store_test.cc
-    sema/global_test.cc
+    sema/array_test.cc
+  sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
     ir/global_test.cc

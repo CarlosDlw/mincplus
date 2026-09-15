@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
 
 #include "lex/token_kind.h"
 #include "pp/pp_token.h"
@@ -42,6 +43,19 @@ public:
   [[nodiscard]] support::Span spanOfCurrent() const override {
     const std::size_t index = significantIndex();
     return index < tokens_.size() ? tokens_[index].span() : support::Span{};
+  }
+  [[nodiscard]] std::string_view textOf(std::uint32_t n) const override {
+    // Empty, and deliberately: a `PPToken` stores where its spelling *is* and not
+    // the bytes (`pp_token.h`, `PPToken::span`), and the file it points at can be
+    // a header this source never held. The real parser input is the
+    // preprocessed *text* -- `preprocessor.cc` builds a `lex::TokenStream` over it
+    // and `builder.cc` adapts that -- so the source that answers this is the one
+    // whose tokens tile the text. Answering empty here is the contract's
+    // documented "this source does not have it", and the grammar's use of it
+    // fails safe: `[_]` simply does not match, and the count is refused rather
+    // than misread.
+    static_cast<void>(n);
+    return {};
   }
 
 private:

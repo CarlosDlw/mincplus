@@ -22,6 +22,15 @@
 
 namespace minc::parse {
 
+// The one grammar word whose *spelling* is the rule: `_`, the count an array
+// initializer infers from its own elements (`arrays.md`). It is an `Identifier`
+// like every name, so `[n]` and `[_]` are the same token kind and the text is
+// what tells them apart. It lives here, beside the kinds, because both readers
+// need it -- the grammar that accepts the spelling and the type reader that
+// decides where it is legal -- and a spelling repeated in two stages is a
+// spelling that can disagree with itself.
+inline constexpr std::string_view kInferredCount = "_";
+
 // Token kinds are all below this; node kinds are all at or above it. It is 256
 // rather than "just past the last token" so that adding token kinds never
 // renumbers a node kind -- numbers that appear in tests and golden files.
@@ -99,6 +108,14 @@ enum class SyntaxKind : std::uint16_t {
   // expression of its own. Children are `base`, `[`, `index`, `]`.
   IndexExpr,
   ArgList,
+  // `[1, 2, 3]` and `[0; 64]`: the list form, whose type its consumer decides.
+  // Children are `[`, the elements (or the fill's value and count), and `]`.
+  ArrayLiteral,
+  // `[3]i32{1, 2, 3}`: a `Type` node and the braced elements. Two children carry
+  // the whole meaning, so the two forms are two kinds and not one kind with a
+  // flag -- a reader asks for the type *by name* rather than remembering when the
+  // first child happens to be one.
+  TypedInitializer,
 
   // Reserved: names are fixed now, the syntax that produces them is not.
   MacroCall,

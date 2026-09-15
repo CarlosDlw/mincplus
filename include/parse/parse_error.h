@@ -64,6 +64,18 @@ enum class ParseErrorCode : std::uint8_t {
   // before it. The marker ends the list, so a list with anything after it has no
   // meaning to give the arguments that follow.
   VariadicPosition,
+  // `[` in a type position with no count inside it, or with something that is not
+  // a literal number. The count is how many elements there are, and the shape
+  // that decides it is the one the whole type's identity rests on.
+  //
+  // `[]` -- the two brackets with *nothing* between them -- is deliberately not
+  // this code: it is the reserved spelling of a slice, so it parses and is
+  // refused a stage later with a sentence about slices (`arrays.md` decision 17).
+  ExpectedArrayCount,
+  // `[N` with the closing bracket missing. Reported at the point the bracket
+  // should have been, and the group is closed anyway so one missing `]` does not
+  // turn the rest of the declaration into a second diagnostic.
+  ExpectedArrayCountClose,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

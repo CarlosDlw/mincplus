@@ -69,9 +69,13 @@ first-class types; the examples use the primitive names. See
       [The bottom type](/language/never)
 - [ ] Pointers — deliberately complete and C-level, see
       [Pointers and raw memory](#pointers-and-raw-memory)
-- [ ] Fixed-size arrays — `[N]T` with the count part of the type, no decay, and
-      two literal forms (`[1, 2, 3]` typed by its context, `[3]i32{1, 2, 3}`
-      complete); **designed**, with the record in `docs/architectures/arrays.md`
+- [x] Fixed-size arrays — `[N]T` with the count part of the type, no decay,
+      value semantics, and both literal forms (`[1, 2, 3]` typed by its context,
+      `[3]i32{1, 2, 3}` complete, `[_]u8{...}` with the count from the elements,
+      `[64]u8{0; 64}` as a fill). Element access, the constant bounds check and
+      the by-value copy are in; a **file-scope** array initializer is not yet —
+      `const TABLE = [...]` waits for the aggregate value record
+      (`docs/architectures/arrays.md`, step 8)
 - [ ] Slices (pointer + length) `[]T` — **reserved**: the spelling parses today and
       is refused with a sentence, so no `.mx` file can mean something else by it in
       the meantime (`docs/architectures/arrays.md` decision 17)
@@ -215,9 +219,9 @@ Everything below is what lands on top of that model. See
 
 - [x] Address-of `&` and dereference `*`
 - [ ] Member access through a pointer
-- [ ] Arrays and `&a[0]` — **decided: there is no implicit decay.** An array is
-      a value and a pointer is named (`&a[0]`, `&a`), so `sizeof` cannot lie
-      about a parameter and a bound can be checked
+- [x] Arrays and `&a[0]` — **there is no implicit decay.** An array is a value
+      and a pointer is named (`&a[0]` is a `*i32`, `&a` is a `*[4]i32`), so
+      `sizeof` cannot lie about a parameter and a bound can be checked
 - [x] Raw loads and stores through a pointer; type punning still to come
 
 **Arithmetic and comparison**

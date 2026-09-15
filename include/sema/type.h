@@ -74,6 +74,9 @@ enum class TypeKind : std::uint8_t {
   // Reserved. The kind exists so a switch written today keeps compiling when the
   // syntax that builds one lands.
   Pointer,
+  // `[N]T`: an object of `count` elements, each of the element type. The count is
+  // part of the *identity*, so `[4]i32` and `[8]i32` are two types -- which is
+  // the whole decision and not a detail (`arrays.md` decision 1).
   Array,
 };
 
@@ -85,8 +88,15 @@ struct Type {
   bool isSigned = false;
   // Int/Float: width in bits. `f80` is 80. 0 for everything else.
   std::uint16_t bits = 0;
-  // Reserved: the pointee of a `Pointer`, the element of an `Array`.
+  // Pointer: the pointee. Array: the element type. The same field because the
+  // two are never both meaningful -- a type is one or the other -- and a second
+  // field would be one more thing every switch has to remember is dead.
   TypeId pointee;
+  // Array: the element count, always >= 1. `std::uint64_t` because the count is
+  // a folded value that must be comparable without narrowing first: it is read
+  // once, by the type spec reader, from a literal the source wrote
+  // (`arrays.md` decisions 19 and 20).
+  std::uint64_t count = 0;
   // Function: what it returns, and its parameters, which live in the store's
   // parameter array at `[firstParam, firstParam + paramCount)`.
   TypeId returnType;

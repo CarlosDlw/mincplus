@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -83,6 +84,12 @@ std::uint64_t TypeStore::hashOf(const Type& type) const {
   hash = mix(hash, type.isSigned ? 1U : 0U);
   hash = mix(hash, type.bits);
   hash = mix(hash, type.pointee.index);
+  // The count is part of the identity, so it is part of the hash. A count left
+  // out here would put `[4]i32` and `[8]i32` in one bucket and `equal` would
+  // have to sort them out -- which is fine, but a store whose *hash* says two
+  // types are the same is a store one `equal` bug away from handing out the
+  // wrong `TypeId` (`arrays.md` decision 19).
+  hash = mix(hash, type.count);
   hash = mix(hash, type.returnType.index);
   hash = mix(hash, type.paramCount);
   // The parameter list is part of the structure; without it every `fn f(a)` and
@@ -96,7 +103,8 @@ std::uint64_t TypeStore::hashOf(const Type& type) const {
 
 bool TypeStore::equal(const Type& a, const Type& b) const {
   if (a.kind != b.kind || a.isSigned != b.isSigned || a.bits != b.bits || a.pointee != b.pointee ||
-      a.returnType != b.returnType || a.name != b.name || a.paramCount != b.paramCount) {
+      a.count != b.count || a.returnType != b.returnType || a.name != b.name ||
+      a.paramCount != b.paramCount) {
     return false;
   }
   for (std::uint32_t i = 0; i < a.paramCount; ++i) {
@@ -151,6 +159,38 @@ TypeId TypeStore::pointerTo(TypeId pointee) {
   Type type;
   type.kind = TypeKind::Pointer;
   type.pointee = pointee;
+  return intern(type);
+}
+
+std::optional<std::size_t> TypeStore::arraySize(TypeId element, std::uint64_t count) const {
+  if (count == 0 || !isObject(element)) {
+    return std::nullopt;
+  }
+  const std::size_t size = sizeOf(element);
+  // An object type with no bytes is not an element: `void`, `!`, a function and
+  // the poison have no object representation, and an array of one would be an
+  // array whose every element has no storage.
+  if (size == 0) {
+    return std::nullopt;
+  }
+  if (count > std::numeric_limits<std::size_t>::max() / size) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(count) * size;
+}
+
+TypeId TypeStore::arrayOf(TypeId element, std::uint64_t count) {
+  // Both rules are asked *before* the intern, so an ill-formed array type never
+  // enters the store: a type the rest of the pipeline can only misunderstand is
+  // worse than a refusal here, and the caller has the count's spelling and its
+  // node to point a sentence at.
+  if (!arraySize(element, count).has_value()) {
+    return kInvalidType;
+  }
+  Type type;
+  type.kind = TypeKind::Array;
+  type.pointee = element;
+  type.count = count;
   return intern(type);
 }
 
@@ -264,6 +304,36 @@ bool TypeStore::isScalar(TypeId id) const {
 bool TypeStore::isPointer(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Pointer;
 }
+bool TypeStore::isArray(TypeId id) const {
+  return known(id) && get(id).kind == TypeKind::Array;
+}
+bool TypeStore::isAggregate(TypeId id) const {
+  return isArray(id);
+}
+bool TypeStore::isObject(TypeId id) const {
+  if (!known(id)) {
+    return false;
+  }
+  const TypeKind kind = get(id).kind;
+  if (kind == TypeKind::Array) {
+    return true;
+  }
+  // `isScalar` minus the deferred literals: they are scalar-*shaped* and have no
+  // width yet, so nothing may store one and nothing may be an array of one.
+  return isScalar(id) && !isDeferred(id);
+}
+TypeId TypeStore::elementOf(TypeId id) const {
+  if (!isArray(id)) {
+    return kInvalidType;
+  }
+  return get(id).pointee;
+}
+std::uint64_t TypeStore::countOf(TypeId id) const {
+  if (!isArray(id)) {
+    return 0;
+  }
+  return get(id).count;
+}
 bool TypeStore::isVoidPointer(TypeId id) const {
   if (!known(id)) {
     return false;
@@ -324,7 +394,11 @@ std::string TypeStore::spelling(TypeId id) const {
     // name -- see `parser.md`'s type-position rule and `memory.md`, *The surface*.
     return "*" + spelling(type.pointee);
   case TypeKind::Array:
-    return spelling(type.pointee) + "[]";
+    // The count is *written*, because the canonical spelling is what a reader
+    // can type back: `[4]i32` is the type, and `i32[]` was never a spelling this
+    // language had. The number is the folded value, so `[0x10]i32` prints as
+    // `[16]i32` -- one type, one name (`arrays.md` decision 19).
+    return "[" + std::to_string(type.count) + "]" + spelling(type.pointee);
   case TypeKind::Function: {
     std::string text = "fn " + spelling(type.returnType) + "(";
     const std::span<const TypeId> params = paramsOf(id);
@@ -365,13 +439,19 @@ std::size_t TypeStore::sizeOf(TypeId id) const {
     // pointer's. It is `void` that has no object representation, not a pointer
     // to one.
     return target_.pointerBits / 8U;
+  case TypeKind::Array:
+    // The element's **complete** size, padding included, times the count -- the
+    // rule that makes `p + 1` land on the next element and `sizeof(TABLE)` agree
+    // with the allocator (`arrays.md` decision 6). It cannot overflow: `arrayOf`
+    // refused a product that would not fit, so this multiply is the same number
+    // the store already computed.
+    return static_cast<std::size_t>(type.count) * sizeOf(type.pointee);
   case TypeKind::Error:
   case TypeKind::Void:
   case TypeKind::Never:
   case TypeKind::Function:
   case TypeKind::IntLiteral:
   case TypeKind::FloatLiteral:
-  case TypeKind::Array:
     return 0;
   }
   return 0;
@@ -393,6 +473,11 @@ std::size_t TypeStore::alignOf(TypeId id) const {
   case TypeKind::Str:
   case TypeKind::Pointer:
     return target_.pointerBits / 8U;
+  case TypeKind::Array:
+    // The element's alignment, not the object's size: `[3]i8` is aligned like an
+    // `i8`, and aligning it like a machine word would make every `[3]i8` field of
+    // a future `struct` three bytes of padding wider than the C one.
+    return alignOf(type.pointee);
   default:
     return 0;
   }

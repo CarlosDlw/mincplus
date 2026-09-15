@@ -15,7 +15,7 @@ namespace {
 // compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' code tables.
-constexpr std::array<SemaErrorCodeInfo, 39> kSemaErrorCodeInfos{{
+constexpr std::array<SemaErrorCodeInfo, 42> kSemaErrorCodeInfos{{
     {SemaErrorCode::UnknownType, "sema-unknown-type", false},
     {SemaErrorCode::MalformedType, "sema-malformed-type", false},
     {SemaErrorCode::TypeNotValue, "sema-type-not-value", false},
@@ -48,12 +48,15 @@ constexpr std::array<SemaErrorCodeInfo, 39> kSemaErrorCodeInfos{{
     {SemaErrorCode::AddressOfNonLvalue, "sema-address-of-non-lvalue", false},
     {SemaErrorCode::AddressOfConst, "sema-address-of-const", false},
     {SemaErrorCode::IndexNotInteger, "sema-index-not-integer", false},
+    {SemaErrorCode::IndexOutOfRange, "sema-index-out-of-range", false},
     {SemaErrorCode::PointerMismatch, "sema-pointer-mismatch", false},
     {SemaErrorCode::PointerInteger, "sema-pointer-integer", false},
     {SemaErrorCode::GlobalNotConstant, "sema-global-not-constant", false},
     {SemaErrorCode::GlobalCycle, "sema-global-cycle", false},
     {SemaErrorCode::LimitTypes, "sema-limit-types", false},
     {SemaErrorCode::UnreachableCode, "sema-unreachable-code", true},
+    {SemaErrorCode::LiteralTypeUnknown, "sema-literal-type-unknown", false},
+    {SemaErrorCode::InitializerShape, "sema-initializer-shape", false},
     {SemaErrorCode::ImplicitConversion, "sema-implicit-conversion", true},
 }};
 // NOLINTEND(readability-identifier-naming)

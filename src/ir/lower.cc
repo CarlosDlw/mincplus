@@ -420,14 +420,24 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
   const std::uint64_t key = defKey(def);
   const auto existing = locals_.find(key);
   if (existing != locals_.end()) {
-    return existing->second;
+    if (auto* slot = llvm::dyn_cast<llvm::AllocaInst>(existing->second)) {
+      return slot;
+    }
+    // A binding whose storage is not a slot at all: an aggregate parameter, whose
+    // storage is the pointer it arrived as (`arrays.md` decision 13). Nothing
+    // asks for a slot for one -- `function.cc` registers it, and no `let` can name
+    // the same def -- so this is a bug in this compiler rather than a statement
+    // about the program. Reported rather than cast away, because a null slot
+    // would turn it into a crash two stages later.
+    fatal(spanOf(at), IRDiagnosticCode::Internal,
+          "a frame slot was asked for a binding whose storage is not one");
+    return nullptr;
   }
   // A type this stage cannot map has no size and so no slot. `llvmType` has
   // already refused it (`ir-unsupported-type` -- `f80` on a target with no x87
-  // format, an array before its syntax exists), and an `alloca` built from the
-  // null it returns would be a crash where the reader was just handed a
-  // diagnostic. `locals_` stays unset, so the binding has no slot rather than a
-  // wrong one.
+  // format), and an `alloca` built from the null it returns would be a crash
+  // where the reader was just handed a diagnostic. `locals_` stays unset, so the
+  // binding has no slot rather than a wrong one.
   llvm::Type* slotType = storageType(type);
   if (slotType == nullptr) {
     return nullptr;
@@ -452,6 +462,26 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
     debug_->declareBinding(*alloca, name, types_, type, spanOf(at));
   }
   return alloca;
+}
+
+llvm::AllocaInst* Lowering::argumentCopy(sema::TypeId type, const Value& value, ast::AstId at) {
+  llvm::Type* slotType = storageType(type);
+  if (slotType == nullptr) {
+    return nullptr;
+  }
+  // The slot lives in the entry block, like every other frame slot, and for the
+  // same reason: an `alloca` in a loop grows the frame on every iteration.
+  if (entryBlock_ != nullptr) {
+    allocaBuilder_.SetInsertPoint(entryBlock_, entryBlock_->begin());
+  }
+  locate(at);
+  llvm::AllocaInst* copy = allocaBuilder_.CreateAlloca(slotType, nullptr, "arg.copy");
+  copy->setAlignment(llvm::Align(alignmentOf(type)));
+  // The *store* happens where the call is, and not in the entry block: the copy's
+  // value comes from an expression that has to be evaluated in order, and moving
+  // it to the frame would move when the program does the work.
+  storePlace(Place{copy, type}, value, ast::AstId{});
+  return copy;
 }
 
 // --- the unit ------------------------------------------------------------------

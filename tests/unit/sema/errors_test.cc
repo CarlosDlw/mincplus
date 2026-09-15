@@ -528,6 +528,16 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       // one shape that has no order to evaluate in.
       {"let a: i32 = 1;\nlet b: i32 = a;\nfn i32 main() { return b; }\n", false},
       {"const a: i32 = b;\nconst b: i32 = a;\nfn i32 main() { return a; }\n", false},
+      // An array subscript whose index is a constant the type can rule out. A
+      // *runtime* index is not this code and not an error at all: it is the
+      // access's extent, which the checked build guards (`arrays.md` decision 7).
+      {"fn i32 f(a: [4]i32) { return a[7]; }\nfn i32 main() { return 0; }\n", false},
+      // The two initializer codes, one input each. The list form has no type of
+      // its own, and the typed form's shape can disagree with its own type -- in
+      // three ways, of which the length is the one that also *is* the common
+      // mistake: a list that is one element short of the type.
+      {"fn i32 main() { let a = [1, 2, 3]; return 0; }\n", false},
+      {"fn i32 main() { let b = [3]i32{1, 2}; return 0; }\n", false},
   };
 
   for (const Case& one : cases) {

@@ -138,7 +138,8 @@ std::span<const std::string_view> typeNames() {
   return names;
 }
 
-TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types) {
+TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
+                        std::optional<std::uint64_t> inferredCount) {
   // `!` first, because it is the one accepted spelling that is not a run of
   // words under some stars: it is a whole type on its own, and anything beside
   // it is a spelling with no meaning to give.
@@ -156,26 +157,41 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types) {
     }
   }
 
+  // The constructors, then the words. Both constructors are prefixes over
+  // everything to their right, so one rule reads both orders: `*[4]i32` is a
+  // pointer to an array, `[4]*i32` is an array of pointers, and neither needs a
+  // grammar of its own (`arrays.md`, *The surface*).
+  std::vector<const TypePart*> constructors;
+  constructors.reserve(parts.size());
   std::vector<std::string_view> words;
   words.reserve(parts.size());
-  std::size_t stars = 0;
-  std::size_t i = 0;
-  for (; i < parts.size(); ++i) {
-    if (!parts[i].isStar) {
-      break;
+  bool sawWord = false;
+  for (const TypePart& part : parts) {
+    if (part.isStar || part.isArray) {
+      if (sawWord) {
+        // A constructor *after* the words: `i32*` and `i32[4]` are the two
+        // shapes, and both are one mistake with one fix. Refused here rather than
+        // left to produce "`[` is not a type" about a token the parser already
+        // accepted as part of the type, because the reader's intent is not in
+        // doubt -- only the side the constructor belongs on.
+        return fail(part.isArray
+                        ? "an array type is written `[N]T`, with the `[N]` before the element type"
+                        : "a pointer type is written `*T`, with the `*` before the type it "
+                          "points to");
+      }
+      constructors.push_back(&part);
+      continue;
     }
-    ++stars;
+    sawWord = true;
+    words.push_back(part.word);
   }
-  for (; i < parts.size(); ++i) {
-    if (parts[i].isStar) {
-      // A `*` between words or after them: `i32*` and `*i32*` are the two
-      // shapes, and both are one mistake with one fix. Refused here rather than
-      // left to produce "`*` is not a type" about a token the parser already
-      // accepted as part of the type, because the reader's intent is not in
-      // doubt -- only the side of the type the `*` belongs on.
-      return fail("a pointer type is written `*T`, with the `*` before the type it points to");
-    }
-    words.push_back(parts[i].word);
+  if (words.empty() && !constructors.empty()) {
+    // A constructor with nothing under it (`*`, `[4]`). The base reader would
+    // answer "expected a type name", which is true and does not say which one:
+    // the fix is to write the type the constructor is building around.
+    return fail(constructors.back()->isArray
+                    ? "expected the element type of the array: an array is written `[N]T`"
+                    : "expected the type the pointer points to: a pointer is written `*T`");
   }
 
   // Not `const`: the failure path returns it, and a const local would force a
@@ -184,15 +200,72 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types) {
   if (!base.ok) {
     return base;
   }
-  // Applied inside out: `**i32` is a pointer to a pointer to `i32`, and the
-  // innermost `*` is the one nearest the words.
+  if (!base.type.valid()) {
+    return ok(kInvalidType);
+  }
+  // Applied inside out: the constructor nearest the words is the innermost, so the
+  // list is walked in reverse. `**i32` is a pointer to a pointer to `i32`, and
+  // `[2][3]i32` is two arrays of three.
   TypeId result = base.type;
-  for (std::size_t n = 0; n < stars; ++n) {
-    result = types.pointerTo(result);
+  for (auto it = constructors.rbegin(); it != constructors.rend(); ++it) {
+    const TypePart& part = **it;
+    if (part.isStar) {
+      result = types.pointerTo(result);
+      if (!result.valid()) {
+        // The type budget, reported by the caller through the same check the base
+        // reader relies on: `ok` with an invalid id means "understood, but the
+        // store refused to intern it", and the caller owns that diagnostic.
+        return ok(kInvalidType);
+      }
+      continue;
+    }
+    // The array, and its four refusals. Each is named, because "invalid array
+    // type" is not something a reader can repair -- and each is refused *here*,
+    // in the stage that has the count and the element in hand, so no later stage
+    // ever meets an array whose size is not a number (`arrays.md` decisions 4, 5,
+    // 17, 20).
+    // The count, from the one of the three places it can come from: the source,
+    // or the initializer for a `_`. Checked in the order of "what was written",
+    // so a `[]` is never blamed on a missing initializer and a `[_]` never reads
+    // as a slice.
+    std::uint64_t count = part.count;
+    if (part.countInferred) {
+      if (!inferredCount.has_value()) {
+        return fail("`_` is the count an initializer takes from its own elements: "
+                    "`[_]i32{1, 2, 3}`. Here there is no initializer, so the count has to be "
+                    "written, as in `[3]i32`");
+      }
+      if (&part != constructors.front()) {
+        // Only the outermost, and the reason is structural: with an inner `_`
+        // each row of `[2][_]i32{...}` could count its own elements, and rows of
+        // different lengths are not a type.
+        return fail("only the outermost count of an initializer can be `_`: an inner `_` "
+                    "would let every row have its own length, and the rows of an array are "
+                    "one array");
+      }
+      count = *inferredCount;
+    } else if (!part.hasCount) {
+      return fail("`[]T` is the reserved spelling of a slice, which the language does not have "
+                  "yet: write `[N]T` for an array of N elements");
+    }
+    if (part.countOverflow) {
+      return fail("the count of an array type has to be a number that fits in 64 bits");
+    }
+    if (count == 0) {
+      return fail("the count of an array type is at least 1: an object of no elements has no "
+                  "address and no size");
+    }
+    if (!types.isObject(result)) {
+      return fail("`" + types.spelling(result) +
+                  "` cannot be an array element: an element has to be a type that can be "
+                  "stored");
+    }
+    if (!types.arraySize(result, count).has_value()) {
+      return fail("an array of " + std::to_string(count) + " `" + types.spelling(result) +
+                  "` is larger than this target can address");
+    }
+    result = types.arrayOf(result, count);
     if (!result.valid()) {
-      // The type budget, reported by the caller through the same check the base
-      // reader relies on: `ok` with an invalid id means "understood, but the
-      // store refused to intern it", and the caller owns that diagnostic.
       return ok(kInvalidType);
     }
   }

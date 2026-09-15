@@ -137,6 +137,12 @@ public:
 
   // --- diagnostics -----------------------------------------------------------
 
+  // Every error, for a test that has a *sentence* to look for and not a code:
+  // the sentences are what a reader repairs from, and a test that only checked
+  // the code would pass with a message that says the wrong thing.
+  [[nodiscard]] const std::vector<sema::SemaError>& errors() const {
+    return output_.errors;
+  }
   [[nodiscard]] std::vector<std::string> errorCodes() const {
     std::vector<std::string> out;
     for (const sema::SemaError& error : output_.errors) {
@@ -278,6 +284,19 @@ public:
   }
   [[nodiscard]] std::size_t accessCount() const {
     return typed().accesses().size();
+  }
+  // One access, as `provenance type extent`, or an empty string when the unit
+  // records none for that place. The extent is the field a pointer access leaves
+  // at 0 and an array subscript fills in, so this is the question the two askings
+  // of "how far can this go" are told apart by (`arrays.md` decision 26).
+  [[nodiscard]] std::string accessOf(std::string_view place) const {
+    for (const sema::AccessObligation& access : typed().accesses()) {
+      if (lowered().spellingOf(access.place) == place) {
+        return std::string(sema::toString(access.provenance)) + " " + store_.spelling(access.type) +
+               " " + std::to_string(access.extent);
+      }
+    }
+    return {};
   }
 
   [[nodiscard]] std::string dump() const {

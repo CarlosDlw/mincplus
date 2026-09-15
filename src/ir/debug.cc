@@ -244,17 +244,28 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
     types_.emplace(id.index, node);
     return node;
   }
+  case sema::TypeKind::Array: {
+    // `DW_TAG_array_type` with one `DISubrange`: the element, the count, and the
+    // size and alignment the language's own layout rule gives, read from the
+    // store like every other number in this file (`arrays.md` decision 6). A
+    // debugger that showed a different element count or a different size than the
+    // checker's would be showing a number the compiler does not use.
+    llvm::DIType* element = debugType(types, types.elementOf(id));
+    if (element == nullptr) {
+      return nullptr;
+    }
+    llvm::Metadata* subrange =
+        builder_.getOrCreateSubrange(0, static_cast<std::int64_t>(type.count));
+    node = builder_.createArrayType(static_cast<std::uint64_t>(types.sizeOf(id)) * 8,
+                                    static_cast<std::uint32_t>(types.alignOf(id)) * 8, element,
+                                    builder_.getOrCreateArray({subrange}));
+    break;
+  }
   case sema::TypeKind::IntLiteral:
   case sema::TypeKind::FloatLiteral:
     // A deferred literal cannot reach here: `run()` refuses it, because a
     // deferred type has no width to show anybody.
     return nullptr;
-  case sema::TypeKind::Array:
-    // Reserved until the syntax that builds one lands, and an unspecified type
-    // is the honest answer in the meantime: it has the language's spelling and no
-    // claim about a layout the language has not decided.
-    node = builder_.createUnspecifiedType(std::string(types.spelling(id)));
-    break;
   }
 
   if (node == nullptr) {
@@ -271,6 +282,21 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
 void DebugInfo::declareBinding(llvm::AllocaInst& alloca, std::string_view name,
                                const sema::TypeStore& types, sema::TypeId type,
                                support::Span span) {
+  // Right after the slot. `getIterator()` is `end()` when the alloca is the last
+  // instruction in the entry block, and `InsertPosition` accepts that: it is the
+  // position that means "trailing records of this block", which is a well-defined
+  // place in LLVM's new debug format and is where the record belongs.
+  declareAt(alloca, name, types, type, span, std::next(alloca.getIterator()));
+}
+
+void DebugInfo::declareParameterBinding(llvm::Argument& storage, std::string_view name,
+                                        const sema::TypeStore& types, sema::TypeId type,
+                                        support::Span span, llvm::BasicBlock::iterator where) {
+  declareAt(storage, name, types, type, span, where);
+}
+
+void DebugInfo::declareAt(llvm::Value& storage, std::string_view name, const sema::TypeStore& types,
+                          sema::TypeId type, support::Span span, llvm::BasicBlock::iterator where) {
   if (subprogram_ == nullptr || name.empty()) {
     return;
   }
@@ -294,13 +320,8 @@ void DebugInfo::declareBinding(llvm::AllocaInst& alloca, std::string_view name,
   // one thing it is not.
   llvm::DebugLoc location(llvm::DILocation::get(module_.getContext(), 0, 0, subprogram_));
 
-  // Right after the slot. `getIterator()` is `end()` when the alloca is the last
-  // instruction in the entry block, and `InsertPosition` accepts that: it is the
-  // position that means "trailing records of this block", which is a well-defined
-  // place in LLVM's new debug format and is where the record belongs.
-  const llvm::BasicBlock::iterator after = std::next(alloca.getIterator());
-  (void)builder_.insertDeclare(&alloca, variable, builder_.createExpression(), location,
-                               llvm::InsertPosition(after));
+  (void)builder_.insertDeclare(&storage, variable, builder_.createExpression(), location,
+                               llvm::InsertPosition(where));
 }
 
 void DebugInfo::declareGlobal(llvm::GlobalVariable& global, std::string_view name,

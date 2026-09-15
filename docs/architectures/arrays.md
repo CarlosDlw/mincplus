@@ -72,7 +72,7 @@ Five failure modes recur, and every one of them is a decision in this record:
 | **18** | **A pointer to an array is a pointer like any other**: `*[4]i32` steps by `sizeOf([4]i32)`, `(*p)[i]` is an element, `p[i][j]` is an element of the `i`-th array | No new rule: the pointer model already says a pointer steps by its pointee's size, and the pointee is now allowed to be an array. It is what makes `&a` useful and what a `struct`-of-arrays and a 2D table need |
 | **19** | **The count's identity is its value, not its spelling**: `[04]i32`, `[0x10]i32` and a future `[N]i32` (with `const N = 16;`) are **one** `TypeId`, and so will `[16 / 2 + 8]i32` be when a count becomes a constant expression | The store compares structure, so a count compared as *text* would hand two ids to one type — the exact failure `type.h` says the interned store exists to prevent, and the one Rust had to forbid up front: RFC 2000 makes *structural equality* a **requirement** on a const parameter precisely so `[T; N]` has a decidable identity. It also fixes what the count *is*: a folded `u64`, always ≥ 1, read once by `support::parseIntegerLiteral` with the checker's own base rule, so `[010]i32` is the leading-zero error it is everywhere else in the language, and the decimal spelling of a count is not a second number syntax |
 | **20** | **A type whose size is not a number is not a type**: `N × sizeOf(T)` is a checked multiply, and a product that does not fit `size_t` is refused **at the count** | A layout, an `alloca`, a `memcpy` length and a constant all need that number, and a wrapped one is a *wrong answer*, not a crash — the failure mode this record is organised against. The check is at the count because that is where the information and the sentence are; Rust's `size_overflow` is the same check in the same place |
-| **21** | **The store gains a second question, and it is not a rename**: `isObject(id)` — "has an object representation, so it can be a binding, a parameter, an element, a copy" — while `isScalar(id)` keeps meaning "no aggregate". Every existing `isScalar` call site is re-answered deliberately | `isScalar` is doing two jobs today: *can be stored and passed* and *is one register-shaped value*. An array is the first type where the answers differ, and a predicate that quietly widened would admit an array into every operand table, every coercion and every `load` shape. This is a decision and not a nit: the bug it prevents is a *name* that became true of one more kind while twenty call sites went on believing the old meaning |
+| **21** | **The store gains a second question, and it is not a rename**: `isObject(id)` — "has an object representation, so it can be a binding, a parameter, an element, a field, a copy" — while `isScalar(id)` keeps meaning "scalar-shaped". `isObject` is deliberately the *narrower* one: `isScalar` is true of a deferred literal and `isObject` is not | `isScalar` was written as the "can be stored and passed" predicate and had **no call sites** when this landed — which is why splitting it is free, and why the split has to be made now rather than after twenty sites started relying on the wide reading. The narrowness is not cosmetic: `isScalar` is true of `IntLiteral`, so a predicate built on it alone would accept `[3]<integer literal>` and build a type whose `sizeOf` is 0 — the test *An array's element must be an object* is what pins that, and it is the one assertion that would fail if `isObject` were spelled `isScalar` |
 | **22** | **The `[...]` form is a *deferred aggregate type*** — a `TypeKind` carrying the count whose element type is not decided yet — decided by its consumer exactly as `IntLiteral` already is; the typed `T{...}` form is never deferred | This is decision 8 made implementable: "one inference mechanism" only holds if the context-typed literal is a *type* like every other deferred thing. The alternative — an "expected type" threaded beside the tree — is a second typing path, and it is exactly the second answer to "what type is this" that decision 8 refuses. It is also what makes nesting work without a rule: deciding `[[1,2,3],[4,5,6]]` at `[2][3]i32` *is* deciding each inner literal at `[3]i32` |
 | **23** | **An array's definite assignment is object-level**: an initializer or a whole-object `=` assigns the object; an element store is a legal *write* that assigns nothing; a read of the object — or of an element — requires the object assigned. The diagnostic names `[0; N]` or an initializer | The flow layer's places are names, and per-element precision (rustc's answer, a bounded element-set per binding) *accepts more programs*, so adding it later is a compatible extension and refusing now is not a rule that has to be un-taught. What it refuses is `let a: [4]i32; for i { a[i] = f(i) }` followed by a read of `a` — and rustc refuses the same loop, with the same one-line fix |
 | **24** | **`const` is a rule about *places*, and an element is a place in the binding**: `TABLE[0] = 1` and `&TABLE[0]` are both refused, by the rule that already refuses `&c` (`sema_address_of_const`) — the second is not a new rule but the same one reaching one level deeper. The object may still be written through a pointer that arrived from elsewhere, which is why the module still emits no `constant` (15, `globals.md`) | Every language's answer for a const aggregate's *element* is const (C's `const int a[3]`, Rust's immutable place, Zig's `cannot assign to constant`), and the existing code already refuses `&c` for the reason `memory.md` gives: an address is a way to write the name. Extending it to an element place is what keeps `const` from meaning something weaker for aggregates than for scalars — the alternative is a `const` table whose bytes the same unit may rewrite, which is a footgun invented by us and in no other language |
@@ -119,18 +119,37 @@ error[sema-literal-type-unknown]: the type of this array literal is not known he
   annotate the binding (`let a: [3]i32 = [1, 2, 3];`) or name the type in the literal (`[_]i32{1, 2, 3}`)
 ```
 
-**Reading `[N]T{...}` costs one token of lookahead**, and it is worth writing
-down because it is the kind of thing that becomes a reparse later. After a `[...]`
-group, the next token decides: a `,`, an operator, `;`, `)` or the end continues
-the *list* reading; an identifier, a `*` or another `[` means the group was the
-**count** of a typed initializer. No expression in this grammar places an array
-literal directly against an identifier, so the two readings cannot both be valid,
-and the parser never backtracks. `[1]` is a one-element list; `[1]i32{1}` is that
-type's value.
+**Reading `[N]T{...}` costs one scan and no backtracking**, and it is worth
+writing down because it is the kind of thing that becomes a reparse later. The
+group that can be a count is exactly `[` number `]` (or `[_]`), and then the
+decision is whether a **type run followed by `{`** comes after it: the scan walks
+the run -- a `[N]` group as one step, so `[2][3]i32{...}` is seen -- and answers
+`true` only on `{`. Every other continuation is the list reading: `[1][0]` is a
+one-element list being indexed, because there is no brace after its type run.
+Nothing else in this grammar puts `{` after type tokens, so the two readings can
+never both be valid. The scan is bounded by the type run, and a run ends at the
+first token that cannot be part of a type, which in a real program is a handful.
+
+**The general `T{...}` is not recognized**, and that is a deliberate limit of
+this step rather than an oversight: a typed initializer is only recognized when
+its type starts with `[N]`, the array constructor. `i32{1}` and a future
+`Point{...}` are therefore *parse* refusals today and not the sentence about
+braces being for aggregates — that sentence needs a type name followed by `{` to
+be unambiguous with a block, which is a question the first non-array aggregate
+brings with it.
 
 The two forms and `[_]` are deliberately *not* additional grammar for `let`: the
 binding keeps `name: type`, and the typed form is usable anywhere an expression is
 — `take([1, 2, 3])`, `return [2]i32{...};`, `a[i] = [2]i32{...}[0];`.
+
+**The context form is not a deferred *type*.** A number literal is deferred
+because it flows through operators that must find the common type of operands
+nobody has typed yet; an array literal cannot be an operand of any operator
+(decision 25), so the only thing it can meet is a consumer that already has the
+type. `checkExpr`'s `expected` *is* that type, and `checkArrayLiteral` uses it
+directly. No second typing mechanism, no new `TypeKind`, and no way for two
+answers to coexist — which is the reason the implementation of step 7 came in
+smaller than this record first planned.
 
 ## Where it lands
 
@@ -148,6 +167,21 @@ binding keeps `name: type`, and the typed form is usable anywhere an expression 
 | `driver` | nothing: `mincc ir` already prints the module, and `sizeof` (the operator that makes a layout visible) is its own item |
 | `support/limits.h` | `kMaxStackObjectBytes`, with the human-readable form and the `static_assert` the project's rule requires |
 | docs | a language page for arrays (`arrays.md` beside `pointers.md`), plus the feature checklist, and `types.md`'s conversion section saying that arrays do not convert |
+
+### What has landed
+
+Steps **1–7** are implemented and tested: the type and its interning, layout and
+spelling (`type_test.cc`), the syntax run in the grammar and the reader
+(`array_test.cc`, `initializer_test.cc`), element access with the constant bounds
+check, the by-value shape in **both** directions (a caller copy for a parameter,
+`sret` for a return — `lower_test.cc` pins both), and both literal forms with the
+exact length, the fill, `[_]` and the splat that is never expanded. `mincc run` on
+`examples/014_arrays.mx` is the end-to-end proof.
+
+Steps **8–10** are the remaining work: the aggregate value record the
+initializer-constant-expression walk and `ir/declarations.cc` need for a
+file-scope `const TABLE = [_]i32{...}`, the reserved `[]T`/`..` sentences, and the
+language page (which exists, with the two gaps above stated in it).
 
 ## The implementation, in the order it lands
 

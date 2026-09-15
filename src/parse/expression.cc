@@ -164,6 +164,12 @@ CompletedMarker Parser::parsePrimary() {
     expect(lex::TokenKind::RParen);
     return paren.complete(SyntaxKind::ParenExpr);
   }
+  case lex::TokenKind::LBracket: {
+    // `[` opens both literal forms, and the one thing that tells them apart is
+    // what comes after the group (see `atTypedInitializer`). Decided here, once,
+    // so nothing downstream has to guess which of the two it was handed.
+    return atTypedInitializer() ? parseTypedInitializer() : parseArrayLiteral();
+  }
   default: {
     error("expected an expression", ParseErrorCode::ExpectedExpression);
     // An empty `Error` node keeps the tree total without consuming anything;
@@ -172,6 +178,104 @@ CompletedMarker Parser::parsePrimary() {
     return missing.complete(SyntaxKind::Error);
   }
   }
+}
+
+// The tokens a type is built from: a word, a `*`, or a `!`. `[N]` is the fourth
+// and is a *group*, which is why the scan below walks it as one.
+[[nodiscard]] static bool isTypeToken(lex::TokenKind kind) {
+  return kind == lex::TokenKind::Identifier || kind == lex::TokenKind::Star ||
+         kind == lex::TokenKind::Bang;
+}
+
+bool Parser::atTypedInitializer() const {
+  // Precondition: the current token is `[`.
+  //
+  // `[...]` is the *count* of a typed initializer when the group is exactly
+  // `[N]` (or `[_]`) and what follows is a type run and then `{`. That is a scan
+  // to the `{` rather than a fixed amount of lookahead, because a type run is as
+  // long as its words: `[2][3]unsigned long long int{...}` is twelve tokens of
+  // type before the brace. The scan is bounded by the run, and a run ends at the
+  // first token that cannot be part of a type -- which in a real program is a
+  // handful. Nothing else in this grammar puts `{` after type tokens, so the two
+  // readings of a `[...]` group can never both be valid (`arrays.md`).
+  if (nth(0) != lex::TokenKind::LBracket) {
+    return false;
+  }
+  const lex::TokenKind counted = nth(1);
+  if ((counted != lex::TokenKind::IntegerLiteral && counted != lex::TokenKind::Identifier) ||
+      nth(2) != lex::TokenKind::RBracket) {
+    return false;
+  }
+  std::uint32_t i = 3;
+  while (true) {
+    if (isTypeToken(nth(i))) {
+      ++i;
+      continue;
+    }
+    if (nth(i) != lex::TokenKind::LBracket) {
+      break;
+    }
+    // A `[N]` group, walked as **one** step of the run. Stepping token by token
+    // would stop on the count's `IntegerLiteral` -- not a type token -- and so
+    // would fail to see the `{` past `[2][3]i32`, which is exactly the shape the
+    // nested typed initializer is written with. Malformed groups are walked as
+    // far as they hold together: this is a scan to the `{`, and the *reader* is
+    // what refuses the group (`sema/typespec.cc`).
+    ++i; // `[`
+    if (nth(i) == lex::TokenKind::IntegerLiteral ||
+        (nth(i) == lex::TokenKind::Identifier && text(i) == kInferredCount)) {
+      ++i;
+    }
+    if (nth(i) == lex::TokenKind::RBracket) {
+      ++i;
+    }
+  }
+  return nth(i) == lex::TokenKind::LBrace;
+}
+
+void Parser::parseInitializerElements(lex::TokenKind closer) {
+  // The elements of `{...}` or `[...]`: a list separated by `,`, with a trailing
+  // comma allowed, or `value ; count`, the fill. The `;` is the only thing that
+  // tells the two apart, so both are read here and a one-element list is not a
+  // special case. An empty group is left empty for the reader to refuse: the
+  // parser answers "what shape is written", and what a shape *means* -- that a
+  // zero-element array has no spelling -- is a rule with a sentence.
+  if (at(closer)) {
+    return;
+  }
+  parseExpr();
+  if (at(lex::TokenKind::Semicolon)) {
+    bump();
+    parseExpr();
+    return;
+  }
+  while (at(lex::TokenKind::Comma) && !bailedOut_) {
+    bump();
+    if (at(closer)) {
+      break; // the trailing comma
+    }
+    parseExpr();
+  }
+}
+
+CompletedMarker Parser::parseArrayLiteral() {
+  Marker literal = start();
+  bump(); // `[`
+  parseInitializerElements(lex::TokenKind::RBracket);
+  expect(lex::TokenKind::RBracket);
+  return literal.complete(SyntaxKind::ArrayLiteral);
+}
+
+CompletedMarker Parser::parseTypedInitializer() {
+  Marker initializer = start();
+  // `[N]T` is one `Type` node, count and all -- the same `parseType` a binding
+  // annotation uses, so a typed initializer cannot spell a type differently from
+  // the rest of the language.
+  parseType();
+  bump(); // `{`, guaranteed by `atTypedInitializer`
+  parseInitializerElements(lex::TokenKind::RBrace);
+  expect(lex::TokenKind::RBrace);
+  return initializer.complete(SyntaxKind::TypedInitializer);
 }
 
 void Parser::parseArgList() {

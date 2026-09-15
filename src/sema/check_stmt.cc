@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,6 +22,7 @@
 
 #include "sema/convert.h"
 #include "sema/typespec.h"
+#include "support/consteval/literal.h"
 #include "support/text/edit_distance.h"
 
 namespace minc::sema {
@@ -233,25 +235,43 @@ std::optional<resolve::DefId> Checker::defOfPath(ast::AstId pathExpr) const {
   return index_.targetAt(file_.at(pathExpr).unit);
 }
 
-std::optional<resolve::DefId> Checker::defOfPlace(ast::AstId expr) const {
+std::optional<resolve::DefId> Checker::defOfStoreTarget(ast::AstId expr) const {
   ast::AstId current = expr;
-  while (current.valid()) {
-    switch (kindOf(current)) {
-    case ast::NodeKind::PathExpr:
-      return defOfPath(current);
-    case ast::NodeKind::ParenExpr: {
-      const std::vector<ast::AstId> operands = operandsOf(current);
-      if (operands.empty()) {
-        return std::nullopt;
-      }
-      current = operands.front();
-      break;
-    }
-    default:
-      return std::nullopt;
-    }
+  while (current.valid() && kindOf(current) == ast::NodeKind::ParenExpr) {
+    const std::vector<ast::AstId> operands = operandsOf(current);
+    current = operands.empty() ? ast::AstId{} : operands.front();
   }
-  return std::nullopt;
+  return current.valid() && kindOf(current) == ast::NodeKind::PathExpr ? defOfPath(current)
+                                                                       : std::nullopt;
+}
+
+std::optional<resolve::DefId> Checker::defOfPlace(ast::AstId expr) const {
+  // The path half first, parentheses included.
+  if (const std::optional<resolve::DefId> direct = defOfStoreTarget(expr); direct.has_value()) {
+    return direct;
+  }
+  ast::AstId current = expr;
+  while (current.valid() && kindOf(current) == ast::NodeKind::ParenExpr) {
+    const std::vector<ast::AstId> operands = operandsOf(current);
+    current = operands.empty() ? ast::AstId{} : operands.front();
+  }
+  if (!current.valid() || kindOf(current) != ast::NodeKind::IndexExpr) {
+    return std::nullopt;
+  }
+  // `a[i]` is a place **inside** the object `a` names, so it answers with `a`'s
+  // declaration: that is what makes `TABLE[0] = 1` and `&TABLE[0]` refused on the
+  // same grounds `TABLE = ...` is (`arrays.md` decision 24).
+  //
+  // The chain stops at a **pointer**, and that asymmetry is the model's and not an
+  // oversight: `p[i]` is `*(p + i)`, a write through a pointer value, and
+  // `memory.md` decision 15 already says a `const` pointer's bytes may be written
+  // through it. The base's type decides which of the two this is -- and the
+  // recursion is what makes `a[0][1]` belong to `a` as well.
+  const std::vector<ast::AstId> operands = operandsOf(current);
+  if (operands.empty() || !types_.isArray(out_.typed.typeOf(operands.front()))) {
+    return std::nullopt;
+  }
+  return defOfPlace(operands.front());
 }
 
 std::string Checker::nameOf(ast::AstId expr) const {
@@ -279,7 +299,9 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
   if (!typeNode.valid()) {
     return parts;
   }
-  for (const ast::AstId child : file_.childrenOf(typeNode)) {
+  const std::span<const ast::AstId> children = file_.childrenOf(typeNode);
+  for (std::size_t i = 0; i < children.size(); ++i) {
+    const ast::AstId child = children[i];
     // A word first, and before the token test below: an `Identifier` *is* a token
     // (leaves and interior nodes share one tag space), so asking "is it a token"
     // first would throw every word away.
@@ -289,10 +311,10 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
       parts.push_back(word);
       continue;
     }
-    // The two punctuators a type position can hold: `*` and `!`. Anything else
-    // the builder left inside the type node is not part of a type, and the
-    // grammar accepted nothing else here either -- so it is skipped rather than
-    // guessed at.
+    // The punctuators a type position can hold: `*`, `!` and one `[N]` group.
+    // Anything else the builder left inside the type node is not part of a type,
+    // and the grammar accepted nothing else here either -- so it is skipped
+    // rather than guessed at.
     if (!file_.at(child).isToken()) {
       continue;
     }
@@ -304,6 +326,44 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
       punctuation.isStar = tag == kTokStar;
       punctuation.isBang = tag == kTokBang;
       parts.push_back(punctuation);
+      continue;
+    }
+    if (tag == kTokLBracket) {
+      // `[`, an optional count, `]` -- **one** part, because the group is the
+      // constructor and the count belongs to it. The count is folded here, where
+      // its spelling is, so that everything downstream compares a number: two
+      // spellings of one count are one type, and the store never has to know how
+      // the source wrote it (`arrays.md` decision 19).
+      TypePart array;
+      array.isArray = true;
+      if (i + 1 < children.size() && kindOf(children[i + 1]) == kIdentifierNode &&
+          file_.spellingOf(children[i + 1]) == parse::kInferredCount) {
+        // `[_]`: the count is the initializer's, so nothing is folded here and
+        // `hasCount` stays false -- which is what makes `[_]` a *different part*
+        // from `[]` and not the same one with a flag missing.
+        array.countInferred = true;
+        ++i;
+      } else if (i + 1 < children.size() && tagOf(kindOf(children[i + 1])) == kTokIntegerLiteral) {
+        array.hasCount = true;
+        const support::IntegerLiteral count = support::parseIntegerLiteral(
+            file_.spellingOf(children[i + 1]), support::IntegerBaseRule::DecimalLeadingZero);
+        // `bits` rather than a cast of the value: the count is a `uint64_t` and
+        // the reader's negative case is its own error, which the same reader
+        // reports here as "does not fit".
+        if (count.ok) {
+          array.count = count.value.bits;
+        } else {
+          array.countOverflow = true;
+        }
+        ++i;
+      }
+      // A `]` that is not there is the parser's finding, which is why the group
+      // is closed by what is found rather than by what is expected: this loop
+      // reads the tree it was given, not the tree that should have been built.
+      if (i + 1 < children.size() && tagOf(kindOf(children[i + 1])) == kTokRBracket) {
+        ++i;
+      }
+      parts.push_back(array);
     }
   }
   return parts;
@@ -449,6 +509,20 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
     error(at, code,
           "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) + "`" +
               std::string(what) + ": " + mixingAdvice(from));
+    return;
+  }
+  // An array and a pointer, refused before the general rule for the same reason
+  // the two number classes are: it is not a narrowing to warn about, it is the
+  // conversion this language deliberately does not have, and the sentence has to
+  // say what to write instead (`arrays.md` decision 2). Decay is the mechanism
+  // behind `sizeof a` being a pointer's size in a C function and behind no C
+  // compiler being able to refuse `a[10]`; the cost here is two characters.
+  if (types_.isArray(from) && types_.isPointer(to)) {
+    error(at, code,
+          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) + "`" +
+              std::string(what) +
+              ": an array does not decay to a pointer -- write `&a[0]` for a pointer "
+              "to its first element, or `&a` for the whole array");
     return;
   }
   if (convertible(types_, from, to)) {

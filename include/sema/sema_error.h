@@ -45,6 +45,17 @@ enum class SemaErrorCode : std::uint8_t {
   AssignToConst,
   // `++`/`--` on something that is not an lvalue.
   IncDecNotLvalue,
+  // An array literal whose element type the context was needed for, and was not
+  // there: `[1, 2, 3]` on its own says how many elements it has and nothing about
+  // what they are, and the count of an array is part of the *type* of an object
+  // whose type this language writes down (`arrays.md` decision 8).
+  LiteralTypeUnknown,
+  // The shape of a list of elements does not match the type it is building: the
+  // length is not exact, a `_` was written with nothing to count, a fill's two
+  // numbers disagree, or the group is empty. One code and several sentences,
+  // because the *repair* is one shape in every case -- an array's value is the
+  // whole value, written out -- and the sentence is what says which number moved.
+  InitializerShape,
   // A `return` that a function returning `!` can actually execute. The type
   // promises the call never gives control back, and a `return` is precisely
   // control coming back -- so this is the promise broken, reported at the
@@ -116,6 +127,13 @@ enum class SemaErrorCode : std::uint8_t {
   AddressOfConst,
   // `p[i]` with an index that is not an integer.
   IndexNotInteger,
+  // A **constant** index outside an array's own count: `a[4]` on a `[4]i32`.
+  // The count is in the type, so this is arithmetic on two numbers the compiler
+  // already has, and it is the one bounds check C's type system cannot express --
+  // there the array is a pointer by the time anyone could look. A runtime index
+  // is not this code: it is the access's extent, which the checked build guards
+  // (`arrays.md` decisions 7 and 26).
+  IndexOutOfRange,
   // Two pointer types that do not meet: a comparison of `*i32` with `*u8`, a
   // subtraction of unrelated pointees, a `?:` with no common pointer type, or an
   // initializer/argument of one pointee type where the other is required. The

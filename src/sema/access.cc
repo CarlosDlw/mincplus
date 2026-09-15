@@ -144,7 +144,37 @@ ProvenanceKind Checker::provenanceOf(ast::AstId expr) const {
   }
 }
 
-void Checker::recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance) {
+// The provenance of an *array* subscript (`a[i]`), which is a different question
+// from `provenanceOf`'s and is answered differently on purpose.
+//
+// `provenanceOf(a)` asks what allocation a *pointer value* came from, and a path
+// naming an array is not a pointer value at all -- there is nothing to ask. What
+// `a[i]` needs is the allocation the *place* is inside, and the answer follows
+// from what the object is:
+//
+//   * a binding of this unit's own (`let t: [4]i32;`, a file-scope table) is an
+//     object the unit named, so the access is inside it and the extent is real;
+//   * a **parameter** is not: the pointer came in from the caller, and the
+//     compiler cannot see the object it names (`memory.md`, *Provenance*). The
+//     caller copied the array, so the access is in bounds -- but "in bounds" is a
+//     fact about the call, not something this unit can prove;
+//   * `(*p)[i]` -- a pointer to an array -- is behind a pointer value, so it is
+//     `Foreign` for the same reason `p[i]` is, and only the extent survives,
+//     because the count is in the type.
+ProvenanceKind Checker::arrayProvenanceOf(ast::AstId base) const {
+  const std::optional<resolve::DefId> def = defOfPlace(base);
+  if (!def.has_value() || def->index >= defs_.defs.size()) {
+    return ProvenanceKind::Foreign;
+  }
+  // The declaration's kind is the answer, and it is one comparison rather than a
+  // second walk of the tree: a parameter's storage belongs to the caller, and
+  // everything else the unit named is its own object.
+  return defs_.defs[def->index].kind == resolve::DefKind::Parameter ? ProvenanceKind::Foreign
+                                                                    : ProvenanceKind::Object;
+}
+
+void Checker::recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance,
+                           std::uint64_t extent) {
   if (!place.valid() || !type.valid()) {
     return;
   }
@@ -155,7 +185,7 @@ void Checker::recordAccess(ast::AstId place, TypeId type, ProvenanceKind provena
   if (types_.isError(type) || types_.isVoid(type)) {
     return;
   }
-  out_.typed.addAccess(AccessObligation{place, type, AccessKind::Ordinary, provenance});
+  out_.typed.addAccess(AccessObligation{place, type, AccessKind::Ordinary, provenance, extent});
 }
 
 } // namespace minc::sema

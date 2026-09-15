@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -72,6 +73,18 @@ public:
   // and from another pointer type implicitly, and never one that may be
   // dereferenced or stepped.
   [[nodiscard]] TypeId pointerTo(TypeId pointee);
+  // `[count]element`. Interned, so `[4]i32` is one id whose count is in its
+  // structure: the identity is the *value* of the count and never its spelling
+  // (`arrays.md` decision 19), which is why a `[0x10]i32` and a `[16]i32` are
+  // the same call here.
+  //
+  // `kInvalidType` for a count of zero, for an element that is not an object
+  // (`isObject`), and for a product that would not fit `size_t` -- the same
+  // budget discipline as the rest of the store: the invalid answer is a
+  // diagnostic the caller reports, not an allocation that already happened.
+  // `arraySize` is the arithmetic on its own, so a caller that wants to say
+  // *why* it is refusing can ask before it builds.
+  [[nodiscard]] TypeId arrayOf(TypeId element, std::uint64_t count);
   // The parameters are copied into the store; the caller's span need not
   // outlive the call.
   // `variadic` is required rather than defaulted: every caller is a signature,
@@ -130,6 +143,26 @@ public:
   [[nodiscard]] bool isError(TypeId id) const;
   // A pointer to anything, `*void` included.
   [[nodiscard]] bool isPointer(TypeId id) const;
+  [[nodiscard]] bool isArray(TypeId id) const;
+  // An aggregate: `[N]T` today, a `struct` when that lands. The types a load, a
+  // store or a copy moves as one *object* rather than as one value, which is the
+  // distinction the lowering needs and the reason this is not `isScalar`.
+  [[nodiscard]] bool isAggregate(TypeId id) const;
+  // A type with an object representation: an integer, a float, a `bool`, a
+  // `char`, a `str`, a pointer, or an aggregate. What can be a binding, a
+  // parameter, an element, a field, or the source of a copy -- the one question
+  // those four have in common.
+  //
+  // Deliberately narrower than `isScalar`, which is why it is a second
+  // predicate and not a rename (`arrays.md` decision 21): a *deferred* literal
+  // is scalar-shaped and has no width, so `[3]<integer literal>` is not an
+  // object and there is no array of one.
+  [[nodiscard]] bool isObject(TypeId id) const;
+  // The element of an array, or `kInvalidType` for anything else.
+  [[nodiscard]] TypeId elementOf(TypeId id) const;
+  // The count of an array, or 0 for anything else. 0 is not a count the store
+  // ever holds, so a caller can test it without asking the kind first.
+  [[nodiscard]] std::uint64_t countOf(TypeId id) const;
   // `*void`: the type that converts to and from any other pointer type, and the
   // one that may not be dereferenced or stepped (`memory.md`, *Access*).
   [[nodiscard]] bool isVoidPointer(TypeId id) const;
@@ -144,6 +177,12 @@ public:
   // `u8`, `f64`), whatever spelling the source used to reach it -- a type's name
   // is a property of the type, not of the declaration that named it.
   [[nodiscard]] std::string spelling(TypeId id) const;
+  // `count * sizeOf(element)`, computed with the one checked multiply. `nullopt`
+  // when the count is zero, the element is not an object, or the product does
+  // not fit `std::size_t` -- so a type whose size is not a number is refused
+  // where the count is read (`arrays.md` decision 20), and no later stage has to
+  // defend against one.
+  [[nodiscard]] std::optional<std::size_t> arraySize(TypeId element, std::uint64_t count) const;
   // Bytes. 0 for `void`, a function, or the poison: they have no object
   // representation, and returning a plausible 1 would let a future `sizeof`
   // silently believe it.

@@ -125,6 +125,16 @@ void Lowering::declareFunctions() {
       function->addFnAttr(llvm::Attribute::NoReturn);
     }
 
+    // The aggregate return's destination, told to LLVM in the one spelling it
+    // understands. The shape (a leading pointer and a `void` return) is what both
+    // sides agree on by construction; `sret` is what says *why* that pointer is
+    // there, and it is what lets a later stage reason about the callee writing
+    // into the caller's object rather than through an arbitrary pointer.
+    if (types_.isAggregate(info.returnType) && function->arg_size() > 0) {
+      function->getArg(0)->addAttr(
+          llvm::Attribute::getWithStructRetType(context_, storageType(info.returnType)));
+    }
+
     if (def.has_value()) {
       functions_.emplace(defKey(*def), function);
     }

@@ -151,12 +151,21 @@ llvm::Type* Lowering::llvmType(sema::TypeId id) {
     fatal(support::Span{}, IRDiagnosticCode::Internal,
           "the poison type reached the mapper; the unit was not checked");
     return nullptr;
-  case sema::TypeKind::Array:
-    // The kind is reserved and the syntax that builds one does not exist. The
-    // refusal is by name, which is what makes the day it lands a *body* here.
-    fatal(support::Span{}, IRDiagnosticCode::UnsupportedType,
-          "arrays are not lowered yet; the language does not have the syntax for one");
-    return nullptr;
+  case sema::TypeKind::Array: {
+    // `[N x T]`, and `T` is the element's **storage** type and not its value
+    // type: `[4]bool` is four bytes and not four bits. Built from `storageType`
+    // rather than from `llvmType` because an array is only ever an *object* --
+    // there is no register-shaped array -- and because a `bool` that is `i1`
+    // inside an aggregate is a bitfield, which this language does not have
+    // (`arrays.md` decision 12). The element access is where the `i1`/`i8`
+    // normalisation happens, through `loadPlace`/`storePlace`, so there is
+    // exactly one shape per array and no whole-object conversion.
+    llvm::Type* element = storageType(types_.elementOf(id));
+    if (element == nullptr) {
+      return nullptr;
+    }
+    return llvm::ArrayType::get(element, types_.countOf(id));
+  }
   }
   return nullptr;
 }
@@ -172,9 +181,31 @@ llvm::Type* Lowering::llvmFunctionType(sema::TypeId id) {
             "a function has a parameter with no LLVM type");
       return nullptr;
     }
-    params.push_back(mapped);
+    // A **by-value aggregate is a pointer to the caller's copy**
+    // (`arrays.md` decision 13). The parameter's storage inside the callee is
+    // that pointer, so `&a` and `a[i]` need no spill alloca, and the object the
+    // callee writes is not the caller's variable -- which is what "a value type"
+    // has to mean. It is also the shape the C ABI uses for an aggregate it
+    // classifies as MEMORY, so `cinterop`'s work later is the parameter
+    // *attributes* and not a second convention.
+    params.push_back(types_.isAggregate(param) ? pointerType() : mapped);
   }
-  llvm::Type* result = llvmType(types_.get(id).returnType);
+  // A by-value aggregate **return** is the same shape the other way round: the
+  // caller passes the address of the object it wants filled, the function returns
+  // nothing, and the value is `sret` (`arrays.md` decision 13). The alternative --
+  // an aggregate in the signature's return type -- is a megabyte of type in every
+  // call site, every debug record and every function pointer for a
+  // `[1 << 20]i32`, and it is the shape five languages shipped wrong code with.
+  //
+  // The pointer goes *first* and the return becomes `void`, so both sides agree
+  // without a second rule: `declareFunctions` attributes that first parameter,
+  // `defineFunction` reads it as the destination, and `lowerCall` fills it.
+  const sema::TypeId back = types_.get(id).returnType;
+  if (types_.isAggregate(back)) {
+    params.insert(params.begin(), pointerType());
+    return llvm::FunctionType::get(llvm::Type::getVoidTy(context_), params, types_.isVariadic(id));
+  }
+  llvm::Type* result = llvmType(back);
   if (result == nullptr) {
     return nullptr;
   }

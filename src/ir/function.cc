@@ -87,10 +87,16 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   // an assignment to `p` writes it, with no second rule for parameters.
   const std::span<const sema::TypeId> params = types_.paramsOf(info.functionType);
   const ast::AstId paramList = childOf(info.decl, ast::NodeKind::ParamList);
+  // An aggregate return puts its destination *first* in the argument list, so
+  // every parameter's index moves by one (`arrays.md` decision 13). The shift is
+  // computed once, here, rather than being remembered at each `getArg` below.
+  if (types_.isAggregate(info.returnType) && function->arg_size() > 0) {
+    sretPointer_ = function->getArg(0);
+  }
   std::size_t index = 0;
   if (paramList.valid()) {
     for (const ast::AstId param : file_.childrenOfKind(paramList, ast::NodeKind::Param)) {
-      if (index >= function->arg_size()) {
+      if (sretOffset() + index >= function->arg_size()) {
         // More parameters than the signature the function was declared with --
         // not reachable from `sema`'s own signature pass, so a bug here rather
         // than a statement about the program.
@@ -110,9 +116,24 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
         // The parameter's own node is the location, so a debugger stops on the
         // parameter the reader wrote and not on the function's first line.
         const ast::AstId paramAt = paramName.valid() ? paramName : param;
-        llvm::AllocaInst* slot = declareLocal(*paramDef, paramType, name, paramAt);
-        llvm::Argument* argument = function->getArg(static_cast<unsigned>(index));
-        storePlace(Place{slot, paramType}, Value{argument, paramType}, ast::AstId{});
+        llvm::Argument* argument = function->getArg(static_cast<unsigned>(sretOffset() + index));
+        if (types_.isAggregate(paramType)) {
+          // An aggregate arrives as a pointer to the caller's copy, and that
+          // pointer **is** the parameter's storage: no second copy, and `&a`
+          // names the object the callee owns for the call rather than a spill of
+          // it (`arrays.md` decision 13).
+          locals_.emplace(defKey(*paramDef), argument);
+          if (debug_ != nullptr) {
+            // The record goes at the front of the entry block: the storage is an
+            // argument and not an instruction, so there is nothing to sit behind,
+            // and "before the body runs" is where an `alloca`'s record sits too.
+            debug_->declareParameterBinding(*argument, name, types_, paramType, spanOf(paramAt),
+                                            entry->begin());
+          }
+        } else {
+          llvm::AllocaInst* slot = declareLocal(*paramDef, paramType, name, paramAt);
+          storePlace(Place{slot, paramType}, Value{argument, paramType}, ast::AstId{});
+        }
       }
       ++index;
     }
@@ -126,7 +147,11 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   // the module is still well formed for a tree that got here some other way.
   llvm::BasicBlock* last = builder_.GetInsertBlock();
   if (last != nullptr && last->getTerminator() == nullptr) {
-    if (types_.isVoid(info.returnType)) {
+    if (types_.isVoid(info.returnType) || types_.isAggregate(info.returnType)) {
+      // An aggregate return falls off the end the same way a `void` one does: the
+      // destination is the caller's storage and it was written by the `return`s,
+      // and a function with no `return` at all is already refused. `sema` is what
+      // refuses it; this keeps the module well formed regardless.
       builder_.CreateRetVoid();
     } else {
       builder_.CreateUnreachable();
@@ -139,6 +164,7 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   }
   current_ = nullptr;
   entryBlock_ = nullptr;
+  sretPointer_ = nullptr;
   currentReturn_ = sema::kInvalidType;
   locals_.clear();
 }

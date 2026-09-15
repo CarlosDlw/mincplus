@@ -14,6 +14,8 @@
 // and what keeps this file free of any `#ifdef`.
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -48,13 +50,41 @@ struct TypeSpecResult {
 [[nodiscard]] TypeSpecResult readTypeSpec(std::span<const std::string_view> words,
                                           TypeStore& types);
 
-// One element of a type position, in source order: a `*`, or a word.
+// One element of a type position, in source order: a `*`, an `[N]`, or a word.
 //
-// A type position is `* * ... * <words>` and nothing else, because that is what
-// the grammar accepts (`parser.md`): the `*` is *before* what it points to, so a
-// pointer is a prefix over the same run of words every other type is.
+// A type position is `(* | [N])* <words>` and nothing else, because that is what
+// the grammar accepts (`parser.md`): both constructors are *prefixes* over what
+// they build, so a pointer and an array are two more parts of the same run every
+// other type is -- and `*[4]i32` and `[4]*i32` are the same two parts in two
+// orders, with no second grammar to remember (`arrays.md`, *The surface*).
 struct TypePart {
   bool isStar = false;
+  // `[N]`: the array constructor. `count` is the N, already folded.
+  bool isArray = false;
+  // Whether a number was written between the brackets at all. `[]` and `[0]`
+  // both arrive with `count == 0` and they are two different mistakes with two
+  // different fixes -- a reserved slice spelling and an impossible object -- so
+  // the reader has to be able to tell them apart (`arrays.md` decisions 5, 17).
+  bool hasCount = false;
+  // The count of an `[N]` part, when one was written.
+  //
+  // It is a *value* and not a spelling on purpose: the store compares counts to
+  // decide whether two types are one, so `[0x10]i32` and `[16]i32` have to be the
+  // same number by the time they get there (`arrays.md` decision 19). The reader
+  // that builds this part owns the fold, and it is the same
+  // `support::parseIntegerLiteral` the `#if` evaluator and the literal checker
+  // use, with the same base rule: `[010]i32` is the leading-zero error it is
+  // everywhere else in `.mx`.
+  std::uint64_t count = 0;
+  // The count was written and could not be read as a 64-bit number -- an
+  // `[18446744073709551616]i32`, and nothing smaller. Implies `hasCount`.
+  bool countOverflow = false;
+  // `[_]`: the count the *initializer* supplies (`arrays.md`). Legal only as the
+  // outermost constructor of a typed initializer, where there is a list to count,
+  // which is why it is a part of the type position and not a spelling the reader
+  // rewrites before anyone sees it: `let a: [_]i32` has no list, and the refusal
+  // has to name the position it was written in.
+  bool countInferred = false;
   // A `!`, which is a type only on its own: `!` and nothing else, in a return
   // position. It is a part of the run rather than a word because it is a
   // punctuator -- it cannot be spelled by an identifier, which is the whole
@@ -72,7 +102,17 @@ struct TypePart {
 // the position it was written in is the caller's question, not this reader's:
 // the same `Type` node appears after `fn` and after `:`, and only the caller
 // knows which one it is holding (`never.md`, *Written where*).
-[[nodiscard]] TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types);
+// The constructors are applied from the *innermost* out: the part nearest the
+// words is the one closest to the element, so the run is walked in reverse and
+// `[2][3]i32` is two arrays of three (`arrays.md` decision 18).
+//
+// `inferredCount` is the count of an outermost `[_]`, and the caller is the only
+// one that can supply it: it comes from the elements of the initializer the type
+// belongs to. A `_` with nothing here is refused, which is why the default is the
+// *safe* one -- a call site that knows nothing about initializers gets the
+// sentence, not a count of zero.
+[[nodiscard]] TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
+                                      std::optional<std::uint64_t> inferredCount = std::nullopt);
 
 // Every spelling the reader accepts, for a "did you mean ...?" suggestion.
 // Names only, not the valid *combinations*: a suggestion is about one word.

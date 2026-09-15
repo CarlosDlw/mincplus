@@ -72,6 +72,15 @@ constexpr CodeCase kCases[] = {
     {"`static` before nothing that declares", "static x: i32;\n", ParseErrorCode::StaticPosition},
     {"`static` and `extern` on one declaration", "static extern fn i32 f();\n",
      ParseErrorCode::ConflictingLinkage},
+    // The two ways an `[N]` group is malformed. The count is a literal number, so
+    // a name or an expression there is the first; a group with no `]` is the
+    // second. `[]` -- nothing between the brackets -- is deliberately neither:
+    // it is the reserved spelling of a slice, which the type reader refuses with
+    // its own sentence.
+    {"array count that is not a number", "fn i32 main() { let x: [n]i32 = 1; }\n",
+     ParseErrorCode::ExpectedArrayCount},
+    {"array count with no closing bracket", "fn i32 main() { let x: [4 i32 = 1; }\n",
+     ParseErrorCode::ExpectedArrayCountClose},
 };
 
 [[nodiscard]] std::string deepInput() {

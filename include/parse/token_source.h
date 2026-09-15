@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
 #include "lex/token_kind.h"
 #include "support/span/span.h"
@@ -49,6 +50,23 @@ public:
 
   // Span of the current token, for the caret on an error.
   [[nodiscard]] virtual support::Span spanOfCurrent() const = 0;
+
+  // The spelling of the token `nth(n)` looks at, exactly as the source wrote it.
+  //
+  // The kind is what almost every rule is written against, and this exists for
+  // the one place where the *text* is the rule: `_`, the inferred count, is an
+  // `Identifier` like every name, and `[n]` and `[_]` are a parse error and a
+  // legal count respectively. Empty past the end, like the empty span above.
+  //
+  // A source that does not *hold* the bytes answers empty, and that is part of
+  // the contract rather than a gap: a token's spelling can live in a file this
+  // source never saw (a macro body, a header), and a caller that needs the text
+  // needs a source over the text -- which is `TokenStreamSource` over a stream
+  // whose tokens tile it. The grammar's use is fail-safe by construction: a rule
+  // written against a spelling that is not there does not match, and a `[_]`
+  // that does not match is a *refusal* about the count, never a wrong reading of
+  // it.
+  [[nodiscard]] virtual std::string_view textOf(std::uint32_t n) const = 0;
 };
 
 // A TokenSource over a file's significant tokens. Returned as a pointer to the
