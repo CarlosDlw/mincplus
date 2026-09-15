@@ -103,6 +103,30 @@ jobs:
           find include src tests \( -name '*.h' -o -name '*.cc' \) -print0 \
             | xargs -0 clang-format --dry-run --Werror
 
+  # The documentation site. It is a real check and not a deploy: the site is
+  # built with `onBrokenLinks: 'throw'`, so a page that links to a page that does
+  # not exist fails here rather than in a reader's browser. Nothing about the
+  # C++ build depends on this job, which is why it is its own.
+  docs:
+    name: docs (Docusaurus build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: website
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: website
+      - name: Build
+        run: npm run build
+        working-directory: website
+
   tidy:
     name: clang-tidy
     runs-on: ubuntu-latest

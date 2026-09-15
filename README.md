@@ -2,6 +2,10 @@
 
 Minimal C with extras and full C interoperability.
 
+The **language reference** — what a `.mx` file means, and what `mincc` does — is
+the documentation site in `website/` (`make docs` to build it). The compiler's own
+design records are in `docs/`, next to the code they describe.
+
 ## Platforms
 
 The compiler is **cross-platform**. It builds and runs on **Linux, macOS, and
@@ -168,18 +172,19 @@ answer. `mincc resolve` shows the result:
 
 ```console
 $ mincc resolve examples/002_variables.mx
-# examples/002_variables.mx  (scopes 2, defs 5, refs 1, 0 error(s), 0 warning(s))
+# examples/002_variables.mx  (scopes 2, defs 6, refs 1, 0 error(s), 0 warning(s))
 
   scopes
     #0  file  22..98  (root)
     #1  function  36..97  parent #0
 
   defs
-    #0  file#0  ordinary  const  true  refs 0  [predefined]
-    #1  file#0  ordinary  const  false  refs 0  [predefined]
-    #2  file#0  ordinary  fn  main  refs 0  examples/002_variables.mx:2:8
-    #3  function#1  ordinary  let  x  refs 1  examples/002_variables.mx:4:7
-    #4  function#1  ordinary  let  y  refs 0  examples/002_variables.mx:5:7
+    #0  file#0  ordinary  const  false  refs 0  [predefined false]
+    #1  file#0  ordinary  const  true  refs 0  [predefined true]
+    #2  file#0  ordinary  const  null  refs 0  [predefined null]
+    #3  file#0  ordinary  fn  main  refs 0  examples/002_variables.mx:2:8
+    #4  function#1  ordinary  let  x  refs 1  examples/002_variables.mx:4:7
+    #5  function#1  ordinary  let  y  refs 0  examples/002_variables.mx:5:7
 ```
 
 The design behind lowering and resolution — the item tree, the scope model, the
@@ -197,16 +202,18 @@ $ mincc check examples/002_variables.mx && echo ok
 ok
 
 $ mincc check --stats examples/002_variables.mx
-# examples/002_variables.mx  (scopes 2, defs 5, refs 1, functions 1)  0 error(s), 0 warning(s)
+# examples/002_variables.mx  (scopes 2, defs 6, refs 1, functions 1)  0 error(s), 0 warning(s)
 
 $ mincc check --types examples/002_variables.mx
-# types 21  target x86_64-unknown-linux-gnu  long=64  pointer=64
+# types 23  target x86_64-unknown-linux-gnu  long=64  pointer=64
   #0  <error>  error  size=0  align=0
   #1  void  void  size=0  align=0
   ...
   #9  i32  int  size=4  align=4
   ...
-  #20  fn i32()  function  size=0  align=0  params=0
+  #20  !  never  size=0  align=0
+  ...
+  #22  fn i32()  function  size=0  align=0  params=0
 
 $ printf 'fn i32 main() {\n  let x: uintt = 1;\n  return 0;\n}\n' | mincc check -
 <stdin>:2:10: error[sema-unknown-type]: `uintt` is not a type
@@ -724,6 +731,12 @@ which is where the algorithm that depends on them lives.
   [`docs/architectures/codegen.md`](docs/architectures/codegen.md).
 - `src/cinterop/` — after it, for the reasons in
   [`docs/architecture.md#the-pipeline`](docs/architecture.md#the-pipeline).
+- `website/` — the **language reference**, a Docusaurus site
+  (`make docs`, `make docs-serve`). It documents the language and the tools, and
+  not the compiler: the design records above are read while reading the code and
+  go stale with it, while a reference has to be true of the language. Anything
+  not implemented is marked *Not implemented yet* on the page that would
+  otherwise describe it.
 - `tests/unit/` — gtest suites, one per module.
 - `examples/` — `.mx` samples, and a regression suite: every file is lexed by
   `tests/unit/lex/examples_test.cc`, parsed by

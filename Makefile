@@ -36,6 +36,7 @@ SOURCES := include src tests
 .PHONY: help configure build test quick gates \
         dev ci sanitize release \
         format format-check tidy examples \
+        docs docs-serve \
         ccache ccache-tune clean distclean
 
 help:
@@ -53,6 +54,9 @@ help:
 	@echo "  make format-check  Verify formatting (CI's format job)"
 	@echo "  make tidy          Run clang-tidy over src/ (CI's tidy job)"
 	@echo "  make examples      lex + pp + parse + resolve every file in examples/"
+	@echo ""
+	@echo "  make docs          Build the documentation site (website/build)"
+	@echo "  make docs-serve    Serve the built site on http://localhost:3000"
 	@echo ""
 	@echo "  make ccache        Show the compiler cache's effectiveness"
 	@echo "  make ccache-tune   Raise its size limit (default $(CCACHE_SIZE))"
@@ -166,6 +170,30 @@ done; \
 	  $(BIN) ir -g -I $(INCLUDE_DIR) "$$file" > /dev/null; \
 done; \
 	echo "examples ok"
+
+# --- the documentation site -------------------------------------------------
+#
+# The language reference in `website/`, built with Docusaurus. Deliberately not
+# part of `gates`: it needs Node and a network for the first `npm install`, and a
+# C++ change should not fail a gate because npm is not on the machine. The site
+# itself throws on a broken link, so a build here is a real check on the prose's
+# references.
+NPM ?= npm
+WEBSITE := website
+
+# `npm ci` when a lockfile is present, so the build is the one that was tested;
+# `npm install` otherwise, because a lockfile that does not exist yet has to be
+# created by someone.
+docs:
+	@command -v $(NPM) >/dev/null 2>&1 || { \
+	  echo "minc+: npm is not installed; the documentation site needs Node"; exit 1; \
+	}
+	cd $(WEBSITE) && if [ -f package-lock.json ]; then $(NPM) ci; else $(NPM) install; fi
+	cd $(WEBSITE) && $(NPM) run build
+	@echo "minc+: the site is in $(WEBSITE)/build"
+
+docs-serve: docs
+	cd $(WEBSITE) && $(NPM) run serve
 
 # --- the compiler cache -----------------------------------------------------
 
