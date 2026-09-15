@@ -910,6 +910,16 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
 
   const TypeId result = usualArithmetic(types_, left, right);
   if (types_.isError(result)) {
+    // An integer and a float are the one pair of arithmetic types with no common
+    // type, and the sentence for them is the sentence an assignment uses: this is
+    // the same rule, and a reader who meets it here and there should not have to
+    // work out that it is.
+    if (mixedNumberPair(types_, left, right)) {
+      error(expr, SemaErrorCode::InvalidOperands,
+            std::string("`") + opText(kind) + "` cannot combine `" + types_.spelling(left) +
+                "` and `" + types_.spelling(right) + "`: " + mixingAdvice(left));
+      return kTypeError;
+    }
     error(expr, SemaErrorCode::InvalidOperands,
           std::string("`") + opText(kind) + "` cannot combine `" + types_.spelling(left) +
               "` and `" + types_.spelling(right) + "`");

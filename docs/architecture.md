@@ -631,6 +631,17 @@ maps on. The design record is
 crossing the boundary obeys are `src/cinterop`'s (roadmap §8) rather than this
 form's.
 
+**The same rule makes a file-scope binding one entity.** `let`/`const` at the top
+of a unit is the *same node kind* a block-scope binding is, so one production,
+one `DefId`, one type and one symbol serve both positions, and `extern let x: T;`
+is a declaration by the word `extern` exactly as `extern fn` is. What is decided
+for the file scope and not for a block is the initializer: it must be a constant
+expression, evaluated in dependency order, because the language compiles one unit
+at a time and a runtime initializer across units would have no order it could
+name. That is why a `let` at file scope is the one construct that cannot be
+computed at startup — the record is
+[`architectures/globals.md`](architectures/globals.md).
+
 **Builtins are not a stage.** When they arrive they are a table read by two
 stages that already exist — `sema` for the signature and the effect, `ir` for the
 lowering — plus the `sizeof`/`alignof`/`static_assert` operators, which are
@@ -790,7 +801,15 @@ warnings inside them are dropped at the report step while errors are not.
   asked of `sema` — the coercion record, the operation type of a compound
   assignment (without which `u16 <<= 9` lowers to an out-of-range shift), and the
   access record — is **shipped**, so the lowering starts from a contract instead
-  of waiting for one. A `!` return type is the case where the contract pays off
+  of waiting for one. A file-scope `let`/`const` is the case where "materialise"
+  is literal: nothing runs before the program, so its bytes are an
+  `llvm::Constant` built from the value the checker published and converted into
+  the object's type **through the recorded coercion** — never from the pair of
+  types, which is the silent cast (`const half: f64 = 1;`) the checker refuses.
+  The object is emitted as an ordinary `global`, and the assumption scan has a
+  row that keeps it that way, because LLVM's `constant` would claim nothing
+  writes it (`globals.md`, `memory.md` decision 15; `ir.md` decisions 33–34). A
+  `!` return type is the case where the contract pays off
   twice: it is `void` on the ABI side, `noreturn` is derived from the type rather
   than declared beside it, and the value that does not exist is a `poison` of the
   type the consumer asked for — the one named exception to the assumption list

@@ -75,11 +75,21 @@ TypeId Checker::decideAt(ast::AstId node, TypeId decided) {
   TypeId chosen = kInvalidType;
   if (decided.valid() && !types_.isError(decided) && !types_.isDeferred(decided)) {
     const bool floatLiteral = types_.get(current).kind == TypeKind::FloatLiteral;
-    // A deferred literal's *class* is what the hint has to respect: an integer
-    // literal becomes an integer or a float, and a float literal only becomes a
-    // float. `let x: i32 = 1.0;` therefore keeps the `1.0` a float and the
-    // consumer converts it, instead of silently re-reading it as an integer.
-    const bool compatible = floatLiteral ? types_.isFloat(decided) : types_.isArithmetic(decided);
+    // A deferred literal's *class* is the **spelling's** and not the hint's: an
+    // integer literal becomes an integer and a float literal becomes a float. The
+    // hint still decides *which* type of that class -- `let x: u8 = 255;` is a
+    // `u8`, and that is what range-checks a literal against the context it was
+    // written in instead of defaulting it and converting it afterwards.
+    //
+    // A hint of the other class is not a decision at all. `let x: f64 = 1;` has
+    // no type in the `f64` family to give the `1`, so it keeps the language's
+    // default for its own class (`i32`) and the *consumer* reports that an
+    // integer cannot be a float -- which is the refusal the language wants.
+    // Adopting the `f64` here would have made the literal a float, left the
+    // checker with two equal types and nothing to say, and handed the lowering a
+    // value it would have to round from the digits, which is a rule no stage below
+    // owns (`ir.md`).
+    const bool compatible = floatLiteral ? types_.isFloat(decided) : types_.isInteger(decided);
     if (compatible) {
       chosen = decided;
     }

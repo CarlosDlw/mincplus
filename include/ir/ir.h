@@ -72,11 +72,13 @@ enum class IRDiagnosticCode : std::uint8_t {
   // checker stopped recording where it used to.
   MissingObligation,
   // The module carries an assumption the language did not state (a metadata
-  // node, a function attribute, an `inbounds` without a proof). Reported by the
-  // scan, not by the lowering -- the lowering has no way to emit one.
+  // node, a function attribute, an `inbounds` without a proof, a file-scope
+  // object emitted `constant`). Reported by the scan, not by the lowering -- the
+  // lowering has no way to emit one.
   Assumption,
-  // An emitted access states an alignment that is not the one its type
-  // requires. Overestimating it is undefined behaviour in LLVM, not slow code.
+  // An emitted alignment -- an access's, or a file-scope object's -- is not the
+  // one its type requires. Overestimating it is undefined behaviour in LLVM, not
+  // slow code.
   Alignment,
   // An operation the language defines as a trap was emitted bare.
   UnguardedOp,

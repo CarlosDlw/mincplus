@@ -398,13 +398,21 @@ std::optional<resolve::DefId> Lowering::defOfPlace(ast::AstId expr) const {
   return std::nullopt;
 }
 
-llvm::AllocaInst* Lowering::localOf(ast::AstId pathExpr) const {
+llvm::Value* Lowering::storageOf(ast::AstId pathExpr) const {
   const std::optional<resolve::DefId> def = defOfPath(pathExpr);
   if (!def.has_value()) {
     return nullptr;
   }
-  const auto found = locals_.find(defKey(*def));
-  return found == locals_.end() ? nullptr : found->second;
+  const std::uint64_t key = defKey(*def);
+  if (const auto found = locals_.find(key); found != locals_.end()) {
+    return found->second;
+  }
+  // Not a local: it is a file-scope object, or it is neither and the caller
+  // reports it. The two maps are asked in this order because they cannot both
+  // hold one declaration -- a def is declared in one scope -- so this is a lookup
+  // and not a search for a preference.
+  const auto global = globals_.find(key);
+  return global == globals_.end() ? nullptr : global->second;
 }
 
 llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
@@ -481,6 +489,13 @@ bool Lowering::run() {
     }
   }
 
+  // Objects before functions and both before any body, the same order
+  // `sema::runSignatures` and `checkGlobals` use one stage up: a body may read
+  // either, so both have to exist before the first statement is lowered.
+  declareGlobals();
+  if (failed_) {
+    return false;
+  }
   declareFunctions();
   if (failed_) {
     return false;

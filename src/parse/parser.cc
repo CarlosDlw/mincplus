@@ -111,12 +111,18 @@ void Parser::tooDeep() {
 
 // ------------------------------------------------------------------ file ---
 
-// The tokens that can begin a file-scope item: `fn`, and the `extern` that turns
-// one into a declaration. One predicate rather than the same pair of comparisons
-// in the loop and in the recovery, so a third form (`struct`, `import`) is added
-// in one place and the loop and the recovery cannot come to different answers.
+// The tokens that can begin a file-scope item. One predicate rather than the
+// same list of comparisons in the loop and in the recovery, so a form added here
+// (`struct`, `import`) is added in one place and the loop and the recovery
+// cannot come to different answers.
+//
+// A *binding* is an item: `let`/`const` at the top of a unit is the same
+// production a block-scope binding uses, and `static` is a prefix on either
+// form, which is why the prefix is here beside the two words that follow it.
 [[nodiscard]] static bool isItemStart(const Parser& parser) {
-  return parser.at(lex::TokenKind::KwFn) || parser.at(lex::TokenKind::KwExtern);
+  return parser.at(lex::TokenKind::KwFn) || parser.at(lex::TokenKind::KwExtern) ||
+         parser.at(lex::TokenKind::KwStatic) || parser.at(lex::TokenKind::KwLet) ||
+         parser.at(lex::TokenKind::KwConst);
 }
 
 void Parser::parseFile() {
@@ -147,15 +153,84 @@ void Parser::parseFile() {
   file.complete(SyntaxKind::File);
 }
 
+// One file-scope item. `static` is a prefix on both forms -- a function and a
+// binding -- so a single lookahead past it is what says which declaration is
+// being read; the rest of the shape is the same production the block scope uses.
 void Parser::parseItem() {
   if (bailedOut_) {
     return;
   }
-  parseFnDecl(at(lex::TokenKind::KwExtern));
+
+  const bool isStatic = at(lex::TokenKind::KwStatic);
+  const lex::TokenKind leader = isStatic ? nth(1) : current();
+
+  // `extern` on a binding. Refused by name rather than misread: without this the
+  // `let` would be reported as a function declaration missing its `fn`, which is
+  // true of the shape and says nothing about the word the reader meant.
+  if (leader == lex::TokenKind::KwExtern &&
+      (nth(1) == lex::TokenKind::KwLet || nth(1) == lex::TokenKind::KwConst)) {
+    error("`extern` on a binding is not implemented yet: a file-scope binding is defined in this "
+          "unit, and `extern fn` is the declaration form for a function",
+          ParseErrorCode::ExternBinding);
+    recoverItem();
+    return;
+  }
+
+  // `static` in front of something that is not a declaration. Reported here, and
+  // the recovery consumes the word, so the file loop always makes progress.
+  if (isStatic && leader != lex::TokenKind::KwFn && leader != lex::TokenKind::KwExtern &&
+      leader != lex::TokenKind::KwLet && leader != lex::TokenKind::KwConst) {
+    error("`static` makes a declaration internal to this unit; it belongs before `fn`, `let` or "
+          "`const`",
+          ParseErrorCode::StaticPosition);
+    recoverItem();
+    return;
+  }
+
+  switch (leader) {
+  case lex::TokenKind::KwFn:
+    parseFnDecl(/*isExtern=*/false, isStatic);
+    return;
+  case lex::TokenKind::KwExtern:
+    parseFnDecl(/*isExtern=*/true, isStatic);
+    return;
+  case lex::TokenKind::KwLet:
+  case lex::TokenKind::KwConst:
+    parseFileBinding(/*isConst=*/leader == lex::TokenKind::KwConst, isStatic);
+    return;
+  default:
+    break;
+  }
+
+  // Unreachable from `parseFile`, which only calls this on an item start; kept
+  // total so a future caller cannot make the file loop spin.
+  error("expected a declaration", ParseErrorCode::ExpectedItem);
+  recoverItem();
 }
 
+// A file-scope binding, which is the block-scope one plus the `;` and an
+// optional `static`. One node kind, so a consumer reads a binding once wherever
+// it was written -- and so `lower` summarises one shape into an `Item` instead
+// of two.
+void Parser::parseFileBinding(bool isConst, bool isStatic) {
+  Marker stmt = start();
+  if (isStatic) {
+    bump(); // `static`
+  }
+  parseBinding();
+  expect(lex::TokenKind::Semicolon);
+  stmt.complete(isConst ? SyntaxKind::ConstStmt : SyntaxKind::LetStmt);
+}
+
+// Always consumes at least one token. The caller may have already decided that
+// the *current* token is wrong -- and the current token is then an item start by
+// construction -- so a loop that only advances to the next item start would
+// return without moving and the file loop would spin on it forever.
 void Parser::recoverItem() {
   Marker junk = start();
+  if (!atEnd()) {
+    bump();
+  }
   while (!atEnd() && !isItemStart(*this)) {
     bump();
   }

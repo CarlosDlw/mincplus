@@ -70,40 +70,54 @@ TypeId usualArithmetic(TypeStore& types, TypeId left, TypeId right) {
   const bool rightDeferred = types.isDeferred(right);
 
   // Both undecided: the result stays undecided, and only the *class* matters --
-  // `1 + 2` is an integer literal, `1 + 2.0` is a float literal, and whatever
-  // context follows decides the width once.
+  // `1 + 2` is an integer literal, `1.0 + 2.0` is a float literal, and whatever
+  // context follows decides the width once. Two literals of *different* classes
+  // have no common type: the class of a number is the spelling's, and the two do
+  // not meet (`convertible`).
   if (leftDeferred && rightDeferred) {
-    return (types.get(left).kind == TypeKind::FloatLiteral ||
-            types.get(right).kind == TypeKind::FloatLiteral)
-               ? kTypeFloatLiteral
-               : kTypeIntLiteral;
-  }
-  // One undecided: it adopts the other side. A float on either side wins, so
-  // `1 + 2.0f` is `f32` and not `f64`; an integer side is taken *promoted*, so
-  // `1 + u8` is `i32` and not `u8`.
-  if (leftDeferred) {
-    const TypeId concrete = promote(types, right);
-    if (types.isFloat(concrete)) {
-      return usualArithmetic(types, types.defaultOf(left), concrete);
+    const bool leftFloat = types.get(left).kind == TypeKind::FloatLiteral;
+    const bool rightFloat = types.get(right).kind == TypeKind::FloatLiteral;
+    if (leftFloat != rightFloat) {
+      return kTypeError;
     }
-    return concrete;
+    return leftFloat ? kTypeFloatLiteral : kTypeIntLiteral;
   }
-  if (rightDeferred) {
-    const TypeId concrete = promote(types, left);
-    if (types.isFloat(concrete)) {
-      return usualArithmetic(types, concrete, types.defaultOf(right));
+  // One undecided: it adopts the other side, and only within its own class. The
+  // two classes adopt differently, and each difference is a rule:
+  //
+  //   * an **integer** literal takes the other side *promoted*, so `1 + u8` is
+  //     `i32` and not `u8` -- the promotion is what the addition happens at;
+  //   * a **float** literal takes the other side exactly, because a float has no
+  //     promotion: `1.0 + x` with an `f32` `x` is an `f32`, and defaulting the
+  //     literal to `f64` first would widen a computation the reader wrote
+  //     narrowly.
+  //
+  // A literal whose class is the other side's has no common type with it, which is
+  // the same refusal two concrete operands get below.
+  if (leftDeferred || rightDeferred) {
+    const TypeId literalSide = leftDeferred ? left : right;
+    const TypeId concrete = promote(types, leftDeferred ? right : left);
+    if (types.get(literalSide).kind == TypeKind::FloatLiteral) {
+      return types.isFloat(concrete) ? concrete : kTypeError;
     }
-    return concrete;
+    return types.isInteger(concrete) ? concrete : kTypeError;
   }
 
   if (!types.isArithmetic(left) || !types.isArithmetic(right)) {
     return kTypeError;
   }
-  if (types.isFloat(left) || types.isFloat(right)) {
-    const std::uint16_t leftBits = types.isFloat(left) ? types.get(left).bits : 0;
-    const std::uint16_t rightBits = types.isFloat(right) ? types.get(right).bits : 0;
-    // A float and an integer: the integer converts to the float. Two floats: the
-    // wider one.
+  // An integer and a float have no common type: not by picking the float (C's
+  // answer, and a value the source never wrote) and not by picking the integer
+  // (which would silently drop the fractional part). `convertible` states the
+  // rule; this is the operator asking it.
+  if (types.isFloat(left) != types.isFloat(right)) {
+    return kTypeError;
+  }
+  if (types.isFloat(left)) {
+    // Two floats: the wider one, which is C's rule and needs no cast: `f32` and
+    // `f64` are one class, and the widening is exact.
+    const std::uint16_t leftBits = types.get(left).bits;
+    const std::uint16_t rightBits = types.get(right).bits;
     return asFloat(types, leftBits > rightBits ? leftBits : rightBits);
   }
 
@@ -130,6 +144,21 @@ TypeId usualArithmetic(TypeStore& types, TypeId left, TypeId right) {
     return unsignedSide;
   }
   return signedSide;
+}
+
+bool mixedNumberPair(const TypeStore& types, TypeId from, TypeId to) {
+  if (types.isError(from) || types.isError(to)) {
+    return false; // the poison is not a number, and it converts to everything
+  }
+  const auto floatSide = [&types](TypeId id) {
+    const TypeKind kind = types.get(id).kind;
+    return kind == TypeKind::Float || kind == TypeKind::FloatLiteral;
+  };
+  const auto integerSide = [&types](TypeId id) {
+    const TypeKind kind = types.get(id).kind;
+    return kind == TypeKind::Int || kind == TypeKind::Char || kind == TypeKind::IntLiteral;
+  };
+  return (floatSide(from) && integerSide(to)) || (integerSide(from) && floatSide(to));
 }
 
 bool convertible(const TypeStore& types, TypeId from, TypeId to) {
@@ -186,6 +215,25 @@ bool convertible(const TypeStore& types, TypeId from, TypeId to) {
   // `flag + 1` compile, and it is the footgun this language does not keep.
   if (fromKind == TypeKind::Bool || toKind == TypeKind::Bool || fromKind == TypeKind::Str ||
       toKind == TypeKind::Str) {
+    return false;
+  }
+  // An integer and a float do not convert into each other, in **either**
+  // direction.
+  //
+  // This is the one place the language departs from C's arithmetic, and it
+  // departs on purpose. C turns `double d = 1;` into a silent widening and
+  // `1 + 2.0` into a `double`, and both are values the reader did not write --
+  // one of them with a rounding they cannot see. Here the class of a number is
+  // the class of its **spelling** (`1` is an integer, `1.0` is a float), and
+  // crossing between the two is a cast, which the language does not have yet and
+  // will spell out when it does.
+  //
+  // One rule, in the one place every conversion is defined, so it covers every
+  // consumer there is: an initializer, an assignment, an argument, a `return`
+  // (`checkAssignable`) and the operands of an arithmetic operator
+  // (`usualArithmetic`). An integer converts to another integer, a float to
+  // another float, and a narrower one to a wider one of its own class.
+  if (mixedNumberPair(types, from, to)) {
     return false;
   }
   // Everything else that reaches here is arithmetic (or a function type, which

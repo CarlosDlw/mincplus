@@ -31,10 +31,13 @@ namespace minc::sema {
 // The common type of two arithmetic operands -- what `a + b` produces, what a
 // comparison converts to before comparing, and what `?:` unifies its arms to.
 //
-// Deferred literals are handled here rather than at each operator: two defer,
-// one adopts the other side (promoted), and `1 + 2.0` is `f64`. The poison
-// spreads, and a non-arithmetic operand yields `Error` -- the caller has already
-// reported it, and this must not report a second time.
+// Deferred literals are handled here rather than at each operator: two of one
+// class defer together, and one adopts the other side within its own class
+// (promoted, so `1 + u8` is `i32`). An **integer and a float have no common
+// type**: neither is converted to the other (`convertible`), so the answer is
+// `Error` and the caller reports it. The poison spreads, and a non-arithmetic
+// operand yields `Error` too -- the caller has already reported it, and this must
+// not report a second time.
 [[nodiscard]] TypeId usualArithmetic(TypeStore& types, TypeId left, TypeId right);
 
 // The type an operator's operands are converted to before it runs, which is also
@@ -50,16 +53,26 @@ namespace minc::sema {
 [[nodiscard]] TypeId operationType(TypeStore& types, bool shift, TypeId left, TypeId right);
 
 // Whether the assignment conversion applies: initializer, assignment, argument,
-// `return`. Anything arithmetic converts to anything arithmetic, silently --
-// including the narrowing, which is what makes C code compile and why the
-// diagnosis for it is the `-Wconversion` lint rather than an error. `bool`
-// converts only to `bool`, `str` only to `str`, and the poison to everything.
+// `return`. Arithmetic converts to arithmetic of its **own class** -- an integer
+// to an integer, a float to a float, narrower to wider -- and the narrowing
+// within a class is silent, which is why the diagnosis for it is the
+// `-Wconversion` lint rather than an error. An integer and a float do not convert
+// into each other in either direction: the class of a number is the class of its
+// spelling, and crossing is a cast. `bool` converts only to `bool`, `str` only to
+// `str`, pointers only as `memory.md` says, and the poison to everything.
 //
 // Pointers convert to pointers of the **same pointee**, and to and from `*void`
 // -- the untyped pointer, and the only one that crosses. `i32` to `*i32` is not
 // a conversion in either direction: a pointer is not an integer, and the two
 // operations that join them are named and counted (`memory.md`, *Provenance*).
 [[nodiscard]] bool convertible(const TypeStore& types, TypeId from, TypeId to);
+
+// True when one type is an integer and the other is a float: the one pair of
+// arithmetic types that does not convert, in either direction. Exported because
+// two diagnostics ask it -- the refusal of `let x: f64 = 1;` and the refusal of
+// `1 + 2.0` are one rule and deserve one explanation -- and because "are these
+// two mixed numbers" is a question about the types and not about either checker.
+[[nodiscard]] bool mixedNumberPair(const TypeStore& types, TypeId from, TypeId to);
 
 // True when the conversion may lose information: a float to an integer, a wider
 // integer to a narrower one, a signed to an unsigned of the same or smaller

@@ -187,6 +187,45 @@ public:
     }
     return store_.spelling(typed().typeOf(node));
   }
+  // The published value of a **file-scope** binding: what the lowering writes as
+  // the object's bytes. Null when the unit has no binding with that name, which
+  // is how a test tells `Zero` apart from "not a global at all".
+  [[nodiscard]] const sema::GlobalInfo* globalOf(std::string_view name) const {
+    const ast::AstId decl = findBindingDecl(name);
+    return decl.valid() ? typed().globalOf(decl) : nullptr;
+  }
+  // The value kind of a file-scope binding, as text, or "none" when it has no
+  // record. A string rather than the enumerator because a failure message that
+  // prints `3` says nothing about which kind it was.
+  [[nodiscard]] std::string globalKind(std::string_view name) const {
+    const sema::GlobalInfo* info = globalOf(name);
+    return info == nullptr ? std::string("none") : std::string(sema::toString(info->value));
+  }
+  // The file-scope bindings of the unit, in the order the table holds them.
+  [[nodiscard]] std::vector<std::string> globalNames() const {
+    std::vector<std::string> out;
+    for (const ast::AstId id : allNodes()) {
+      const ast::NodeKind kind = lowered().at(id).kind;
+      if (kind != ast::NodeKind::LetStmt && kind != ast::NodeKind::ConstStmt) {
+        continue;
+      }
+      const ast::AstId nameNode = lowered().childOfKind(id, ast::NodeKind::Name);
+      if (!nameNode.valid()) {
+        continue;
+      }
+      // Only the file scope: a binding inside a body has no published value, and
+      // a body's nodes are *after* the file's items in the pre-order, so the
+      // filter is the node's own parentage -- which the tree does not record. The
+      // items are what `resolve` gave a file-scope definition, so that is the
+      // question asked instead of the parent.
+      if (typed().globalOf(id) == nullptr) {
+        continue;
+      }
+      out.emplace_back(lowered().spellingOf(nameNode));
+    }
+    return out;
+  }
+
   // The `ExprInfo` of the binding's initializer.
   [[nodiscard]] sema::ExprInfo initializerInfo(std::string_view name) const {
     for (const ast::AstId id : allNodes()) {
@@ -258,6 +297,10 @@ private:
     return ids;
   }
   [[nodiscard]] ast::AstId findBindingName(std::string_view name) const {
+    const ast::AstId decl = findBindingDecl(name);
+    return decl.valid() ? lowered().childOfKind(decl, ast::NodeKind::Name) : ast::AstId{};
+  }
+  [[nodiscard]] ast::AstId findBindingDecl(std::string_view name) const {
     for (const ast::AstId id : allNodes()) {
       const ast::NodeKind kind = lowered().at(id).kind;
       if (kind != ast::NodeKind::LetStmt && kind != ast::NodeKind::ConstStmt) {
@@ -265,7 +308,7 @@ private:
       }
       const ast::AstId nameNode = lowered().childOfKind(id, ast::NodeKind::Name);
       if (nameNode.valid() && lowered().spellingOf(nameNode) == name) {
-        return nameNode;
+        return id;
       }
     }
     return ast::AstId{};

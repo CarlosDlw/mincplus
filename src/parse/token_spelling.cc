@@ -13,6 +13,8 @@ std::string_view tokenSpelling(lex::TokenKind kind) {
     return "fn";
   case lex::TokenKind::KwExtern:
     return "extern";
+  case lex::TokenKind::KwStatic:
+    return "static";
   case lex::TokenKind::KwLet:
     return "let";
   case lex::TokenKind::KwConst:

@@ -45,6 +45,17 @@ enum class ParseErrorCode : std::uint8_t {
   // `extern fn` with a body. `extern` says the definition lives in another unit,
   // so a body here contradicts the word rather than being an extra detail.
   ExternWithBody,
+  // `extern` written before a binding (`extern let x: i32;`). The *form* is not
+  // built yet -- a global has storage, an initializer, and an address the loader
+  // initializes rather than this unit -- so the word is refused by name instead
+  // of being misread as a function declaration that lost its `fn`.
+  ExternBinding,
+  // `static` written together with `extern`. The two words answer one question
+  // -- who may see this name -- with opposite answers, so both cannot be right.
+  ConflictingLinkage,
+  // `static` somewhere other than in front of a declaration. It is a declaration
+  // word, not a statement one: a function-local `static` is a different feature.
+  StaticPosition,
   // `...` in a function that has a body. *Reading* a variadic argument needs
   // `va_start`, which the language does not have, so only a declaration may be
   // variadic -- the marker in a definition would be a function nobody can write.

@@ -249,7 +249,7 @@ Objects are produced by exactly three things, and the list is closed:
 1. a **local binding** (`alloca`) — each binding is its own object, so no pointer
    arithmetic can walk from one local to the next, even when the stack layout
    puts them adjacent;
-2. a **global** (a future `let`/`const` at file scope, and today the private
+2. a **global** (a file-scope `let`/`const` -- `globals.md` -- and the private
    `[N x i8]` global behind a `str` literal);
 3. an **allocator call** — `alloc`, declared in the runtime's own header with the
    object obligations of this section as its contract.

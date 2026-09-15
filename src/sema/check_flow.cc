@@ -485,6 +485,16 @@ void Checker::reportIfUnassigned(resolve::DefId def, ast::AstId at) {
   if (declaration->kind != resolve::DefKind::Variable) {
     return;
   }
+  // A **file-scope** binding is initialized before the program runs: its bytes
+  // are written by the compiler -- the value, or zero if the source gave none
+  // (`globals.md`, decisions 2 and 4). There is no path into a function that
+  // reaches one unassigned, so this analysis, which is about the paths *inside* a
+  // function, has nothing to say about it. Without this the first read of a
+  // file-scope `let` would be reported: the pass marks a binding assigned where
+  // the source assigns it, and nothing in a body ever assigns one of these.
+  if (declaration->scope == defs_.fileScope) {
+    return;
+  }
   if (def.index < assigned_.size() && assigned_[def.index]) {
     return;
   }

@@ -524,6 +524,10 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       // the list that proves the *table* has no entry nobody can reach.
       {"fn ! f() { return; }\n", false},
       {"fn ! f() { }\n", false},
+      // The file scope. A binding whose initializer cannot be a value, and the
+      // one shape that has no order to evaluate in.
+      {"let a: i32 = 1;\nlet b: i32 = a;\nfn i32 main() { return b; }\n", false},
+      {"const a: i32 = b;\nconst b: i32 = a;\nfn i32 main() { return a; }\n", false},
   };
 
   for (const Case& one : cases) {

@@ -25,9 +25,18 @@ namespace minc::ast {
 // it* without looking at it: how it is named, what kind of thing it is, where
 // its signature is, and -- if it has one -- which node is its body.
 //
-// The signature is *spelled*: a name, an arity, and whether a body exists --
-// never a type. Types are `sema`'s, and an item that carried them would force
-// this stage to decide something it has no business deciding.
+// The signature is *spelled*: a name, an arity, whether a body exists, and which
+// linkage word was written -- never a type. Types are `sema`'s, and an item that
+// carried them would force this stage to decide something it has no business
+// deciding.
+//
+// Two kinds of declaration share this one summary, and the split is the same for
+// both: a function's signature is `[static] [extern] fn T Name(params)` and its
+// body is the block; a binding's signature is `[static] let|const Name: T` and
+// its body is the initializer. So `hasBody`/`body` mean "there is a definition
+// here" in both cases, and an edit to a body -- a function's statements, a
+// constant's value -- leaves the item tree identical. That is the invariant, not
+// a convenience: the file scope is rebuilt exactly when an item tree changes.
 //
 // `operator==` is the load-bearing part, and it is narrower than the struct: the
 // node indices (`node`, `body`) are deliberately **not** compared. They are
@@ -35,11 +44,13 @@ namespace minc::ast {
 // would make an edit inside one function's body look like a change to every
 // signature after it -- exactly the invariant the item tree exists to provide.
 struct Item {
+  // `FnDecl`, `LetStmt` or `ConstStmt`: the node the declaration is, and so also
+  // *which* kind of declaration this is.
   NodeKind kind = NodeKind::Error;
   support::SymId name = support::kInvalidSym;
   // The signature: from the start of the declaration through the closing `)` of
-  // the parameter list. It stops where the body begins, so a body edit cannot
-  // change it.
+  // a parameter list, or through the type annotation of a binding. It stops where
+  // the body begins, so a body edit cannot change it.
   support::Span span;
   // Just the declared name, for a caret and for `source_to_def`.
   support::Span nameSpan;
@@ -49,6 +60,11 @@ struct Item {
   // change between them has to invalidate whatever the item tree keys on.
   bool variadic = false;
   bool hasBody = false;
+  // True when the declaration was written `static`, which makes it internal to
+  // this unit. Part of the signature and not a detail: it decides the symbol the
+  // linker sees and whether another unit can name the declaration at all, so an
+  // edit that adds or removes the word has to rebuild the file scope.
+  bool isStatic = false;
   // Where in this file's node array the declaration and its body are. Not part
   // of the signature; see above.
   std::uint32_t node = kInvalidAst;
@@ -57,7 +73,7 @@ struct Item {
   [[nodiscard]] bool operator==(const Item& other) const {
     return kind == other.kind && name == other.name && span == other.span &&
            nameSpan == other.nameSpan && paramCount == other.paramCount &&
-           variadic == other.variadic && hasBody == other.hasBody;
+           variadic == other.variadic && hasBody == other.hasBody && isStatic == other.isStatic;
   }
   [[nodiscard]] bool operator!=(const Item& other) const {
     return !(*this == other);

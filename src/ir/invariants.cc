@@ -6,7 +6,8 @@
 // `llvm::verifyModule` -- run by the lowering itself -- proves a module is *well
 // formed*. This proves it is **ours**: that the closed list of assumptions in
 // `ir.md` is the list actually in the module, that every division was guarded,
-// and that every access states the alignment its type gives. None of those is a
+// and that every alignment -- an access's, and a file-scope object's -- is the
+// one its type gives. None of those is a
 // rule about LLVM, so the verifier cannot see any of them: they are rules about
 // this language, and the reason they are written down is that violating one is a
 // *miscompile* rather than a diagnostic.
@@ -16,9 +17,12 @@
 // guard or adds a `nsw` fails a test instead of producing wrong code.
 #include "ir/invariants.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "llvm/ADT/StringRef.h"
@@ -36,6 +40,35 @@
 namespace minc::ir {
 namespace {
 
+// The assumption list, in one table with the enumeration: a row added to the enum
+// without one is a compile error here, and a row whose enumerator no longer
+// exists is caught by `allModuleAssumptions()` being derived from this table and
+// compared against it in a test. Same shape as `sema`'s access tables, for the
+// same reason.
+// NOLINTBEGIN(readability-identifier-naming): table name follows the project's
+// convention for the other stages' tables.
+constexpr std::array<ModuleAssumptionInfo, 9> kModuleAssumptionInfos{{
+    {ModuleAssumption::Metadata, "metadata", IRDiagnosticCode::Assumption},
+    {ModuleAssumption::FunctionAttribute, "function-attribute", IRDiagnosticCode::Assumption},
+    {ModuleAssumption::Inbounds, "inbounds", IRDiagnosticCode::Assumption},
+    {ModuleAssumption::Wrapping, "wrapping", IRDiagnosticCode::Assumption},
+    {ModuleAssumption::FastMath, "fast-math", IRDiagnosticCode::Assumption},
+    {ModuleAssumption::DebugIntrinsic, "debug-intrinsic", IRDiagnosticCode::Assumption},
+    {ModuleAssumption::ConstantObject, "constant-object", IRDiagnosticCode::Assumption},
+    {ModuleAssumption::Alignment, "alignment", IRDiagnosticCode::Alignment},
+    {ModuleAssumption::UnguardedDivision, "unguarded-division", IRDiagnosticCode::UnguardedOp},
+}};
+// NOLINTEND(readability-identifier-naming)
+
+template <std::size_t... Indexes>
+[[nodiscard]] constexpr auto assumptionsFromTable(std::index_sequence<Indexes...>) {
+  return std::array<ModuleAssumption, sizeof...(Indexes)>{
+      kModuleAssumptionInfos[Indexes].assumption...};
+}
+
+constexpr auto kAllModuleAssumptions =
+    assumptionsFromTable(std::make_index_sequence<kModuleAssumptionInfos.size()>{});
+
 void add(std::vector<IRDiagnostic>& out, IRDiagnosticCode code, std::string message) {
   IRDiagnostic diagnostic;
   diagnostic.code = code;
@@ -43,27 +76,63 @@ void add(std::vector<IRDiagnostic>& out, IRDiagnosticCode code, std::string mess
   out.push_back(std::move(diagnostic));
 }
 
-// The attribute names the model forbids outright. Each one is a promise to the
-// optimizer that this language does not make: `noalias` would say two pointers
-// do not alias (`memory.md` says aliasing is not typed and only an explicit
-// `restrict` may promise otherwise), `nonnull`/`dereferenceable`/`noundef` would
-// say a value is one the source never proved, and `nsw` in attribute form is
-// the same refusal the instruction flags get.
-[[nodiscard]] bool isForbiddenAttribute(llvm::StringRef name) {
-  return name == "noalias" || name == "nonnull" || name == "noundef" || name == "dereferenceable" ||
-         name == "dereferenceable_or_null" || name == "align" || name == "signext" ||
-         name == "zeroext" || name == "inreg";
+// The attributes the language never states, **by kind and not by name**.
+//
+// Each one is a promise to the optimizer that this language does not make:
+// `noalias` would say two pointers do not alias (`memory.md` says aliasing is not
+// typed and only an explicit `restrict` may promise otherwise),
+// `nonnull`/`dereferenceable`/`noundef` would say a value is one the source never
+// proved, and the integer extension hints say the ABI wants a wider value than
+// the type does.
+//
+// A kind, and not `Attribute::getKindAsString()`: the name is a *library* table
+// lookup, and the value this compiler reads through it is not the attribute --
+// measured, not assumed -- so a name comparison would leave this row silently
+// unchecked. The enum value is the compiler's own spelling and needs no table.
+// The message below therefore names each kind from this compiler's side, and a
+// kind added here without a name is a compile error at the `switch`.
+[[nodiscard]] const char* forbiddenAttributeName(llvm::Attribute::AttrKind kind) {
+  switch (kind) {
+  case llvm::Attribute::NoAlias:
+    return "noalias";
+  case llvm::Attribute::NonNull:
+    return "nonnull";
+  case llvm::Attribute::NoUndef:
+    return "noundef";
+  case llvm::Attribute::Dereferenceable:
+    return "dereferenceable";
+  case llvm::Attribute::DereferenceableOrNull:
+    return "dereferenceable_or_null";
+  case llvm::Attribute::Alignment:
+    return "align";
+  case llvm::Attribute::SExt:
+    return "signext";
+  case llvm::Attribute::ZExt:
+    return "zeroext";
+  case llvm::Attribute::InReg:
+    return "inreg";
+  default:
+    // Every other attribute, including the string attributes, which only a
+    // written annotation can produce and which the language does not have.
+    return nullptr;
+  }
 }
 
 void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function& function,
                     std::vector<IRDiagnostic>& out) {
   const auto check = [&](const llvm::Attribute& attribute) {
-    if (!isForbiddenAttribute(attribute.getKindAsString())) {
+    // A string attribute has no enum kind at all, and `getKindAsEnum` asserts
+    // over one -- the question is asked first, so the accessor is only reached
+    // for the attributes it is defined for.
+    if (!attribute.isEnumAttribute()) {
+      return;
+    }
+    const char* name = forbiddenAttributeName(attribute.getKindAsEnum());
+    if (name == nullptr) {
       return;
     }
     add(out, IRDiagnosticCode::Assumption,
-        "`" + function.getName().str() + "` carries the attribute `" +
-            attribute.getKindAsString().str() +
+        "`" + function.getName().str() + "` carries the attribute `" + name +
             "`, which the language does not state; see `ir.md`, *The assumption list*");
   };
   for (const llvm::Attribute& attribute : attributes.getFnAttrs()) {
@@ -231,7 +300,70 @@ void scanInstruction(const llvm::Instruction& instruction, const llvm::Function&
   }
 }
 
+// A file-scope object, checked against the two things the model states about one.
+//
+// The instruction scan cannot see either of them. Its `align` check reads an
+// access, and a global's alignment is a claim about the *object* the access goes
+// through -- and `constant` is written on the object and never appears in any
+// instruction, so a `constant` global is invisible to a scan that only walks
+// function bodies. That is the shape of the mistake this whole file exists to
+// prevent: a rule stated in a record, enforced nowhere.
+void scanGlobal(const llvm::GlobalVariable& global, const llvm::DataLayout& layout,
+                std::vector<IRDiagnostic>& out) {
+  const std::string name = global.getName().str();
+
+  // **No `constant`, ever** (`memory.md`, decision 15). `const` in this language
+  // protects a *name*: it says the binding may not be assigned, and says nothing
+  // about the bytes. LLVM's `constant` is the opposite claim -- it says no write
+  // to the object happens, and a write through a pointer to it is undefined
+  // behaviour rather than a diagnostic. Today the source cannot reach such a
+  // write ("the address of a `const`" is refused, precisely because a pointer to
+  // it would be a way to write it), which is exactly why this must be scanned
+  // rather than reasoned about: it is an optimisation a future relaxation of
+  // *that* refusal would silently turn into a miscompile.
+  if (global.isConstant()) {
+    add(out, IRDiagnosticCode::Assumption,
+        "the file-scope object `" + name +
+            "` is emitted as a constant, which tells the optimizer that nothing writes it; a "
+            "`const` here protects a name and not memory, so the object may be written through a "
+            "pointer -- see `memory.md`, decision 15");
+  }
+
+  // The alignment claim, over the object rather than over an access to it, and an
+  // *equality* for the same reason the access scan uses one: understating it is
+  // slow code, overstating it is undefined behaviour, and the lowering has one
+  // rule for the number. A global with **no** stated alignment is not a violation:
+  // LLVM then derives it from the type and the layout, which is the same value.
+  const llvm::MaybeAlign stated = global.getAlign();
+  if (stated.has_value()) {
+    const llvm::Align required = layout.getABITypeAlign(global.getValueType());
+    if (*stated != required) {
+      add(out, IRDiagnosticCode::Alignment,
+          "the file-scope object `" + name + "` states alignment " +
+              std::to_string(stated->value()) + " where its type requires " +
+              std::to_string(required.value()));
+    }
+  }
+}
+
 } // namespace
+
+std::span<const ModuleAssumptionInfo> moduleAssumptions() {
+  return kModuleAssumptionInfos;
+}
+
+std::span<const ModuleAssumption> allModuleAssumptions() {
+  return kAllModuleAssumptions;
+}
+
+std::string_view toString(ModuleAssumption assumption) {
+  for (const ModuleAssumptionInfo& info : kModuleAssumptionInfos) {
+    if (info.assumption == assumption) {
+      return info.name;
+    }
+  }
+  return "unknown";
+}
 
 std::vector<IRDiagnostic> scanModule(const Module& module) {
   std::vector<IRDiagnostic> violations;
@@ -241,6 +373,11 @@ std::vector<IRDiagnostic> scanModule(const Module& module) {
   const llvm::Module& llvmModule = ModuleAccess::llvmModule(module);
   const llvm::DataLayout& layout = ModuleAccess::layout(module);
 
+  // The objects first, then the bodies: the order the module declares things in,
+  // so a violation reads in the order a reader of the dump meets it.
+  for (const llvm::GlobalVariable& global : llvmModule.globals()) {
+    scanGlobal(global, layout, violations);
+  }
   for (const llvm::Function& function : llvmModule) {
     scanAttributes(function.getAttributes(), function, violations);
     for (const llvm::BasicBlock& block : function) {

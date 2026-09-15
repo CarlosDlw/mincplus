@@ -409,8 +409,27 @@ which also records the reversal.
       lowering maps it to `void` and derives LLVM's `noreturn` from the return
       type ([`architectures/never.md`](architectures/never.md),
       `examples/012_never.mx`)
-- [ ] Storage classes and linkage: `static`, tentative definitions, and the
-      visibility rules that go with them
+- [x] File-scope bindings **designed**: `let` and `const` at the top of a unit,
+      `extern let`/`extern const` declarations, a **constant-only initializer**
+      evaluated in dependency order (so no dynamic initialization exists and the
+      static initialization order fiasco is unrepresentable), zero-initialization
+      for an uninitialized `let`, **external linkage for both `let` and `const`**
+      — visibility is the module system's decision and not a linkage default —
+      with `static` narrowing either one to internal
+      ([`architectures/globals.md`](architectures/globals.md));
+      `website/docs/language/variables.md#file-scope`
+- [x] File-scope bindings **implemented**: the file-scope item (the annotation ends
+      the item's span and the initializer is its `body`, so the editor invariant
+      holds), the ICE checker with its value record (dependency order, a cycle
+      reported with its chain, one sentence per binding, in source order), and the
+      `declareGlobals()` pass in `src/ir` — every object emitted `global` and never
+      `constant`, which the assumption scan then keeps true (decision 33 of §6).
+      `examples/013_file_scope.mx`, `tests/unit/sema/global_test.cc`,
+      `tests/unit/ir/global_test.cc`
+- [x] Storage classes and linkage: `static` (which narrows a file-scope `let` or
+      `const` to internal linkage — and means nothing at block scope, where there
+      is one storage duration)
+- [ ] Tentative definitions (C's `i32 x;`) and thread-local storage
 - [ ] Symbol table exported for the backend and C interop
 - [ ] Warning set: sign/conversion issues beyond `-Wconversion`, and the rest of
       the lints (each with a code and a test)
@@ -462,8 +481,13 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
       `!noalias` metadata, no `noalias` but from a written `restrict`, no
       `inbounds` without a recorded proof (today: none at all), no `nsw`/`nuw`,
       no `dereferenceable`/`nonnull`/`noundef`/`range`, no fast-math flags, no
-      `undef`/`poison` — enumerated in `invariants.cc` in the shape of
-      `sema`'s `allAccessKinds()`, with a test that visits every row
+      `undef`/`poison`, no file-scope object emitted `constant`, and no alignment
+      — an access's or an object's — that is not the one its type gives.
+      Enumerated in `invariants.cc` in the shape of `sema`'s `allAccessKinds()`,
+      one row per checked rule with the code it reports, and **every row is
+      tripped** by `tests/unit/ir/invariants_test.cc` on a module this compiler
+      built and then broke by hand — so a row without a test input fails there,
+      and a check that stopped running is a failing test rather than a comment
 - [ ] The checked build's **module-statable guards** (null dereference,
       misalignment, an `object`-provenance extent) behind `-fcheck`, which `-O0`
       defaults to — explicitly *not* the semantic guards, which belong in every
@@ -678,6 +702,18 @@ the two cannot disagree about what the pipeline means.
 
 ## 10. Language extras
 
+- [ ] **Module system and imports** `[?]`: constants, functions and top-level
+      types importable by name from other `.mx` files. The constraints it must
+      honor, the seams today's code keeps open for it, and the questions it has
+      to answer (granularity, visibility default, cycles, reference syntax,
+      where the interface lives, and how C symbols stay flat) are recorded in
+      [`architectures/modules.md`](architectures/modules.md) — written *before*
+      the feature on purpose, because C++20 modules changed every exported
+      function's mangled symbol and that is not a detail a parser decides late
+- [ ] Top-level types: `struct`, `enum`, and type aliases, with **nominal**
+      identity across modules (`architectures/modules.md`, seam S4 — the type
+      store interns by structure today, which is right for scalars and wrong for
+      an aggregate two modules each define)
 - [ ] `[?]` Fix the extension list with the language checklist
 - [ ] Specify each extra: syntax, semantics, and C-interop interaction
 - [ ] Reject extensions cleanly when a C-compatible mode is requested

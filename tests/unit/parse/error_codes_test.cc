@@ -66,6 +66,12 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::VariadicDefinition},
     {"`...` with no parameter before it", "extern fn i32 f(...);\n",
      ParseErrorCode::VariadicPosition},
+    // The file scope: a binding is an item, and the two prefixes that do not fit
+    // one are refused where the words are.
+    {"`extern` on a binding", "extern let x: i32;\n", ParseErrorCode::ExternBinding},
+    {"`static` before nothing that declares", "static x: i32;\n", ParseErrorCode::StaticPosition},
+    {"`static` and `extern` on one declaration", "static extern fn i32 f();\n",
+     ParseErrorCode::ConflictingLinkage},
 };
 
 [[nodiscard]] std::string deepInput() {

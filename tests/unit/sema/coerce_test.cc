@@ -218,7 +218,7 @@ TEST(CoerceTest, NothingDeferredReachesTheArtifact) {
   SemaFixture f;
   f.source("fn i32 main() {\n"
            "  let a = 1;\n"
-           "  let b = 1 + 2.0;\n"
+           "  let b = 1.0 + 2.0;\n"
            "  let c: i64 = 1 + 2;\n"
            "  let d: u8 = 1 + 2;\n"
            "  let e: i32 = 1;\n"
@@ -234,7 +234,7 @@ TEST(CoerceTest, NothingDeferredReachesTheArtifact) {
   // The context is what decides the shared subexpression, so an `f64` binding
   // must make `1 + 2.0` two `f64`s and not `i32` + `f64`.
   EXPECT_EQ(f.bindingType("b"), "f64");
-  EXPECT_EQ(f.typeOfSpelling("1 + 2.0"), "f64");
+  EXPECT_EQ(f.typeOfSpelling("1.0 + 2.0"), "f64");
   EXPECT_EQ(f.bindingType("d"), "u8");
   // ... and a narrow context decides the operation *and* its operands, which is
   // what makes the instruction `add i8` with two `i8` operands.

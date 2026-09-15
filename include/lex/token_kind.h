@@ -52,8 +52,16 @@ enum class TokenKind : std::uint8_t {
   // legal immediately before `fn` at file scope, and it is lexical for the same
   // reason -- the parser decides which of the two function forms it is reading
   // from the first token of the declaration, and it may not ask a later stage.
+  //
+  // `KwStatic` is a declaration keyword for the same reason and beside `extern`:
+  // the two are one question -- *who may see this name* -- and a reader deciding
+  // what a declaration is has to know which of them was written from the first
+  // token. It is a *linkage* word at file scope and not a storage duration (there
+  // is one storage duration there), and it is not a statement keyword: a
+  // function-local `static` is a different feature that does not exist yet.
   KwFn,
   KwExtern,
+  KwStatic,
   KwLet,
   KwConst,
   KwReturn,
@@ -163,6 +171,7 @@ enum class TokenKind : std::uint8_t {
   switch (kind) {
   case TokenKind::KwFn:
   case TokenKind::KwExtern:
+  case TokenKind::KwStatic:
   case TokenKind::KwLet:
   case TokenKind::KwConst:
   case TokenKind::KwReturn:

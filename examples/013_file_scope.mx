@@ -1,0 +1,78 @@
+// File scope: bindings declared outside every function.
+//
+// A file-scope binding is not a statement that runs first. It is an object whose
+// bytes this compiler writes into the module, which is the whole decision:
+// **there is no dynamic initialization**. `const SIZE: i32 = 4 * 1024;` is the
+// value 4096 in the object, not a multiplication the program performs before
+// `main`. Two things follow, and both are visible on this page.
+//
+// First, the order the bindings are written is not the order they are evaluated
+// in -- a file-scope name is visible everywhere in the unit, so `WIDTH` below
+// folds from `SIZE` whatever line each is written on. What an initializer may
+// read is exactly what the compiler can turn into a value: literals, other
+// file-scope `const`s, arithmetic over them, `null`, and `?:` over any of those.
+// A call, a local, a `let`, or a dereference has no value at that point, and each
+// is refused by name -- "not a constant" about a `let` would tell you nothing you
+// can act on.
+//
+// Second, the mutability is the object's. `const` is written once by the compiler
+// and is read-only; `let` is storage the program may write. Neither one runs
+// anything, so neither one can depend on anything that runs -- there is no static
+// initialization order to get wrong, and nothing here can read a half-built
+// object. A `let` with no initializer is zero, which is the C ABI's `.bss`.
+//
+//   $ mincc run examples/013_file_scope.mx
+//   resolution 512 x 384 = 196605 pixels
+//   scale 2.50, area called 1 time(s); 2.50 x 2 = 25.00
+
+extern fn i32 printf(format: str, ...);
+
+// A constant read by the constants below it. The forward reference is the point:
+// the value is decided in *dependency* order, so `WIDTH` is 512 here whatever
+// line it is on.
+const SIZE: i32 = 4 * 1024;
+const WIDTH: i32 = SIZE / 8;
+const HEIGHT: i32 = WIDTH * 3 / 4;
+const PIXELS: i32 = WIDTH * HEIGHT;
+
+// A float constant: a literal with a sign, and nothing else. `const RATIO: f64 =
+// 1.0 + 0.5;` is refused, because a file-scope object's *bytes* are written by
+// this compiler and float arithmetic is rounded by the target the program is
+// about to run on -- the spelling, and not the running machine, is the one place
+// a value is allowed to come from (`globals.md`, decision 2).
+const SCALE: f64 = 2.5;
+
+// The negation is one bit and no arithmetic anywhere, so this costs nothing at
+// run time and is exact.
+const OFFSET: i32 = -3;
+
+// `let`: mutable storage, written by the program and not by the compiler. `calls`
+// starts at its initializer, `counter` at zero -- the `.bss`.
+let calls: i32 = 0;
+let counter: i32;
+let greeting: str = "resolution";
+
+// `static` is the one word that narrows linkage: the symbol belongs to this unit,
+// and the linker will not resolve another unit's reference to it. It is the same
+// word on a binding as on a function, because it is a question about the
+// *symbol* -- visibility between modules is the module system's job, and not
+// something this word decides.
+static const TAG: str = "pixels";
+
+fn i32 area() {
+    calls = calls + 1;
+    return PIXELS + OFFSET;
+}
+
+fn void bump() {
+    counter = counter + 1;
+}
+
+fn i32 main() {
+    bump();
+    bump();
+    printf("%s %d x %d = %d %s\n", greeting, WIDTH, HEIGHT, area(), TAG);
+    printf("scale %.2f, area called %d time(s); %.2f x %d = %.2f\n", SCALE, calls, SCALE, counter,
+           SCALE * 10.0);
+    return 0;
+}

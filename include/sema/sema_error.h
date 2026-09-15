@@ -128,6 +128,18 @@ enum class SemaErrorCode : std::uint8_t {
   // operations that join them are not in the grammar yet, and until they are the
   // refusal is the whole rule (`memory.md`, *Provenance*).
   PointerInteger,
+  // A file-scope initializer that is not an initializer *constant expression*:
+  // a call, a read of a `let`, a dereference, a local. The language has no
+  // dynamic initialization, so the value of a file-scope object has to be known
+  // before the program exists (`globals.md`, decision 2), and this is the
+  // sentence for the expression that stopped being one.
+  GlobalNotConstant,
+  // The file-scope bindings of this unit need each other's values in a cycle
+  // (`const a = b; const b = a;`). Each has a value only if the other does, and
+  // there is no order that gives both one -- so the language refuses the cycle
+  // rather than picking an arbitrary place to start, which would make the value
+  // of a constant depend on the order the compiler happened to visit in.
+  GlobalCycle,
   // The type budget was reached. A hazard bound, not a language rule.
   LimitTypes,
   // A statement after a `return` in the same block (warning).

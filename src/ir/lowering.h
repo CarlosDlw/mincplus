@@ -35,6 +35,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -226,9 +227,13 @@ private:
   [[nodiscard]] Value fromStorage(const Value& value);
 
   // --- storage ----------------------------------------------------------------
-  // The local an expression names, or nullptr when it names something that is not
-  // a binding in this function.
-  [[nodiscard]] llvm::AllocaInst* localOf(ast::AstId pathExpr) const;
+  // Where an expression's name lives: the frame slot of a local, or the
+  // module-level object of a file-scope one. One function because "where does
+  // this name live" has one answer, decided by *where it was declared* and by
+  // nothing else -- and a second reader of that question is a second place for
+  // the two answers to differ. Nullptr for a name that is neither, which the
+  // caller reports.
+  [[nodiscard]] llvm::Value* storageOf(ast::AstId pathExpr) const;
   // `at` is the declaration the slot is for, so the frame slot carries the
   // location of the binding the reader wrote rather than of whatever instruction
   // happened to be last.
@@ -252,6 +257,10 @@ private:
 
   // --- items ------------------------------------------------------------------
   void declareFunctions();
+  // The file-scope objects, before any function is lowered: a body that reads one
+  // has to find the `GlobalVariable` that already exists, exactly as a call has
+  // to find the `Function` its declaration made.
+  void declareGlobals();
   void defineFunction(const sema::FunctionInfo& info);
   [[nodiscard]] std::string linkageName(resolve::DefId def) const;
   // Gives every block that has no terminator one, so a construct that leaves a
@@ -314,6 +323,25 @@ private:
   [[nodiscard]] llvm::Constant* stringGlobal(ast::AstId literal);
   [[nodiscard]] std::optional<llvm::APFloat> floatValue(ast::AstId literal);
   [[nodiscard]] std::optional<llvm::APInt> wideInteger(ast::AstId literal);
+  // The bytes of a file-scope object, from the record `sema` published. Always a
+  // `llvm::Constant` and never an instruction: that is what "the compiler writes
+  // these bytes" means, and it is the property the record exists to keep true.
+  // Nullptr when the value cannot be built, with the refusal already recorded.
+  [[nodiscard]] llvm::Constant* globalInitializer(const sema::GlobalInfo& info);
+  // Applies the conversion `sema` recorded for a binding's initializer, or
+  // refuses when the record and the value disagree. `valueType` is the type the
+  // constant was built at.
+  [[nodiscard]] llvm::Constant* convertGlobalValue(const sema::GlobalInfo& info,
+                                                   llvm::Constant* value, sema::TypeId valueType);
+  // A folded integer at the width and signedness of the type it was computed at.
+  // A 64-bit core value widened to an `i128` has to be *sign*-extended when the
+  // source type is signed and zero-extended when it is not, which is the same
+  // pair of answers `convert` gives for the same widening.
+  [[nodiscard]] llvm::ConstantInt* intConstant(support::ConstInt value, sema::TypeId type);
+  // A literal whose value is the negation of what it spells (`-2.5`). Exact for
+  // both forms and deliberately not arithmetic: a float's sign bit, and a
+  // two's-complement negation for an integer wider than the 64-bit core.
+  [[nodiscard]] llvm::Constant* negatedConstant(llvm::Constant* value);
 
   // --- the runtime -------------------------------------------------------------
   //
@@ -327,6 +355,41 @@ private:
   [[nodiscard]] Value checkedShift(const Value& value, const Value& count, sema::TypeId opType,
                                    bool left);
   void trapBlock();
+
+  // Which conversion a pair of types needs. Named rather than reduced to a cast
+  // opcode because *two* appliers read it: an instruction, for a runtime value,
+  // and a folded constant, for a file-scope initializer -- and an opcode would
+  // force the second one to grow a copy of the rule that decides it.
+  enum class Conversion : std::uint8_t {
+    // The same value with a new type: a pointer pair, or one width.
+    Identity,
+    Sext,
+    Zext,
+    Trunc,
+    SIToFP,
+    UIToFP,
+    FPToSI,
+    FPToUI,
+    FPExt,
+    FPTrunc,
+    // A pair the language does not permit. Only reachable from a bug in this
+    // compiler, since the checker refuses the program first.
+    Invalid,
+  };
+  [[nodiscard]] static Conversion conversionFor(const sema::TypeStore& types, sema::TypeId from,
+                                                sema::TypeId to);
+  [[nodiscard]] static std::optional<llvm::Instruction::CastOps>
+  castOpcodeOf(Conversion conversion);
+  // The signedness and width of a type, as the two questions the conversion rule
+  // asks. Static and taking the store, so the rule above shares one answer with
+  // the members below rather than restating it.
+  [[nodiscard]] static bool signednessOf(const sema::TypeStore& types, sema::TypeId type);
+  [[nodiscard]] static std::uint16_t bitWidthOf(const sema::TypeStore& types, sema::TypeId type);
+  // The same conversion, applied to a `llvm::Constant` instead of to an
+  // instruction: LLVM's own folder, so the constant and the runtime path round
+  // the same way.
+  [[nodiscard]] llvm::Constant* convertConstant(llvm::Constant* value, sema::TypeId from,
+                                                sema::TypeId to);
 
   // Whether a value of this type is interpreted as signed. Not `static`: the
   // answer is a property of the *store*, and a type this stage cannot look up is
@@ -374,6 +437,9 @@ private:
   sema::TypeId currentReturn_ = sema::kInvalidType;
 
   std::unordered_map<std::uint64_t, llvm::AllocaInst*> locals_;
+  // The file-scope objects, by the def that declared them. Not cleared per
+  // function: a global belongs to the unit, and one lives all the way through it.
+  std::unordered_map<std::uint64_t, llvm::GlobalVariable*> globals_;
   std::unordered_map<std::uint64_t, llvm::Function*> functions_;
   std::unordered_map<std::string, llvm::GlobalVariable*> strings_;
   // Interned names, so a diagnostic and a symbol can spell one without a scan.

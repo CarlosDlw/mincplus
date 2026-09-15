@@ -15,7 +15,7 @@ namespace {
 // compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' code tables.
-constexpr std::array<SemaErrorCodeInfo, 37> kSemaErrorCodeInfos{{
+constexpr std::array<SemaErrorCodeInfo, 39> kSemaErrorCodeInfos{{
     {SemaErrorCode::UnknownType, "sema-unknown-type", false},
     {SemaErrorCode::MalformedType, "sema-malformed-type", false},
     {SemaErrorCode::TypeNotValue, "sema-type-not-value", false},
@@ -50,6 +50,8 @@ constexpr std::array<SemaErrorCodeInfo, 37> kSemaErrorCodeInfos{{
     {SemaErrorCode::IndexNotInteger, "sema-index-not-integer", false},
     {SemaErrorCode::PointerMismatch, "sema-pointer-mismatch", false},
     {SemaErrorCode::PointerInteger, "sema-pointer-integer", false},
+    {SemaErrorCode::GlobalNotConstant, "sema-global-not-constant", false},
+    {SemaErrorCode::GlobalCycle, "sema-global-cycle", false},
     {SemaErrorCode::LimitTypes, "sema-limit-types", false},
     {SemaErrorCode::UnreachableCode, "sema-unreachable-code", true},
     {SemaErrorCode::ImplicitConversion, "sema-implicit-conversion", true},

@@ -86,6 +86,15 @@ public:
   void declareBinding(llvm::AllocaInst& alloca, std::string_view name, const sema::TypeStore& types,
                       sema::TypeId type, support::Span span);
 
+  // A file-scope object. `DIGlobalVariableExpression` is the only form of global
+  // debug information LLVM has: a `GlobalVariable` with no expression is a symbol
+  // the debugger cannot name, so `-g` on a file that declares constants would
+  // produce a `gdb` that answers "no such variable" about a name the source
+  // writes. It is attached to the object here and not collected later, because
+  // the object already exists by the time this runs.
+  void declareGlobal(llvm::GlobalVariable& global, std::string_view name,
+                     const sema::TypeStore& types, sema::TypeId type, support::Span span);
+
   // Resolves every temporary node and the compile unit's arrays. Must run before
   // the module is verified, printed or handed to `codegen`: a module with
   // unresolved temporaries verifies intermittently and prints as `<temporary>`.

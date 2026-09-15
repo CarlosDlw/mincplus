@@ -137,12 +137,25 @@ void DebugInfo::enterFunction(llvm::Function& function, std::string_view name,
   llvm::DISubroutineType* const signature =
       builder_.createSubroutineType(builder_.getOrCreateTypeArray(elements));
 
-  // `DISubprogram::SPFlagDefinition` and not `SPFlagLocalToUnit`: every function
-  // this stage defines has external linkage, and marking one local would tell the
-  // debugger it is invisible outside the unit.
-  subprogram_ = builder_.createFunction(
-      file_, std::string(name), std::string(linkageName), file_, position.line, signature,
-      position.line, llvm::DINode::FlagPrototyped, llvm::DISubprogram::SPFlagDefinition);
+  // `SPFlagLocalToUnit` exactly when the symbol is not visible outside the unit,
+  // which is what `static` means to a debugger. It is read from the `Function`
+  // itself, the same way a global's record reads its own object below, so the
+  // debug info and the module cannot disagree about whether this unit owns the
+  // name -- and a `static` function is not offered to the debugger as callable
+  // from another unit.
+  //
+  // Built by LLVM's own helper rather than by ORing the bitmask here, and the
+  // difference is not style: `SPFlagDefinition | SPFlagLocalToUnit` is `12`,
+  // which is a valid bitmask and **not** a named enumerator, so the analyzer
+  // reads the combination as a cast out of the enum's range and fails the tidy
+  // gate (`clang-analyzer-optin.core.EnumCastOutOfRange`). The helper is the API
+  // for this question, so the gate and the correct answer agree.
+  const llvm::DISubprogram::DISPFlags flags = llvm::DISubprogram::toSPFlags(
+      /*IsLocalToUnit=*/function.hasLocalLinkage(), /*IsDefinition=*/true,
+      /*IsOptimized=*/false);
+  subprogram_ = builder_.createFunction(file_, std::string(name), std::string(linkageName), file_,
+                                        position.line, signature, position.line,
+                                        llvm::DINode::FlagPrototyped, flags);
   function.setSubprogram(subprogram_);
 }
 
@@ -288,6 +301,35 @@ void DebugInfo::declareBinding(llvm::AllocaInst& alloca, std::string_view name,
   const llvm::BasicBlock::iterator after = std::next(alloca.getIterator());
   (void)builder_.insertDeclare(&alloca, variable, builder_.createExpression(), location,
                                llvm::InsertPosition(after));
+}
+
+void DebugInfo::declareGlobal(llvm::GlobalVariable& global, std::string_view name,
+                              const sema::TypeStore& types, sema::TypeId type, support::Span span) {
+  if (unit_ == nullptr || name.empty()) {
+    return;
+  }
+  llvm::DIType* const debugTypeNode = debugType(types, type);
+  if (debugTypeNode == nullptr) {
+    return;
+  }
+  const support::LineCol position = span.valid() && span.file == source_.id
+                                        ? positionOf(source_, span.begin)
+                                        : support::LineCol{1, 1};
+
+  // `LinkageName` is the symbol, which for this language is the name the
+  // declaration wrote -- there is no mangling to undo, and a debugger that has to
+  // guess between them is a debugger that prints the wrong object.
+  //
+  // `IsLocalToUnit` mirrors the linkage the object actually has, so `static`
+  // reaches the debugger as what it is: a symbol this unit owns. `IsDefinition`
+  // is true because a file-scope binding in this language is always defined here
+  // -- `extern` on a binding is refused by the parser, and the value is written
+  // by this compiler into this module (`globals.md`, decision 3).
+  llvm::DIGlobalVariableExpression* expression = builder_.createGlobalVariableExpression(
+      unit_, std::string(name), std::string(name), file_, position.line, debugTypeNode,
+      /*isLocalToUnit=*/global.hasInternalLinkage(),
+      /*isDefinition=*/true);
+  global.addDebugInfo(expression);
 }
 
 void DebugInfo::finalize() {

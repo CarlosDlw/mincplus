@@ -72,6 +72,7 @@ support::Span OriginTable::originOf(support::FileId unit, std::uint32_t begin,
 namespace {
 
 constexpr parse::SyntaxKind kIdentifierKind = parse::toSyntaxKind(lex::TokenKind::Identifier);
+constexpr parse::SyntaxKind kStaticKind = parse::toSyntaxKind(lex::TokenKind::KwStatic);
 
 // FNV-1a, one word at a time. Only ever a filter: `ItemTree::operator==` is what
 // decides, so a collision costs a comparison and never a wrong answer.
@@ -98,6 +99,7 @@ constexpr parse::SyntaxKind kIdentifierKind = parse::toSyntaxKind(lex::TokenKind
   hash = mix(hash, item.paramCount);
   hash = mix(hash, item.variadic ? 1u : 0u);
   hash = mix(hash, item.hasBody ? 1u : 0u);
+  hash = mix(hash, item.isStatic ? 1u : 0u);
   return hash;
 }
 
@@ -266,10 +268,20 @@ private:
     self.origin = origins_.originOf(tree_.file(), self.unit.begin, self.unit.end);
   }
 
+  // The three node kinds a file-scope item can be. One predicate rather than the
+  // same three comparisons in the definition below, so a form added to the
+  // grammar is added in one place -- and `resolve` reads the *kind* off the
+  // summary, so the list here and the `DefKind` it will produce are read from
+  // the same node kind and cannot drift.
+  [[nodiscard]] static bool isItemNode(parse::SyntaxKind kind) {
+    return kind == parse::SyntaxKind::FnDecl || kind == parse::SyntaxKind::LetStmt ||
+           kind == parse::SyntaxKind::ConstStmt;
+  }
+
   void collectItems(AstId root) {
     for (const AstId child : fileChildren(root)) {
       const Node& node = nodes_[child.index];
-      if (node.kind == parse::SyntaxKind::FnDecl && !node.inError) {
+      if (isItemNode(node.kind) && !node.inError) {
         collectItem(child);
       }
     }
@@ -285,26 +297,53 @@ private:
     Item item;
     item.kind = node.kind;
     item.node = decl.index;
+    item.isStatic = childOfKind(decl, kStaticKind).valid();
 
     const AstId name = childOfKind(decl, parse::SyntaxKind::Name);
     if (name.valid()) {
       item.name = nodes_[name.index].name;
       item.nameSpan = nodes_[name.index].origin;
     }
-    const AstId params = childOfKind(decl, parse::SyntaxKind::ParamList);
-    if (params.valid()) {
-      item.paramCount = countParams(params);
-      item.variadic = childOfKind(params, parse::SyntaxKind::VariadicParam).valid();
+
+    // The body, which is what the signature stops short of. One rule for both
+    // kinds of item: a function's body is its block, a binding's body is its
+    // initializer, and an item with neither is a declaration whose definition is
+    // elsewhere. The signature therefore ends where the body begins -- which is
+    // what makes it stable under an edit inside that body.
+    AstId body;
+    if (node.kind == parse::SyntaxKind::FnDecl) {
+      const AstId params = childOfKind(decl, parse::SyntaxKind::ParamList);
+      if (params.valid()) {
+        item.paramCount = countParams(params);
+        item.variadic = childOfKind(params, parse::SyntaxKind::VariadicParam).valid();
+      }
+      body = childOfKind(decl, parse::SyntaxKind::Block);
+    } else {
+      body = bindingInitializer(decl);
     }
-    const AstId body = childOfKind(decl, parse::SyntaxKind::Block);
     item.hasBody = body.valid();
     item.body = body.valid() ? body.index : kInvalidAst;
 
-    // The signature ends where the body begins, which is what makes it stable
-    // under an edit inside that body.
     const std::uint32_t end = body.valid() ? nodes_[body.index].origin.begin : node.origin.end;
     item.span = support::Span(node.origin.file, node.origin.begin, end);
     items_.push_back(item);
+  }
+
+  // The initializer of a binding: the interior child that is neither the name nor
+  // the annotation. The same rule `validate` and the checker use to find it, so
+  // "which child is the value" is answered one way by all three readers.
+  [[nodiscard]] AstId bindingInitializer(AstId stmt) const {
+    const Node& node = nodes_[stmt.index];
+    for (std::uint32_t i = 0; i < node.childCount; ++i) {
+      const AstId child = children_[node.firstChild + i];
+      const Node& kid = nodes_[child.index];
+      if (kid.isToken() || kid.kind == parse::SyntaxKind::Name ||
+          kid.kind == parse::SyntaxKind::Type) {
+        continue;
+      }
+      return child;
+    }
+    return AstId{};
   }
 
   [[nodiscard]] std::uint32_t countParams(AstId list) const {

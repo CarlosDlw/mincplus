@@ -17,7 +17,10 @@
 //   * `defConstValues_` -- what a `const` binding is worth, so folding a `const`
 //     expression does not need the initializer again;
 //   * `depth_` -- the AST-depth guard, so a pathological tree is a diagnostic
-//     and not a stack overflow.
+//     and not a stack overflow;
+//   * `globals_` -- the file-scope bindings and the value each one has, which
+//     `checkGlobals` decides once, in dependency order, before any body is
+//     checked (`global.cc`).
 #pragma once
 
 #include <cstddef>
@@ -229,6 +232,15 @@ private:
   void checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCode code,
                        std::string_view what);
   [[nodiscard]] std::string suggestTypeName(std::string_view word) const;
+  // The sentence for an integer and a float, which is the one pair of arithmetic
+  // types that does not convert. Two callers ask for it -- `checkAssignable` and
+  // an arithmetic operator -- and what the message exists to say is the *fix*:
+  // the reader wrote one class of number and can write the other, which is the
+  // whole answer while the language has no cast.
+  // `from` is the only side the advice depends on: which direction the two
+  // classes are being crossed decides the fix, and the caller's prefix has
+  // already named both types.
+  [[nodiscard]] std::string mixingAdvice(TypeId from) const;
 
   // --- expressions -----------------------------------------------------------
 
@@ -365,6 +377,100 @@ private:
   [[nodiscard]] bool checkModifiable(ast::AstId operand, TypeId type, ast::AstId at,
                                      SemaErrorCode code, std::string_view what);
 
+  // --- the file scope ---------------------------------------------------------
+  //
+  // A file-scope binding is a **value the compiler writes**, so its initializer
+  // is an expression this stage has to *evaluate* rather than a statement the
+  // lowering can emit (`globals.md`, decision 2). Three properties fall out of
+  // that one, and all three are why this is a pass of its own instead of a
+  // second loop in `runSignatures`:
+  //
+  //   * the bindings are checked in **dependency** order, because a file-scope
+  //     name is visible independently of order (`resolve.md`, decision A): in
+  //     `const a = b * 2; const b = 3;` the value of `b` has to exist before `a`
+  //     folds, or `a` would be refused for reading a name that is defined one
+  //     line below it;
+  //   * a **cycle** is the one shape with no such order, so it is refused with
+  //     the chain that closes it rather than silently evaluated in whatever
+  //     order the walk happened to take;
+  //   * every value is **published** (`GlobalInfo`), because the bytes of a
+  //     file-scope object are written by the compiler and not by a statement --
+  //     a stage below cannot re-derive them without a second copy of these rules.
+  //
+  // The pass runs after the signatures and before any body, for the same reason
+  // `runSignatures` runs first: the file scope is decided once, and everything
+  // that reads it reads the same answer.
+
+  // What an initializer came to, or where it stopped being one.
+  struct IceValue {
+    // False when the expression is not an initializer constant expression: the
+    // rest of the record is then the zero value, `offender` is the node to point
+    // at, and `reason` is the sentence.
+    bool ok = true;
+    GlobalValueKind kind = GlobalValueKind::Zero;
+    // The value, when `kind` is `Int`.
+    support::ConstInt value;
+    // The literal whose spelling *is* the value, when `kind` is `Literal`.
+    ast::AstId node;
+    // True when that literal's value is negated: `-2.5`.
+    bool negated = false;
+    ast::AstId offender;
+    SemaErrorCode code = SemaErrorCode::GlobalNotConstant;
+    std::string reason;
+  };
+
+  // One file-scope binding, as the pass walks it. `value` is filled in by
+  // `checkGlobal`, which is why a read of a binding can be answered by a lookup
+  // and not by a second evaluation of its initializer.
+  struct GlobalBinding {
+    ast::AstId decl;
+    ast::AstId init;
+    resolve::DefId def;
+    TypeId type = kInvalidType;
+    IceValue value;
+    // False until `checkGlobal` has decided this binding's value. A read of one
+    // that is not decided yet is a cycle -- the walk is dependency-ordered, so
+    // there is no other way to want a value that does not exist -- and answering
+    // `Zero` for it is what keeps the pass total.
+    bool decided = false;
+  };
+
+  // A read of a file-scope binding inside an initializer: *which* binding, and
+  // the node that read it, so a cycle can be reported at the edge that closed it.
+  struct GlobalRead {
+    std::size_t index;
+    ast::AstId at;
+  };
+
+  void checkGlobals();
+  // The file-scope bindings of this unit, in source order, with the def each was
+  // declared as. Source order and not walk order: it is what makes the published
+  // table deterministic, and the walk below is in dependency order.
+  void collectGlobals();
+  // Checks one binding and records its value. One call per binding, in
+  // dependency order, which is what lets a forward reference fold.
+  void checkGlobal(GlobalBinding& binding);
+  // The bindings the initializer reads, deduplicated and in a fixed order. One
+  // edge per binding and not one per name: two reads of one name would make the
+  // count of unfinished dependencies never reach zero, and an acyclic program
+  // would be reported as a cycle.
+  [[nodiscard]] std::vector<GlobalRead> readsOf(ast::AstId init) const;
+  // The value of an initializer expression. `negated` is the parity of the unary
+  // minus between the expression and the initializer as a whole, which is how
+  // `-1.0` is still a literal.
+  [[nodiscard]] IceValue evalInitializer(ast::AstId expr, bool negated = false) const;
+  // The same answer for an expression that is not one, with the sentence that
+  // names *why*: a `let`, a function, a call, a dereference and a local all
+  // deserve different words, and "this is not a constant" tells the reader
+  // nothing about which of them they wrote.
+  [[nodiscard]] IceValue notConstant(ast::AstId expr) const;
+  // The value already recorded for a file-scope binding, or nullptr when the def
+  // is not one or its value is not known. A value that is not known is the cycle
+  // case, which the walk has already reported with its chain.
+  [[nodiscard]] const IceValue* globalValueOf(resolve::DefId def) const;
+  // Copies a decided value into the published table the lowering reads.
+  void publishGlobal(const GlobalBinding& binding);
+
   // --- declaration lookup ----------------------------------------------------
 
   void reportLimit(ast::AstId at);
@@ -401,6 +507,12 @@ private:
   TypeStore& types_;
   SemaOptions options_;
   SemaOutput out_;
+
+  // The file scope: one entry per binding, in source order, filled by
+  // `checkGlobals` and empty outside it. `globalIndexByDef_` is the def -> entry
+  // map, so a name read in an initializer is a lookup and not a scan.
+  std::vector<GlobalBinding> globals_;
+  std::unordered_map<std::uint32_t, std::size_t> globalIndexByDef_;
 
   std::vector<TypeId> defTypes_;
   std::vector<support::ConstInt> defConstValues_;

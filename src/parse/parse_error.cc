@@ -13,7 +13,7 @@ namespace {
 // parse_error.h; `toString` and the derived `allParseErrorCodes()` read this
 // instead of repeating the list, and the tests require every row to be
 // reachable from some input.
-constexpr std::array<ParseErrorCodeInfo, 11> kParseErrorCodeInfos{{
+constexpr std::array<ParseErrorCodeInfo, 14> kParseErrorCodeInfos{{
     {ParseErrorCode::ExpectedToken, "parse-expected-token"},
     {ParseErrorCode::ExpectedItem, "parse-expected-item"},
     {ParseErrorCode::ExpectedName, "parse-expected-name"},
@@ -22,6 +22,9 @@ constexpr std::array<ParseErrorCodeInfo, 11> kParseErrorCodeInfos{{
     {ParseErrorCode::ExpectedStatement, "parse-expected-statement"},
     {ParseErrorCode::MissingExtern, "parse-missing-extern"},
     {ParseErrorCode::ExternWithBody, "parse-extern-with-body"},
+    {ParseErrorCode::ExternBinding, "parse-extern-binding"},
+    {ParseErrorCode::ConflictingLinkage, "parse-conflicting-linkage"},
+    {ParseErrorCode::StaticPosition, "parse-static-position"},
     {ParseErrorCode::VariadicDefinition, "parse-variadic-definition"},
     {ParseErrorCode::VariadicPosition, "parse-variadic-position"},
     {ParseErrorCode::Aborted, "parse-aborted"},

@@ -96,8 +96,10 @@ minc_add_executable(minc_unit_tests
     sema/never_test.cc
     sema/flow_test.cc
     sema/store_test.cc
+    sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
+    ir/global_test.cc
     ir/debug_test.cc
     ir/invariants_test.cc
     ir/llvm_isolation_test.cc

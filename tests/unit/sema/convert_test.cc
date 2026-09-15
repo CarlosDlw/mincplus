@@ -56,21 +56,30 @@ TEST(ConvertTest, PromotionWidensTheSmallIntegersToInt) {
   EXPECT_EQ(promote(types, kTypeIntLiteral), kTypeIntLiteral);
 }
 
-TEST(ConvertTest, TwoLiteralsStayDeferredAndOnlyTheirClassIsDecided) {
+TEST(ConvertTest, TwoLiteralsOfOneClassStayDeferredAndTheOtherClassHasNoCommonType) {
   TypeStore types;
+  // Two of a class defer together: the *width* is whatever context follows.
   EXPECT_EQ(usualArithmetic(types, kTypeIntLiteral, kTypeIntLiteral), kTypeIntLiteral);
-  EXPECT_EQ(usualArithmetic(types, kTypeIntLiteral, kTypeFloatLiteral), kTypeFloatLiteral);
-  EXPECT_EQ(usualArithmetic(types, kTypeFloatLiteral, kTypeIntLiteral), kTypeFloatLiteral);
+  EXPECT_EQ(usualArithmetic(types, kTypeFloatLiteral, kTypeFloatLiteral), kTypeFloatLiteral);
+  // One of each is an integer and a float, and the two have no common type at
+  // all: `1 + 2.0` is refused rather than answered with a `double` nobody wrote.
+  EXPECT_EQ(usualArithmetic(types, kTypeIntLiteral, kTypeFloatLiteral), kTypeError);
+  EXPECT_EQ(usualArithmetic(types, kTypeFloatLiteral, kTypeIntLiteral), kTypeError);
 }
 
-TEST(ConvertTest, ALiteralAdoptsTheOtherSidePromoted) {
+TEST(ConvertTest, ALiteralAdoptsTheOtherSideWithinItsOwnClass) {
   TypeStore types;
   // An integer side is taken promoted, so `1 + u8` is `i32` and not `u8`.
   EXPECT_EQ(usualArithmetic(types, kTypeIntLiteral, kTypeU8), kTypeI32);
   EXPECT_EQ(usualArithmetic(types, kTypeU8, kTypeIntLiteral), kTypeI32);
-  // A float on either side wins, and it wins *narrowly*: `1 + f32` is `f32`.
-  EXPECT_EQ(usualArithmetic(types, kTypeIntLiteral, kTypeF32), kTypeF32);
-  EXPECT_EQ(usualArithmetic(types, kTypeF32, kTypeIntLiteral), kTypeF32);
+  // A float literal joins a float side -- narrowly, so `1.0 + f32` is `f32`...
+  EXPECT_EQ(usualArithmetic(types, kTypeFloatLiteral, kTypeF32), kTypeF32);
+  EXPECT_EQ(usualArithmetic(types, kTypeF32, kTypeFloatLiteral), kTypeF32);
+  // ... and nothing joins a side of the other class.
+  EXPECT_EQ(usualArithmetic(types, kTypeIntLiteral, kTypeF32), kTypeError);
+  EXPECT_EQ(usualArithmetic(types, kTypeF32, kTypeIntLiteral), kTypeError);
+  EXPECT_EQ(usualArithmetic(types, kTypeFloatLiteral, kTypeU8), kTypeError);
+  EXPECT_EQ(usualArithmetic(types, kTypeU8, kTypeFloatLiteral), kTypeError);
 }
 
 TEST(ConvertTest, TheUsualArithmeticConversions) {
@@ -82,9 +91,11 @@ TEST(ConvertTest, TheUsualArithmeticConversions) {
   EXPECT_EQ(usualArithmetic(types, kTypeI32, kTypeU32), kTypeU32);
   // A wider signed type represents every value of the unsigned one, so it wins.
   EXPECT_EQ(usualArithmetic(types, kTypeU32, kTypeI64), kTypeI64);
-  // Floats: the wider of the two, and an integer converts to the float.
+  // Floats: the wider of the two.
   EXPECT_EQ(usualArithmetic(types, kTypeF32, kTypeF64), kTypeF64);
-  EXPECT_EQ(usualArithmetic(types, kTypeI64, kTypeF32), kTypeF32);
+  // An integer does not convert to a float: there is no common type to take.
+  EXPECT_EQ(usualArithmetic(types, kTypeI64, kTypeF32), kTypeError);
+  EXPECT_EQ(usualArithmetic(types, kTypeF64, kTypeI32), kTypeError);
   // The small ones are promoted first, so this is `i32`, not `u16`.
   EXPECT_EQ(usualArithmetic(types, kTypeU16, kTypeI16), kTypeI32);
 }
@@ -104,9 +115,16 @@ TEST(ConvertTest, Assignability) {
   TypeStore types;
   EXPECT_TRUE(convertible(types, kTypeI32, kTypeI64));
   EXPECT_TRUE(convertible(types, kTypeI64, kTypeI32)); // narrowing is allowed...
-  EXPECT_TRUE(convertible(types, kTypeI32, kTypeF64));
-  EXPECT_TRUE(convertible(types, kTypeF64, kTypeI32));
   EXPECT_TRUE(convertible(types, kTypeI32, kTypeU8));
+  // ...within a class. An integer and a float are different classes of number:
+  // the class of a literal is the class of its spelling, and crossing is a cast,
+  // which the language does not have yet. So `let x: f64 = 1;` and `let y: i32 =
+  // 1.5;` are both refused, and so is `1 + 2.0`.
+  EXPECT_FALSE(convertible(types, kTypeI32, kTypeF64));
+  EXPECT_FALSE(convertible(types, kTypeF64, kTypeI32));
+  EXPECT_TRUE(convertible(types, kTypeF32, kTypeF64));
+  EXPECT_FALSE(convertible(types, kTypeIntLiteral, kTypeF64));
+  EXPECT_FALSE(convertible(types, kTypeFloatLiteral, kTypeI32));
   // ... but `bool` and `str` only convert to themselves.
   EXPECT_TRUE(convertible(types, kTypeBool, kTypeBool));
   EXPECT_FALSE(convertible(types, kTypeI32, kTypeBool));

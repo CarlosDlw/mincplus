@@ -313,10 +313,12 @@ translation units exist is the linker, not the checker.
 * **Not a `src/cinterop` type.** No aggregate crosses this boundary yet; when one
   does, the *type* mapping is cinterop's and this form carries the name and the
   signature, unchanged.
-* **Not globals.** `extern let x: i32;` is a decision this record does not make:
-  a global has storage, an initializer, and an address that the runtime
-  initializes differently (`.data`/`.bss`), and it is one line in the roadmap
-  under the same heading.
+* **Not globals.** `extern let x: i32;` is a decision this record does not make,
+  because a global has storage, an initializer, and an address that the runtime
+  initializes differently (`.data`/`.bss`). It is decided in
+  [`globals.md`](globals.md), which adopts this record's own word for the
+  declaration form — `extern` means *external linkage, the definition is
+  elsewhere*, on a binding exactly as it does on a function.
 
 ## Where it lands in the compiler
 

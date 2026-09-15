@@ -35,6 +35,24 @@ using ast::AstId;
 using ast::Node;
 using ast::NodeKind;
 
+// What an item *declares*, from the node it is. `nullopt` for a node kind that
+// is not a file-scope item, which is how the collect pass stays total over a
+// summary it did not have to trust: the mapping lives here and not in `ast`,
+// because "a `ConstStmt` declares a constant" is a name-resolution fact and not
+// a fact about the shape of a tree.
+[[nodiscard]] std::optional<DefKind> defKindOf(NodeKind kind) {
+  switch (kind) {
+  case NodeKind::FnDecl:
+    return DefKind::Function;
+  case NodeKind::LetStmt:
+    return DefKind::Variable;
+  case NodeKind::ConstStmt:
+    return DefKind::Constant;
+  default:
+    return std::nullopt;
+  }
+}
+
 // One unit of work for the body walk. `Visit` looks at a node; `Declare`
 // introduces a binding, and exists because a `let`'s initializer has to be
 // resolved *before* its name enters scope -- the initializer sees the outer
@@ -55,6 +73,9 @@ public:
     map_.maxScopeDepth = options_.maxScopeDepth;
     collectItems();
     resolveBodies();
+    // Everything below reads the file scope, which `collectItems` has finished
+    // and `resolveBodies` has only consulted, so the two phases stay the two
+    // phases `resolve.md` describes: collect, then resolve.
     if (options_.warnUnused) {
       reportUnused();
     }
@@ -190,7 +211,8 @@ private:
     map_.itemScopes.assign(items.size(), kInvalidScopeId);
     for (std::size_t i = 0; i < items.size(); ++i) {
       const ast::Item& item = items[i];
-      if (item.kind != NodeKind::FnDecl) {
+      const std::optional<DefKind> kind = defKindOf(item.kind);
+      if (!kind.has_value()) {
         continue;
       }
       // A nameless declaration was already reported by the parser (it inserts a
@@ -206,9 +228,14 @@ private:
       // read from the tree here rather than added to `Item`.
       const AstId nameNode = file_.childOfKind(AstId{item.node}, NodeKind::Name);
       const support::Span nameUnit = nameNode.valid() ? file_.at(nameNode).unit : item.nameSpan;
-      map_.itemDefs[i] =
-          insertDef(map_.fileScope, Namespace::Ordinary, item.name, item.span, item.nameSpan,
-                    nameUnit, DefKind::Function, Linkage::External, node.inError);
+      // `static` is "this unit only"; a file-scope declaration without it is
+      // external, which is C's default and the answer that keeps the name
+      // visible to a linker. Visibility across *modules* is a different axis and
+      // belongs to the module system (`globals.md`, decision 5) -- it filters
+      // lookup and does not rewrite this field.
+      const Linkage linkage = item.isStatic ? Linkage::Internal : Linkage::External;
+      map_.itemDefs[i] = insertDef(map_.fileScope, Namespace::Ordinary, item.name, item.span,
+                                   item.nameSpan, nameUnit, *kind, linkage, node.inError);
     }
   }
 
@@ -250,23 +277,48 @@ private:
       if (!item.hasBody || item.body == ast::kInvalidAst) {
         continue;
       }
-      const AstId body{item.body};
-      const Node& bodyNode = file_.at(body);
-      if (bodyNode.inError) {
+      if (item.kind == NodeKind::FnDecl) {
+        resolveFunctionBody(item, i);
         continue;
       }
-      // The function's body block *is* the function scope, as in C: there is no
-      // second block scope around it, and the parameters enter this scope, so a
-      // parameter and a `let` at the top of the body cannot both take one name.
-      const ScopeId functionScope =
-          createScope(ScopeKind::Function, map_.fileScope, bodyNode.origin, body.index);
-      if (!functionScope.valid()) {
-        continue;
-      }
-      map_.itemScopes[i] = functionScope;
-      declareParameters(item, functionScope);
-      walkBody(body, functionScope);
+      // A file-scope binding's initializer is resolved in the **file scope**, and
+      // not in a scope of its own. Two reasons, and both are already decided:
+      // a file-scope name is visible independently of order (`resolve.md`,
+      // decision A), so the initializer sees every item in the unit; and that
+      // includes the binding being declared, so `const a = a + 1;` resolves to
+      // *itself* here -- which is what lets `sema` answer it with one sentence
+      // about a cycle instead of one about an unknown name.
+      resolveExpression(AstId{item.body}, map_.fileScope);
     }
+  }
+
+  void resolveFunctionBody(const ast::Item& item, std::size_t index) {
+    const AstId body{item.body};
+    const Node& bodyNode = file_.at(body);
+    if (bodyNode.inError) {
+      return;
+    }
+    // The function's body block *is* the function scope, as in C: there is no
+    // second block scope around it, and the parameters enter this scope, so a
+    // parameter and a `let` at the top of the body cannot both take one name.
+    const ScopeId functionScope =
+        createScope(ScopeKind::Function, map_.fileScope, bodyNode.origin, body.index);
+    if (!functionScope.valid()) {
+      return;
+    }
+    map_.itemScopes[index] = functionScope;
+    declareParameters(item, functionScope);
+    walkBody(body, functionScope);
+  }
+
+  // One expression, resolved in a scope. Used for a file-scope binding's
+  // initializer, whose subtree is not a block and so cannot go through
+  // `pushChildren` -- a `PathExpr` root is *itself* the name use, and pushing its
+  // children would skip the one node there is to resolve.
+  void resolveExpression(AstId expr, ScopeId scope) {
+    std::vector<Step> stack;
+    stack.push_back(Step{Step::Op::Visit, expr, scope});
+    walk(std::move(stack));
   }
 
   // Parameters are declared in the function scope before the body is walked, so
@@ -307,6 +359,13 @@ private:
   void walkBody(AstId body, ScopeId functionScope) {
     std::vector<Step> stack;
     pushChildren(body, functionScope, stack);
+    walk(std::move(stack));
+  }
+
+  // The one walk. Iterative, on an explicit stack, for the reason at the top of
+  // this file: recursion would make the depth of the input decide the depth of
+  // the call stack, and a stack overflow is a crash and not a diagnostic.
+  void walk(std::vector<Step> stack) {
     while (!stack.empty()) {
       const Step step = stack.back();
       stack.pop_back();
@@ -471,11 +530,17 @@ private:
           def.name == support::kInvalidSym) {
         continue;
       }
-      // Only a local binding that could have been read and was not. A function
-      // is externally visible, so "unused" would be a claim about the whole
-      // program, which one unit cannot make.
+      // Only a declaration that could have been read and was not, and only one
+      // whose reach stops at this unit. An externally linked name -- a function
+      // another unit may call, a constant it may import -- is visible to the
+      // whole program, so "unused" would be a claim about every unit at once,
+      // which one unit cannot make. A file-scope `static` binding and a
+      // block-scope binding are this unit's own business and are reported.
       if (def.kind != DefKind::Variable && def.kind != DefKind::Constant &&
           def.kind != DefKind::Parameter) {
+        continue;
+      }
+      if (def.linkage == Linkage::External) {
         continue;
       }
       const std::string_view spelling = symbols_.lookup(def.name);

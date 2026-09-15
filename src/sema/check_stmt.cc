@@ -380,9 +380,16 @@ TypeId Checker::adaptTo(TypeId type, TypeId expected, ast::AstId at, const ExprI
   const Type& shape = types_.get(type);
   if (shape.kind == TypeKind::IntLiteral) {
     if (types_.isFloat(expected)) {
-      // `let x: f64 = 1;` -- the conversion is the assignment's, but taking the
-      // context's type here keeps the tree's answer the one that will be used.
-      return expected;
+      // An integer literal in a **float** context keeps its own class: the class
+      // of a number is the class of its spelling, so the `1` stays an integer and
+      // the *consumer* reports that it cannot be an `f64` (`convertible`).
+      //
+      // Returning the context's type here would be worse than useless: the literal
+      // node would name a floating value, the consumer would see two `f64`s and
+      // say nothing, and the value would then have to be rounded from its digits
+      // by the lowering -- a rule that stage does not own (`ir.md`). One answer
+      // for both directions, and it is this one.
+      return type;
     }
     if (types_.isInteger(expected)) {
       if (info.hasIntValue && !fitsIn(types_, expected, info.value)) {
@@ -413,9 +420,35 @@ TypeId Checker::adaptTo(TypeId type, TypeId expected, ast::AstId at, const ExprI
   return type;
 }
 
+std::string Checker::mixingAdvice(TypeId from) const {
+  // The rule first, in one clause, and then the fix for *this* direction. The
+  // sentence is appended to a prefix that already names the two types (`\`i32\`
+  // does not convert to \`f64\`` / "`+` cannot combine `i32` and `f64`"), so it
+  // names the classes and not the types: repeating them is how a message becomes
+  // something to skim instead of something to read.
+  const std::string rule =
+      "an integer and a float are different classes of number and do not convert into each "
+      "other";
+  if (types_.isFloat(from)) {
+    return rule +
+           " -- write the integer you mean (`1`, not `1.0`), or a cast once the language has "
+           "one";
+  }
+  return rule + " -- write the value in the class you want, as in `1.0` for a float";
+}
+
 void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCode code,
                               std::string_view what) {
   if (types_.isError(from) || types_.isError(to)) {
+    return;
+  }
+  // An integer and a float, before the general rule: this is not a narrowing to
+  // be warned about, it is a conversion the language does not have, and the
+  // sentence has to say what to write instead.
+  if (mixedNumberPair(types_, from, to)) {
+    error(at, code,
+          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) + "`" +
+              std::string(what) + ": " + mixingAdvice(from));
     return;
   }
   if (convertible(types_, from, to)) {
@@ -484,6 +517,11 @@ SemaOutput Checker::run() {
   out_.typed.exprFacts.assign(file_.nodeCount(), ExprInfo{});
 
   runSignatures();
+  // The file scope next, and before any body, for the reason the signature pass
+  // comes first: it is decided once, in dependency order, and everything that
+  // reads it reads the same answer. A body checked before it would fold nothing
+  // and could not disagree -- it would simply miss what it was allowed to do.
+  checkGlobals();
   for (const FunctionInfo& info : out_.typed.functionTable) {
     checkFunction(info);
   }

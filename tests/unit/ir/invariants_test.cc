@@ -3,20 +3,34 @@
 // The scan, and the vocabulary it reports in.
 //
 // The scan is the mechanism behind `ir.md`'s claim that the list of assumptions
-// this compiler hands to the optimizer is closed. These tests pin the two halves
-// of that claim: a module this compiler built passes clean, and the enumeration
+// this compiler hands to the optimizer is closed. These tests pin the three
+// halves of that claim: a module this compiler built passes clean, the enumeration
 // of codes has no entry without a name (so a code added to the enum without a
-// table row fails here rather than in a user's terminal).
+// table row fails here rather than in a user's terminal), and **every row of the
+// assumption list can be tripped** -- a scan nothing can trip is a scan that
+// stopped running.
 #include <cstddef>
+#include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Operator.h"
+#include "llvm/Support/Alignment.h"
+
 #include "ir/invariants.h"
 #include "ir/ir.h"
 #include "ir/ir_fixture.h"
+#include "ir/storage.h"
 
 namespace minc::ir {
 namespace {
@@ -68,6 +82,208 @@ TEST(IrInvariantsTest, EveryDiagnosticCodeHasAName) {
   // One row per code: a duplicate row would make the table describe a code
   // twice and the enumeration would be longer than the enum.
   EXPECT_EQ(unique.size(), codes.size());
+}
+
+TEST(IrInvariantsTest, EveryAssumptionRowHasAName) {
+  EXPECT_FALSE(moduleAssumptions().empty());
+  EXPECT_EQ(allModuleAssumptions().size(), moduleAssumptions().size());
+
+  std::set<std::string> names;
+  for (const ModuleAssumptionInfo& row : moduleAssumptions()) {
+    const std::string name(toString(row.assumption));
+    EXPECT_FALSE(name.empty()) << static_cast<int>(row.assumption);
+    EXPECT_NE(name, "unknown") << static_cast<int>(row.assumption);
+    names.insert(name);
+  }
+  // One row per row: a duplicate would make the table describe an assumption
+  // twice and the enumeration longer than the enum.
+  EXPECT_EQ(names.size(), moduleAssumptions().size());
+}
+
+// --- the row can be tripped ------------------------------------------------------
+//
+// The half of the mechanism that a comment cannot provide: a check that nothing
+// can trip is a check that stopped running. Every row is violated here on a module
+// this compiler would never build -- one built *by* the compiler and then broken by
+// hand -- which is the only way to reach a violation at all, since the program it
+// came from type-checked.
+
+// The program every tripwire starts from: a file-scope object (for the object
+// rows), a function with parameters (for the attribute row), a `getelementptr`, an
+// integer `add`, a `fadd`, and a guarded `sdiv` (for the guard row). One program,
+// so a row's mutation is one line rather than a module written from scratch.
+constexpr std::string_view kTripwireProgram = "const SIZE: i32 = 8;\n"
+                                              "fn i32 mix(a: i32, b: i32, p: *i32)\n"
+                                              "{\n"
+                                              "  let x: f32 = 1.5;\n"
+                                              "  let y: f32 = x + x;\n"
+                                              "  *p = a;\n"
+                                              "  return a + b + (a / b) + p[1] + SIZE;\n"
+                                              "}\n"
+                                              "fn i32 main() { return 0; }\n";
+
+// A mutation of that module which states something the language did not.
+using Mutation = void (*)(llvm::Module&);
+
+[[nodiscard]] llvm::Function* definitionOf(llvm::Module& module, llvm::StringRef name) {
+  llvm::Function* function = module.getFunction(name);
+  return function != nullptr && !function->isDeclaration() ? function : nullptr;
+}
+
+// The first instruction of a given opcode, in block order, or null. Null only when
+// the program does not have one -- which is a failure of the tripwire table, and
+// the test reports it as "the row was not detected".
+[[nodiscard]] llvm::Instruction* firstOfOpcode(llvm::Function& function, unsigned opcode) {
+  for (llvm::BasicBlock& block : function) {
+    for (llvm::Instruction& instruction : block) {
+      if (instruction.getOpcode() == opcode) {
+        return &instruction;
+      }
+    }
+  }
+  return nullptr;
+}
+
+void tripMetadata(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  llvm::Instruction* instruction =
+      function == nullptr ? nullptr : firstOfOpcode(*function, llvm::Instruction::Load);
+  if (instruction == nullptr) {
+    return;
+  }
+  // A defined node, so the module stays well formed: what is forbidden is the
+  // *attachment*, not the node. `getMDKindID` accepts any name, which is how a
+  // kind this compiler has never heard of gets here.
+  instruction->setMetadata("minc.tripwire", llvm::MDNode::get(module.getContext(), {}));
+}
+
+void tripFunctionAttribute(llvm::Module& module) {
+  if (llvm::Function* function = definitionOf(module, "mix")) {
+    function->addFnAttr(llvm::Attribute::NoAlias);
+  }
+}
+
+void tripInbounds(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  auto* gep = function == nullptr ? nullptr
+                                  : llvm::dyn_cast_or_null<llvm::GetElementPtrInst>(
+                                        firstOfOpcode(*function, llvm::Instruction::GetElementPtr));
+  if (gep != nullptr) {
+    gep->setIsInBounds(true);
+  }
+}
+
+void tripWrapping(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  auto* add = function == nullptr ? nullptr
+                                  : llvm::dyn_cast_or_null<llvm::BinaryOperator>(
+                                        firstOfOpcode(*function, llvm::Instruction::Add));
+  if (add != nullptr) {
+    add->setHasNoSignedWrap(true);
+  }
+}
+
+void tripFastMath(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  llvm::Instruction* fadd =
+      function == nullptr ? nullptr : firstOfOpcode(*function, llvm::Instruction::FAdd);
+  if (fadd != nullptr && llvm::isa<llvm::FPMathOperator>(fadd)) {
+    llvm::FastMathFlags flags;
+    flags.setAllowReassoc(true);
+    fadd->setFastMathFlags(flags);
+  }
+}
+
+void tripDebugIntrinsic(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  llvm::Instruction* at = function == nullptr ? nullptr : function->getEntryBlock().getTerminator();
+  if (at == nullptr) {
+    return;
+  }
+  // The intrinsic *by name*, which is all the scan reads: the two forms may not
+  // coexist in one module, and the form this compiler emits is records.
+  llvm::Function* intrinsic = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(module.getContext()), /*isVarArg=*/false),
+      llvm::GlobalValue::ExternalLinkage, "llvm.dbg.value", &module);
+  // The iterator overload: the `Instruction*` insertion position is deprecated
+  // (LLVM 20), and this project builds with `-Werror`.
+  llvm::CallInst::Create(intrinsic, {}, "", at->getIterator());
+}
+
+void tripConstantObject(llvm::Module& module) {
+  if (llvm::GlobalVariable* object = module.getNamedGlobal("SIZE")) {
+    object->setConstant(true);
+  }
+}
+
+void tripAlignment(llvm::Module& module) {
+  if (llvm::GlobalVariable* object = module.getNamedGlobal("SIZE")) {
+    object->setAlignment(llvm::Align(1));
+  }
+}
+
+void tripUnguardedDivision(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  auto* division = function == nullptr ? nullptr
+                                       : llvm::dyn_cast_or_null<llvm::BinaryOperator>(
+                                             firstOfOpcode(*function, llvm::Instruction::SDiv));
+  if (division == nullptr || division->getParent() == nullptr) {
+    return;
+  }
+  llvm::BasicBlock* predecessor = division->getParent()->getUniquePredecessor();
+  auto* branch = predecessor == nullptr
+                     ? nullptr
+                     : llvm::dyn_cast_or_null<llvm::BranchInst>(predecessor->getTerminator());
+  if (branch != nullptr && branch->isConditional()) {
+    // The divisor is still tested -- a `true` is a constant, so the scan cannot
+    // see the test -- and the division is no longer *reached through* it, which is
+    // exactly the code the guard is not.
+    branch->setCondition(llvm::ConstantInt::getTrue(module.getContext()));
+  }
+}
+
+[[nodiscard]] const std::map<ModuleAssumption, Mutation>& tripwires() {
+  static const std::map<ModuleAssumption, Mutation> table{
+      {ModuleAssumption::Metadata, &tripMetadata},
+      {ModuleAssumption::FunctionAttribute, &tripFunctionAttribute},
+      {ModuleAssumption::Inbounds, &tripInbounds},
+      {ModuleAssumption::Wrapping, &tripWrapping},
+      {ModuleAssumption::FastMath, &tripFastMath},
+      {ModuleAssumption::DebugIntrinsic, &tripDebugIntrinsic},
+      {ModuleAssumption::ConstantObject, &tripConstantObject},
+      {ModuleAssumption::Alignment, &tripAlignment},
+      {ModuleAssumption::UnguardedDivision, &tripUnguardedDivision},
+  };
+  return table;
+}
+
+TEST(IrInvariantsTest, EveryAssumptionRowCanBeTripped) {
+  // The enumeration is walked, and every row has to be *detected* -- not merely
+  // declared. A row added without a mutation fails the lookup; a row whose check
+  // stopped working fails the scan.
+  for (const ModuleAssumptionInfo& row : moduleAssumptions()) {
+    const auto found = tripwires().find(row.assumption);
+    ASSERT_NE(found, tripwires().end()) << "no tripwire for the row `" << row.name << "`";
+
+    test::IrFixture fixture;
+    fixture.source(std::string(kTripwireProgram));
+    ASSERT_TRUE(fixture.build());
+    ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+    // The program itself has to be clean, or the row's violation would be one of
+    // many and the test would pass for the wrong reason.
+    ASSERT_EQ(fixture.violations(), 0u) << row.name << ":\n" << fixture.module();
+
+    found->second(ModuleAccess::llvmModule(fixture.result().module));
+    const std::vector<IRDiagnostic> violations = fixture.scan();
+
+    bool detected = false;
+    for (const IRDiagnostic& violation : violations) {
+      if (violation.code == row.code) {
+        detected = true;
+      }
+    }
+    EXPECT_TRUE(detected) << "the row `" << row.name << "` was not detected:\n" << fixture.module();
+  }
 }
 
 TEST(IrInvariantsTest, TheAssumptionScanIsExposedForAConsumer) {

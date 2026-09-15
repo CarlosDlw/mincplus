@@ -261,13 +261,13 @@ Value Lowering::lowerPath(ast::AstId expr) {
     return Value{found->second, type};
   }
 
-  llvm::AllocaInst* slot = localOf(expr);
-  if (slot == nullptr) {
+  llvm::Value* storage = storageOf(expr);
+  if (storage == nullptr) {
     fatal(spanOf(expr), IRDiagnosticCode::Internal,
           "`" + std::string(spelling(expr)) + "` is not a binding this function owns");
     return {};
   }
-  return loadPlace(Place{slot, type}, expr);
+  return loadPlace(Place{storage, type}, expr);
 }
 
 // --- places --------------------------------------------------------------------
@@ -279,13 +279,13 @@ Place Lowering::lowerPlace(ast::AstId expr) {
   locate(expr);
   switch (kindOf(expr)) {
   case ast::NodeKind::PathExpr: {
-    llvm::AllocaInst* slot = localOf(expr);
-    if (slot == nullptr) {
+    llvm::Value* storage = storageOf(expr);
+    if (storage == nullptr) {
       fatal(spanOf(expr), IRDiagnosticCode::Internal,
             "this place is not a binding this function owns");
       return {};
     }
-    return Place{slot, typeOf(expr)};
+    return Place{storage, typeOf(expr)};
   }
   case ast::NodeKind::ParenExpr: {
     const std::vector<ast::AstId> operands = operandsOf(expr);

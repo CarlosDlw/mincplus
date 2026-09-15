@@ -127,8 +127,8 @@ TEST(IrLowerTest, OneGlobalPerDistinctString) {
   // compare unequal (`memory.md`, *Objects*). Counting the *declarations* and
   // not the uses, because a use is a reference to the one object.
   std::size_t globals = 0;
-  for (std::size_t at = text.find("= private unnamed_addr constant"); at != std::string::npos;
-       at = text.find("= private unnamed_addr constant", at + 1)) {
+  for (std::size_t at = text.find("= private unnamed_addr global"); at != std::string::npos;
+       at = text.find("= private unnamed_addr global", at + 1)) {
     ++globals;
   }
   EXPECT_EQ(globals, 1U) << text;

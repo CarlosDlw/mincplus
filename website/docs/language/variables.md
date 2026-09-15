@@ -168,8 +168,103 @@ it. There is no `const`-correctness in the type today — no `*const T` — so
 "this pointer's pointee will not be written" is not a promise the language can
 make yet.
 
+## File scope
+
+A `let` or a `const` may also be written at the **top of a file**, beside a
+function, with the same shape it has in a block:
+
+```minc
+const maxUsers: i32 = 4096;      // this constant is in the file's image
+let   requests: u64 = 0;         // a mutable object, for the whole run
+```
+
+They are *definitions*: the object is in the file's image, and it exists for the
+whole run of the program. There is no declaration form for a binding —
+`extern let x: i32;` names no object this compiler can put in the image, and it
+is refused by name rather than left to mean something subtle. `extern fn` is the
+declaration form, and it is about functions.
+
+### The initializer must be a constant
+
+A file-scope initializer has to be **computable before the program exists** —
+a literal, arithmetic over constants, or a reference to another file-scope
+constant:
+
+```minc
+const mask:  u32 = (1 << 8) - 1;   // 255, folded at compile time
+const scale: f64 = 2.5;
+const limit: i32 = maxUsers / 2;   // names another constant, above or below
+let   count: u64 = 0;
+let   root:  *i32 = null;
+```
+
+A float initializer is a **literal**, with a sign and nothing else. `const half:
+f64 = 1.0 / 2.0;` is refused, and this is the one place the rule is stricter
+than the compiler could be: a file-scope object's *bytes* are written here, and
+float arithmetic is rounded by the machine the program is about to run on. The
+spelling is the one place a value is allowed to come from, so the value in the
+image is the value the reader wrote, on every target.
+
+A value that has to be *computed* is not one:
+
+```minc
+// error: this is work, and file scope is not a time at which work happens
+let table: *T = alloc(1024);
+```
+
+This is a deliberate limit, and it buys the guarantee that **nothing runs before
+`main`**. There is no startup order to get wrong, no constructor, and no static
+initialization order fiasco — not because the language avoids it, but because
+there is no dynamic initialization for an order to exist over. A global that
+needs the environment, or an allocation, is initialized at the top of `main`.
+
+Referencing a constant defined further down is fine — file-scope names are
+visible independently of order — and the values are computed in dependency order,
+so a cycle is an error rather than a surprise:
+
+```minc
+const a = b + 1;   // 42: `b` is below, and that is allowed
+const b = 41;
+
+// const loop = loop + 1;   // error: a cycle between constants
+```
+
+A `let` with no initializer is **zero-initialized** (that is the C ABI's `.bss`,
+and it is what makes an `extern` global's value unambiguous); a `const` with no
+initializer is a constant with no value, which is an error.
+
+### Linkage, and who may see a name
+
+A file-scope binding has **external** linkage whether it is a `let` or a `const`,
+because it is a member of the unit's namespace — a constant is a value a module
+*exports*, exactly as a function is, and minc+ will have a module system, so
+"what other files can import" is that system's question and not a linkage
+default's. Visibility and linkage are two answers to two different questions.
+
+`static` is the word that makes a binding **internal to this unit**:
+
+```minc
+static const scratchSize: usize = 4096;  // no symbol for the linker to see
+```
+
+That is also the answer to a shared `.mx` file included by two units: two
+external definitions of one name is a link-time error, and `static` is how a
+name says it is one unit's business only.
+
+`static` is the same word in front of a function, and it means the same thing
+there: `static fn i32 helper()` is a symbol the linker will not resolve another
+unit's reference to.
+
+`const` protects the **name**, not the memory: a `const p: *T` cannot be pointed
+somewhere else, and `*p = 1` still writes through it. Do not read a `const`
+global as read-only bytes — the compiler is not allowed to infer that.
+
 :::note[Not implemented yet]
-File-scope bindings do not exist: every item in a unit is a function
-declaration. Global constants, `static`, and thread-local storage arrive with
-linkage control.
+A binding's initializer may be a literal, arithmetic over constants, a read of
+another file-scope `const`, `null`, or `?:` over those. What is still missing is
+whatever needs another feature first: aggregations (`struct`, arrays) to build,
+the address of an object (`&x`) whose value the linker decides, thread-local
+storage, and `extern` on a binding. File-scope bindings themselves, and `static`,
+are implemented and recorded in
+[`docs/architectures/globals.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/globals.md).
 :::

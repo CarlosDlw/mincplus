@@ -207,6 +207,13 @@ the site:
 is where the value lands, so the lowering has a pair and no rule. A conversion
   that changes nothing (`from == to`) is **not** recorded — the lowering reads
   "no entry" as "no conversion" — and a pair the language refuses (`bool`, `str`)
+  is not recorded either, which is what makes a *missing* record a disagreement to
+  refuse rather than a conversion to invent. That last part is what a file-scope
+  object's initializer depends on: `declarations.cc` materialises the bytes at the
+  type the expression had and then applies `coercionAt(decl, 0)` — *the record's
+  pair*, never a pair derived from `typeOf(init)` and the object's type, because
+  the derived pair is exactly the silent cast (`const half: f64 = 1;`) the checker
+  refuses one stage up.
 is not either, because the checker reports it instead.
 - **The operation type of a compound assignment**, which is a property of the
   `AssignExpr` itself and lives in `ExprInfo::opType` rather than in the list
@@ -346,7 +353,7 @@ same rule the rest of the compiler follows:
 | `stmt.cc` | statements: blocks, `if`/`else`, loops, jumps, returns |
 | `expr.cc` | expressions: the arithmetic, the coercions, the calls, and every access, read out of `TypedFile::accessAt` rather than decided |
 | `runtime.cc` | the four semantic guards (`/`, `%`, shift counts, `INT_MIN / -1`) and the checked build's module-statable access guards (null, alignment, an `object`-provenance extent) |
-| `invariants.cc` | the post-lowering scans: the runtime contract, the assumption list, and that every emitted alignment equals the record's |
+| `invariants.cc` | the post-lowering scans: the runtime contract, the assumption list (functions *and* file-scope objects), and that every emitted alignment equals the record's |
 | `diag.h` | `IRDiagnostic` — this stage's errors as values, like every other stage |
 
 **One `IRUnit` owns everything LLVM for one translation unit: the
@@ -641,13 +648,14 @@ list, and it is short on purpose — every row is something this stage may
 | --- | --- | --- |
 | `!tbaa`, `!alias.scope`, `!noalias`, `!invariant.group`, `!nontemporal` | **never** | memory has no effective type; aliasing is untyped, and each of these is an inferred promise (`memory.md`, decisions 3 and 9) |
 | `!dbg` and debug records (`#dbg_declare`, `#dbg_value`) | **permitted under `-g` — the only metadata that is** | a source mapping is not an assumption: it says where the code came from, licenses no transformation, and LLVM's contract for it is "preserve or drop", never "exploit". The scan's rule is therefore a *permit-list* — "no metadata except debug info" — so a new metadata kind is a failing test rather than a quiet widening |
-| `noalias` (the parameter attribute), `captures(...)` | **only from source** | a written `restrict` is the sole producer; today the syntax does not exist, so the module contains none. Never inferred. `captures(...)` waits for a proof scan over the body |
+| `noalias` (the parameter attribute), `captures(...)` | **only from source** | a written `restrict` is the sole producer; today the syntax does not exist, so the module contains none. Never inferred. `captures(...)` waits for a proof scan over the body. The scan matches attribute **kinds** and not names: a name is a lookup in LLVM's own table, a kind is the enum this compiler compiled against |
 | `inbounds` (and the `nusw` it implies) | **only with a recorded proof** | today: never. See below — this is the row with a mechanism to design |
 | `nsw`, `nuw` | **never** | the language defines wrap; class one of § *The runtime contract* |
 | `dereferenceable`, `dereferenceable_or_null`, `!nonnull`, `!noundef`, `range`, `nnan`, `ninf` | **never** | each is a promise that something is well-formed; the language's rules are what make it so, and a promise on top of a proof is a promise that outlives the proof |
 | `fast`, `reassoc`, `nnan`, `ninf`, `nsz`, `arcp`, `contract` on float ops | **never** | the language defines its float results; a fast-math flag licenses reassociation of a value the language named |
 | `undef` and `poison` as values | **never, with one named exception** | `memory.md`, decision 13 — "uninitialized" is a violation, not a licence. The exception is a value of the bottom type `!`, which no program can reach and which the consumer's type nevertheless demands: see below |
-| `align N` on `load`/`store`/`alloca` | **always present, and scanned for equality** | not an assumption but a *claim*, and an overestimated one is UB (LLVM's own words); the scan compares every one against the record |
+| `align N` on `load`/`store`/`alloca`/a file-scope object | **always present, and scanned for equality** | not an assumption but a *claim*, and an overestimated one is UB (LLVM's own words); the scan compares every one against the record, and for a global against the ABI alignment of its own type |
+| `constant` on a file-scope object (and on the private `[N x i8]` behind a `str`) | **never** | `const` protects a **name**, not memory (`memory.md`, decision 15): LLVM's `constant` is the opposite claim — "nothing writes this" — and a write through a pointer to the object would be undefined behaviour rather than a diagnostic. The write is refused *by the checker* today (a `str` is not dereferenceable and does not convert to a pointer, and `&SIZE` is `sema-address-of-const`), and leaning on a refusal is precisely what decision 15 forbids: a refusal is a rule that can be relaxed, and the flag would stay behind as a miscompile. LLVM's `CreateGlobalString` builds its object `constant`, so the lowering says `setConstant(false)` explicitly and this row is what keeps it said |
 
 **The one `poison`, and why it is not a licence.** `sema` accepts an expression
 of type `!` wherever a value is expected — `c ? 1 : exit(1)`, `take(exit(1))`,
@@ -677,9 +685,14 @@ would buy nothing and is not worth a second implementation of the analysis.
 Two mechanisms, and they fail differently:
 
 - **the table above is the enumeration.** `invariants.cc` exposes
-  `allModuleAssumptions()` in the shape of `sema`'s `allAccessKinds()`, and a
-  test asserts the scan visits every row — so *adding* an assumption is a
-  two-file change with a test, which is exactly the friction it should have;
+  `moduleAssumptions()` in the shape of `sema`'s `allAccessKinds()`: one row per
+  checked rule, each with the code a violation of it is reported as (`ir.h`).
+  `invariants_test.cc` then builds a module **for every row** — one built by this
+  compiler and broken by hand, since a program that type-checked cannot produce a
+  violation — and asserts the scan detects it, so a new assumption without a test
+  input fails there. `allModuleAssumptions()` is derived from the table, so a row
+  added to the enum without one is a failing test rather than a rule nothing
+  checks. That is the friction the list is supposed to have;
 - **the scan runs on every module**, in debug and CI always and as `--verify-ir`
   in release, because a rule about the shape of the emitted code that is not
   checked is a comment.
@@ -761,10 +774,16 @@ language the addresses are visible, so the deduplication is a promise the
 lowering has to keep, and a test asserts the module holds one global for two
 identical literals (`memory.md`, *Objects*).
 
-The global is an object like any other, so it is one of the three things that
-produce an object, it is `align 1` (its element type's alignment), and a global
-with no initializer is zero — the `.bss` rule of `memory.md`, decision 12, which
-today only the `str` globals exercise.
+The global is an object like any other: one of the three things that produce an
+object, `align 1` (its element type's alignment), zero when it has no initializer
+— the `.bss` rule of `memory.md`, decision 12 — and, like every object this stage
+emits, **not a `constant`**. That last one is stated and not inherited:
+`CreateGlobalString` makes its object `constant` because LLVM wants string
+literals in `.rodata`, and the language has no read-only memory (`memory.md`,
+*Objects*), so the lowering clears the flag on the way out. The cost is real and
+accepted — the bytes are not merged into `.rodata` and a load of them is not
+folded at `-O0` — and the alternative is a module that is wrong for a program the
+checker passed, which is the one thing the assumption list forbids.
 
 `str` is where the language met the ABI before it had a pointer type, and the day
 `*` landed changed nothing here: LLVM's pointers are opaque, so `ptr` was already
@@ -1082,10 +1101,14 @@ The ladder, in the order it should be built:
    without a record at all. Plus the property tests `memory.md` names: `p + n -
    n == p` inside an object, `p[i] == *(p + i)` for every type in the store, and
    `p1 - p2` consistency.
-8. **The scan's own tests**: a hand-built module that contains one banned
-   assumption, or a `load` whose `align` disagrees with the record, makes the
-   scan fail — and the enumeration test makes it fail if a *row* is added without
-   a check. A scan nothing can trip is a scan that stopped running.
+8. **The scan's own tests**, and they are in `tests/unit/ir/invariants_test.cc`:
+   one module per row of the assumption list, each built by this compiler and
+   then broken by hand — a metadata node attached, an `inbounds` set, `nsw`
+   turned on, a fast-math flag, a `noalias` attribute, an `llvm.dbg.*` call, a
+   global flipped to `constant`, an alignment understated, a guard's branch
+   replaced with `true` — and each one asserted to be **detected**, with the code
+   its row names. The enumeration is walked, so a row added without an input
+   fails the lookup. A scan nothing can trip is a scan that stopped running.
 9. **The checked build's traps**, one per row of § *The checked build's guards*,
    at `-O0` **and** with `-fcheck` at `-O2` — because a check the optimiser can
    delete is not a check — plus the converse assertion that the release build's
@@ -1135,6 +1158,8 @@ other stages' artifacts are.
 | 30 | **`llvm.lifetime.start`/`end` for address-taken bindings; the checked build omits the `end`** | The markers let LLVM color disjoint storage; the marker is also what creates LLVM's dead-stack-load rule, which `memory.md` refuses, so the build whose job is to *report* the violation must keep the object live |
 | 31 | **`str` literal deduplication is a contract, not an optimisation** | `&x` makes two literals' addresses observable, so "one object or two" stopped being invisible. Stated now, because the day it matters is the day it is already wrong |
 | 32 | **A missing obligation is an ICE** (`ir-missing-obligation`), not a statement about the program | A program that type-checked cannot be missing one, so the only reading is "this compiler is wrong" — the same posture as a verifier failure and `sema`'s poison |
+| 33 | **No file-scope object is emitted `constant`**, and the scan is what keeps it so — including the private object behind a `str`, whose flag LLVM's `CreateGlobalString` sets and this stage clears | Decision 15 of [`memory.md`](memory.md): `const` protects a name, not memory. `constant` says nothing writes the object, so a write through a pointer to it would be undefined behaviour, and the only reason no program can perform one is a *checker refusal* — a thing this compiler may not lean on, and exactly the kind of "optimisation" that arrives later without anyone re-reading the model |
+| 34 | **A file-scope object's bytes are a `llvm::Constant`, and the conversion into them comes from the coercion record** — never from the pair `(typeOf(init), object's type)` | Nothing runs before the program, so an initializer is a value and not an instruction; and the type pair is the *same* fact decision 3 says may not be re-derived. Deriving it here is what would turn `const half: f64 = 1;` — refused by `sema` — into a silent `sitofp` in `.rodata`, which is the failure this whole document is arranged around |
 
 ## Non-goals
 

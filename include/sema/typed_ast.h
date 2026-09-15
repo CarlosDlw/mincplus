@@ -185,6 +185,72 @@ struct FunctionInfo {
   support::SymId name = support::kInvalidSym;
 };
 
+// What a file-scope binding was initialized with, as a *value*.
+//
+// This is the record the lowering materialises, and it exists for two reasons
+// that are both rules of this project. The first is that a file-scope object's
+// bytes are written by the compiler rather than by a statement, so the value has
+// to be *published* and cannot be computed a stage later. The second is that a
+// lowering folding an initializer expression itself would be a second copy of
+// the constant rules -- and the two copies are what disagree.
+//
+// The set is closed, and every alternative is a value **known before the program
+// exists**, which is what "there is no dynamic initialization at file scope"
+// means (`globals.md`, decision 2). A binding whose initializer is anything else
+// never reaches this table: it is refused, by name, in the checker.
+enum class GlobalValueKind : std::uint8_t {
+  // No initializer. The object is zero -- the C ABI's `.bss` (`memory.md`,
+  // decision 12).
+  Zero,
+  // A folded integer: every integer, `char` and `bool` constant, and any
+  // arithmetic over them, because `#if` and this share one constant core
+  // (`support/consteval`). `intValue` is the value.
+  Int,
+  // A single literal whose value the lowering reads from its own spelling: a
+  // float, a `str`, or an integer wider than the 64-bit core. `node` is that
+  // literal, so the reader is the one that already exists for it -- and no
+  // arithmetic happens in the lowering either way. `negated` is the one
+  // modification allowed on top of it, and it is a sign bit and not a value.
+  Literal,
+  // The null pointer.
+  Null,
+};
+
+// What an enumerator is called, in one table with the enumeration, so a kind
+// added without a name is caught by a test rather than printed as a number.
+struct GlobalValueKindInfo {
+  GlobalValueKind kind;
+  const char* name;
+};
+
+[[nodiscard]] std::span<const GlobalValueKindInfo> globalValueKindInfos();
+[[nodiscard]] std::span<const GlobalValueKind> allGlobalValueKinds();
+[[nodiscard]] std::string_view toString(GlobalValueKind kind);
+
+// One file-scope binding.
+struct GlobalInfo {
+  // The `LetStmt`/`ConstStmt` the binding was written as.
+  ast::AstId decl;
+  // The initializer expression, or `kInvalidAst` for a binding with none.
+  ast::AstId init;
+  // The binding's type: the annotation's, or the initializer's.
+  TypeId type = kInvalidType;
+  GlobalValueKind value = GlobalValueKind::Zero;
+  // The value, when `value` is `Int`.
+  support::ConstInt intValue;
+  // The literal whose spelling *is* the value, when `value` is `Literal`.
+  ast::AstId node;
+  // True when the value is the **negation** of what `node`'s spelling says:
+  // `-2.5`. It is not arithmetic and it is not a folder this stage declined to
+  // write -- a negated literal is a sign bit, which is exact for both a float and
+  // a two's-complement integer, so the *spelling* is still the whole value and
+  // the lowering still reads no more than it for an unnegated one. Without this,
+  // `const neg: f64 = -1.0;` would be refused for being "not constant", which it
+  // plainly is, and rejecting the written form of a value is how a language
+  // teaches its users to work around it.
+  bool negated = false;
+};
+
 struct TypedFile {
   TypedFile() = default;
 
@@ -220,6 +286,22 @@ struct TypedFile {
       }
     }
     return nullptr;
+  }
+
+  // The file-scope binding declared at `decl`, or nullptr when that node is not
+  // one in this unit. A scan of a table with one entry per file-scope binding,
+  // and the lowering asks it once per binding it declares.
+  [[nodiscard]] const GlobalInfo* globalOf(ast::AstId decl) const {
+    for (const GlobalInfo& info : globalTable) {
+      if (info.decl == decl) {
+        return &info;
+      }
+    }
+    return nullptr;
+  }
+
+  void addGlobal(const GlobalInfo& info) {
+    globalTable.push_back(info);
   }
 
   [[nodiscard]] std::span<const TypeId> types() const {
@@ -312,6 +394,7 @@ struct TypedFile {
   std::vector<TypeId> typeTable;
   std::vector<ExprInfo> exprFacts;
   std::vector<FunctionInfo> functionTable;
+  std::vector<GlobalInfo> globalTable;
 
 private:
   // Private with `addCoercion`/`buildCoercionIndex` as the only writers: the two

@@ -141,10 +141,17 @@ public:
   // grammar.
   void parseFile();
   void parseItem();
-  // `isExtern` is a parameter rather than something this function sniffs for,
-  // because which form is being parsed is already decided by `parseItem` and the
-  // two forms differ in the body and nowhere else.
-  void parseFnDecl(bool isExtern);
+  // The two linkage words are parameters rather than something this function
+  // sniffs for, because which form is being parsed is already decided by
+  // `parseItem` and the forms differ in the body and nowhere else. Both are
+  // *prefixes* on the one `FnDecl` node, so the node holds the words a reader
+  // wrote and the tree stays lossless.
+  void parseFnDecl(bool isExtern, bool isStatic);
+  // A file-scope binding. It builds the **same** `LetStmt`/`ConstStmt` node a
+  // block-scope one does -- one production, two positions -- with `static` as a
+  // child token when it was written, which is where `resolve` reads the linkage
+  // from.
+  void parseFileBinding(bool isConst, bool isStatic);
   // The part after the closing `)`: a block for a definition, `;` for an
   // `extern` declaration, and a diagnostic for either of the two wrong
   // combinations.

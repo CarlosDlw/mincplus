@@ -22,9 +22,11 @@
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/IR/ConstantFold.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/Error.h"
 
 #include "sema/type.h"
@@ -33,22 +35,26 @@
 
 namespace minc::ir {
 
-bool Lowering::isSigned(sema::TypeId type) const {
-  if (!types_.known(type)) {
+bool Lowering::signednessOf(const sema::TypeStore& types, sema::TypeId type) {
+  if (!types.known(type)) {
     return false;
   }
-  const sema::Type& shape = types_.get(type);
+  const sema::Type& shape = types.get(type);
   // `char` is unsigned by decision (README, *Types*), so it is not signed here
   // even though it is an integer type. `bool` has no signedness and never
   // reaches an arithmetic instruction.
   return shape.kind == sema::TypeKind::Int && shape.isSigned;
 }
 
-std::uint16_t Lowering::bitsOf(sema::TypeId type) const {
-  if (!types_.known(type)) {
+bool Lowering::isSigned(sema::TypeId type) const {
+  return signednessOf(types_, type);
+}
+
+std::uint16_t Lowering::bitWidthOf(const sema::TypeStore& types, sema::TypeId type) {
+  if (!types.known(type)) {
     return 0;
   }
-  const sema::Type& shape = types_.get(type);
+  const sema::Type& shape = types.get(type);
   switch (shape.kind) {
   case sema::TypeKind::Bool:
     return 1;
@@ -60,6 +66,10 @@ std::uint16_t Lowering::bitsOf(sema::TypeId type) const {
   default:
     return 0;
   }
+}
+
+std::uint16_t Lowering::bitsOf(sema::TypeId type) const {
+  return bitWidthOf(types_, type);
 }
 
 llvm::Type* Lowering::llvmType(sema::TypeId id) {
@@ -187,6 +197,99 @@ std::uint64_t Lowering::alignmentOf(sema::TypeId type) const {
 }
 
 // --- conversions ---------------------------------------------------------------
+//
+// Which conversion a pair of types needs is written **once** (`conversionFor`),
+// and there are two appliers: an instruction, for a value computed at run time,
+// and `llvm::ConstantFoldCastInstruction`, for the bytes of a file-scope object.
+// The pair had to be shared rather than duplicated because a binding and a global
+// initializer are exactly the case where the two must agree: `const wide: i64 =
+// small;` is a `u8` sign- or zero-extended by one instruction when the program
+// runs, and the same extension folded into an `i64` when it does not.
+//
+// **The pair always comes from the record, and the record never holds a mixed
+// one.** An integer and a float do not convert into each other in either
+// direction (`convert.h`), so `const half: f64 = 1;` is refused one stage up and
+// the `SIToFP`/`FPToSI` arms below are reachable only from a coercion `sema`
+// published -- which, today, no program can produce. They are written out rather
+// than left as an internal error because the day the language gains a cast, the
+// pair arrives through this same function and needs no new machinery here.
+
+Lowering::Conversion Lowering::conversionFor(const sema::TypeStore& types, sema::TypeId from,
+                                             sema::TypeId to) {
+  if (from == to) {
+    return Conversion::Identity;
+  }
+  // Pointers convert to pointers -- only through `*void`, by the checker's rule
+  // -- and LLVM has one pointer type, so this is the *same* value with a new
+  // label. No instruction: an opaque pointer conversion is an identity, and
+  // emitting a `bitcast` would be a no-op the optimiser deletes.
+  if (types.isPointer(from) && types.isPointer(to)) {
+    return Conversion::Identity;
+  }
+
+  const bool fromInteger = types.isInteger(from);
+  const bool toInteger = types.isInteger(to);
+  if (fromInteger && toInteger) {
+    const std::uint16_t fromBits = bitWidthOf(types, from);
+    const std::uint16_t toBits = bitWidthOf(types, to);
+    if (toBits > fromBits) {
+      // Sign-extension for a signed source, zero-extension for an unsigned one --
+      // and the *source's* signedness, which is why LLVM's signless types cannot
+      // answer this question and `sema`'s `Type` must.
+      return signednessOf(types, from) ? Conversion::Sext : Conversion::Zext;
+    }
+    if (toBits < fromBits) {
+      return Conversion::Trunc;
+    }
+    // The same width: `i32` to `u32` is the same bits and no instruction at all.
+    return Conversion::Identity;
+  }
+  // Reachable only through a recorded coercion, and no input produces one today
+  // (`convert.h`): an integer and a float are different classes of number and do
+  // not convert into each other. Kept total for the day a `cast` publishes the
+  // pair, at which point the instruction is `sitofp`/`uitofp` and nothing here
+  // changes.
+  if (fromInteger && types.isFloat(to)) {
+    return signednessOf(types, from) ? Conversion::SIToFP : Conversion::UIToFP;
+  }
+  if (types.isFloat(from) && toInteger) {
+    // The *destination's* signedness decides this one: the bits are the same and
+    // what changes is how they are read.
+    return signednessOf(types, to) ? Conversion::FPToSI : Conversion::FPToUI;
+  }
+  if (types.isFloat(from) && types.isFloat(to)) {
+    return bitWidthOf(types, to) > bitWidthOf(types, from) ? Conversion::FPExt
+                                                           : Conversion::FPTrunc;
+  }
+  return Conversion::Invalid;
+}
+
+std::optional<llvm::Instruction::CastOps> Lowering::castOpcodeOf(Conversion conversion) {
+  switch (conversion) {
+  case Conversion::Sext:
+    return llvm::Instruction::SExt;
+  case Conversion::Zext:
+    return llvm::Instruction::ZExt;
+  case Conversion::Trunc:
+    return llvm::Instruction::Trunc;
+  case Conversion::SIToFP:
+    return llvm::Instruction::SIToFP;
+  case Conversion::UIToFP:
+    return llvm::Instruction::UIToFP;
+  case Conversion::FPToSI:
+    return llvm::Instruction::FPToSI;
+  case Conversion::FPToUI:
+    return llvm::Instruction::FPToUI;
+  case Conversion::FPExt:
+    return llvm::Instruction::FPExt;
+  case Conversion::FPTrunc:
+    return llvm::Instruction::FPTrunc;
+  case Conversion::Identity:
+  case Conversion::Invalid:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
 
 Value Lowering::convert(const Value& value, sema::TypeId to) {
   const sema::TypeId from = value.type;
@@ -203,67 +306,60 @@ Value Lowering::convert(const Value& value, sema::TypeId to) {
     return value;
   }
 
-  // Pointers convert to pointers -- only through `*void`, by the checker's rule
-  // -- and LLVM has one pointer type, so this is the *same* value with a new
-  // label. No instruction: an opaque pointer conversion is an identity, and
-  // emitting a `bitcast` here would be a no-op the optimiser deletes.
-  if (types_.isPointer(from) && types_.isPointer(to)) {
+  const Conversion conversion = conversionFor(types_, from, to);
+  if (conversion == Conversion::Identity) {
     return Value{value.v, to};
   }
-
-  const bool fromInteger = types_.isInteger(from);
-  const bool toInteger = types_.isInteger(to);
-  if (fromInteger && toInteger) {
-    const std::uint16_t fromBits = bitsOf(from);
-    const std::uint16_t toBits = bitsOf(to);
-    if (toBits > fromBits) {
-      // Sign-extension for a signed source, zero-extension for an unsigned one --
-      // and the *source's* signedness, which is why LLVM's signless types cannot
-      // answer this question and `sema`'s `Type` must.
-      return Value{
-          isSigned(from)
-              ? static_cast<llvm::Value*>(builder_.CreateSExt(value.v, destination, "sext"))
-              : static_cast<llvm::Value*>(builder_.CreateZExt(value.v, destination, "zext")),
-          to};
-    }
-    if (toBits < fromBits) {
-      return Value{builder_.CreateTrunc(value.v, destination, "trunc"), to};
-    }
-    // The same width: `i32` to `u32` is the same bits and no instruction at all.
+  if (conversion == Conversion::Invalid) {
+    // A pair the language does not permit, and one cannot reach here: the checker
+    // reported it and the unit has errors, so the lowering was never called. It
+    // is an internal error rather than a refusal about the program, because the
+    // only way to see it is a bug in this compiler.
+    fatal(support::Span{}, IRDiagnosticCode::Internal,
+          "a conversion from `" + types_.spelling(from) + "` to `" + types_.spelling(to) +
+              "` reached the lowering; the language does not permit one");
+    return value;
+  }
+  const std::optional<llvm::Instruction::CastOps> opcode = castOpcodeOf(conversion);
+  if (!opcode.has_value()) {
     return Value{value.v, to};
   }
+  // Named from the opcode, so the instruction a reader sees in a dump is still
+  // `sext`/`sitofp`/... and not an anonymous `%0`.
+  return Value{
+      builder_.CreateCast(*opcode, value.v, destination, llvm::Instruction::getOpcodeName(*opcode)),
+      to};
+}
 
-  if (fromInteger && types_.isFloat(to)) {
-    return Value{
-        isSigned(from)
-            ? static_cast<llvm::Value*>(builder_.CreateSIToFP(value.v, destination, "sitofp"))
-            : static_cast<llvm::Value*>(builder_.CreateUIToFP(value.v, destination, "uitofp")),
-        to};
+llvm::Constant* Lowering::convertConstant(llvm::Constant* value, sema::TypeId from,
+                                          sema::TypeId to) {
+  if (value == nullptr || from == to) {
+    return value;
   }
-  if (types_.isFloat(from) && toInteger) {
-    // The *destination's* signedness decides this one: the bits are the same and
-    // what changes is how they are read.
-    return Value{
-        isSigned(to)
-            ? static_cast<llvm::Value*>(builder_.CreateFPToSI(value.v, destination, "fptosi"))
-            : static_cast<llvm::Value*>(builder_.CreateFPToUI(value.v, destination, "fptoui")),
-        to};
+  const Conversion conversion = conversionFor(types_, from, to);
+  if (conversion == Conversion::Identity) {
+    return value;
   }
-  if (types_.isFloat(from) && types_.isFloat(to)) {
-    if (bitsOf(to) > bitsOf(from)) {
-      return Value{builder_.CreateFPExt(value.v, destination, "fpext"), to};
-    }
-    return Value{builder_.CreateFPTrunc(value.v, destination, "fptrunc"), to};
+  const std::optional<llvm::Instruction::CastOps> opcode = castOpcodeOf(conversion);
+  if (!opcode.has_value()) {
+    // `Invalid`: the checker refused the program and no module is built from it.
+    // Returning the value unchanged keeps this function total and silent, because
+    // a second message about it would be about bytes that are not going to be
+    // compiled at all.
+    return value;
   }
-
-  // A pair the language does not permit, and a pair the language does not permit
-  // cannot reach here: the checker reported it and the unit has errors, so the
-  // lowering was never called. It is an internal error rather than a refusal
-  // about the program, because the only way to see it is a bug in this compiler.
-  fatal(support::Span{}, IRDiagnosticCode::Internal,
-        "a conversion from `" + types_.spelling(from) + "` to `" + types_.spelling(to) +
-            "` reached the lowering; the language does not permit one");
-  return value;
+  llvm::Type* destination = llvmType(to);
+  if (destination == nullptr) {
+    return nullptr;
+  }
+  // Folded, not emitted: a file-scope initializer has to be a `llvm::Constant`,
+  // and an instruction is not one. LLVM's own folder, so a constant and the
+  // instruction the runtime path would have emitted round the same way -- a
+  // hand-written folding of `sitofp` here would be a second rounding rule.
+  if (llvm::Constant* folded = llvm::ConstantFoldCastInstruction(*opcode, value, destination)) {
+    return folded;
+  }
+  return llvm::ConstantExpr::getCast(*opcode, value, destination);
 }
 
 Value Lowering::lowerOperand(ast::AstId consumer, ast::AstId child) {
@@ -387,6 +483,21 @@ llvm::Constant* Lowering::stringGlobal(ast::AstId literal) {
   // alignment is the honest one: an over-aligned global would be a promise
   // about the object this stage cannot make.
   global->setAlignment(llvm::Align(1));
+  // **Not a `constant` object**, and stated rather than inherited from
+  // `CreateGlobalString`: LLVM builds the string global as `constant` (it is what
+  // puts it in `.rodata`), and `constant` is a claim that nothing writes it -- so
+  // a write through a pointer to it would be undefined behaviour rather than a
+  // diagnostic. This model has no read-only memory (`memory.md`, *Objects*), and
+  // its one rule about the subject is that the compiler may not infer `readonly`
+  // from how a name is spelled (decision 15); a literal's object is a global like
+  // any other, and `const x: i32 = 5;` and `let x: i32 = 5;` produce the same
+  // object. The write is refused today by the *checker* -- a `str` is not
+  // dereferenceable and does not convert to a pointer -- and leaning on a refusal
+  // is exactly what decision 15 forbids, because a refusal is a rule that can be
+  // relaxed while this flag would stay behind as a miscompile. It also keeps the
+  // module independent of an LLVM implementation detail: every object this stage
+  // emits says `global`, and the scan is what keeps it that way (`invariants.cc`).
+  global->setConstant(false);
   strings_.emplace(text, global);
   return global;
 }

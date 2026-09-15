@@ -1,6 +1,6 @@
 // Copyright (c) 2026 minc+ contributors.
 // SPDX-License-Identifier: MIT
-// The function signatures, and the names the linker sees.
+// The function signatures, the file-scope objects, and the names the linker sees.
 //
 // Every function is declared before any body is lowered, which is the same
 // decision `sema::runSignatures` makes one stage up and for the same reason: a
@@ -15,6 +15,13 @@
 // never called emits no symbol at all, because LLVM drops a declaration nothing
 // references -- which is why declaring a function the program never uses costs
 // nothing and needs no bookkeeping here.
+//
+// The file-scope objects are declared in the same pass and for the same reason: a
+// body that reads a global has to find the `GlobalVariable` that already exists.
+// Their *bytes* are the one thing here the lowering does not emit but
+// **materialises**, and that is not a shortcut: a file-scope object's value is
+// written before the program runs, which is exactly what a `llvm::Constant` is
+// and what an instruction is not.
 #include "lowering.h"
 
 #include <cstdint>
@@ -27,6 +34,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 
+#include "debug.h"
 #include "sema/typed_ast.h"
 
 namespace minc::ir {
@@ -95,12 +103,16 @@ void Lowering::declareFunctions() {
       continue;
     }
 
-    // `External`: the language has no `static` keyword yet, and a file-scope
-    // function in C is external unless it says otherwise -- which is exactly the
-    // decision `resolve` already recorded as `Linkage::External` for one. When
-    // `static` arrives, this reads the def's linkage instead of naming one.
-    llvm::Function* function =
-        llvm::Function::Create(type, llvm::GlobalValue::ExternalLinkage, name, module_);
+    // The linkage comes from the declaration, where `resolve` decided it: a
+    // file-scope function is external, and `static` is the one word that says
+    // otherwise (`globals.md`, decision 5). It is *read* here and not recomputed,
+    // so `static fn i32 f()` and `static let x` cannot end up with two different
+    // answers about what the linker sees -- one rule, recorded once.
+    const bool internal = def.has_value() && def->index < defs_.defs.size() &&
+                          defs_.defs[def->index].linkage == resolve::Linkage::Internal;
+    llvm::Function* function = llvm::Function::Create(
+        type, internal ? llvm::GlobalValue::InternalLinkage : llvm::GlobalValue::ExternalLinkage,
+        name, module_);
 
     // A `!` return type, told to LLVM in the one spelling it understands. The
     // fact is *derived* from the type rather than declared beside it: a function
@@ -117,6 +129,212 @@ void Lowering::declareFunctions() {
       functions_.emplace(defKey(*def), function);
     }
   }
+}
+
+// --- the file scope ------------------------------------------------------------
+
+void Lowering::declareGlobals() {
+  for (const sema::GlobalInfo& info : typed_.globalTable) {
+    if (failed_) {
+      return;
+    }
+    if (!info.decl.valid() || inError(info.decl)) {
+      continue;
+    }
+    const std::optional<resolve::DefId> def = defAtName(childOf(info.decl, ast::NodeKind::Name));
+    std::string name;
+    if (def.has_value()) {
+      name = linkageName(*def);
+    }
+    if (name.empty()) {
+      error(info.decl, IRDiagnosticCode::Internal,
+            "a file-scope binding reached lowering with no name");
+      continue;
+    }
+    // One `GlobalVariable` per declaration, never two -- the same rule the
+    // functions follow, and for the same reason: LLVM renames the loser to
+    // `name.1`, and the module would then carry an object nobody reads next to
+    // the one the program uses.
+    if (def.has_value() && globals_.contains(defKey(*def))) {
+      continue;
+    }
+
+    llvm::Type* objectType = storageType(info.type);
+    if (objectType == nullptr) {
+      // The type has no LLVM mapping and the refusal is already recorded; an
+      // object built from the null would be a crash where the reader was handed a
+      // diagnostic.
+      continue;
+    }
+    llvm::Constant* initializer = globalInitializer(info);
+    if (initializer == nullptr) {
+      continue;
+    }
+
+    const bool internal = def.has_value() && def->index < defs_.defs.size() &&
+                          defs_.defs[def->index].linkage == resolve::Linkage::Internal;
+
+    // **`isConstant` is false for every file-scope binding, including a `const`.**
+    //
+    // `const` protects a *name*, not memory (`memory.md`, decision 15), and LLVM's
+    // `constant` is the opposite claim: it makes any write through a pointer to
+    // the object undefined behaviour. The two are not the same rule and must not
+    // be spelled the same way. Today the source cannot reach such a write --
+    // `&SIZE` is refused as `sema-address-of-const`, precisely because a pointer
+    // to it would be a way to write it -- but a compiler may not lean on a
+    // refusal it may later relax, and the day an explicit `readonly` annotation
+    // (or const-correctness, `*const T`) arrives, this flag is the *one* place it
+    // has to be turned on. `const x: i32 = 5;` and `let x: i32 = 5;` produce the
+    // same object, which is what the ABI and the user both see.
+    //
+    // The consequence is real and accepted: a load of a constant global is not
+    // folded at `-O0` and not `.rodata`. `globals.md` records the trade; the
+    // alternative is a module that is wrong for a program the checker passed,
+    // which is the one thing the invariant list forbids.
+    auto* global = new llvm::GlobalVariable(module_, objectType, /*isConstant=*/false,
+                                            internal ? llvm::GlobalValue::InternalLinkage
+                                                     : llvm::GlobalValue::ExternalLinkage,
+                                            initializer, name);
+    // The alignment the type states, and not the target's default for the
+    // initializer: it is the number every access through this object will compare
+    // against, so an object aligned differently from its own accesses would be an
+    // access the invariant scan refuses.
+    global->setAlignment(llvm::Align(alignmentOf(info.type)));
+    if (def.has_value()) {
+      globals_.emplace(defKey(*def), global);
+    }
+    if (debug_ != nullptr) {
+      debug_->declareGlobal(*global, name, types_, info.type, spanOf(info.decl));
+    }
+  }
+}
+
+llvm::ConstantInt* Lowering::intConstant(support::ConstInt value, sema::TypeId type) {
+  llvm::Type* shape = storageType(type);
+  if (shape == nullptr || !shape->isIntegerTy()) {
+    return nullptr;
+  }
+  // The width comes from the *object*, not from the 64-bit core the value was
+  // folded in: a `bool` is a byte on the outside, and an `i128` needs the value
+  // widened -- sign-extended when the source is signed, zero-extended when it is
+  // not, which is the same pair of answers `Conversion::Sext`/`Zext` gives.
+  const llvm::APInt raw(shape->getIntegerBitWidth(), value.bits, !value.isUnsigned);
+  return llvm::ConstantInt::get(context_, raw);
+}
+
+llvm::Constant* Lowering::negatedConstant(llvm::Constant* value) {
+  if (auto* floating = llvm::dyn_cast<llvm::ConstantFP>(value)) {
+    // A sign bit, which is exact at every width: `-1.5` is `1.5` with one bit
+    // flipped, and no rounding is involved anywhere.
+    llvm::APFloat negated = floating->getValueAPF();
+    negated.changeSign();
+    return llvm::ConstantFP::get(context_, negated);
+  }
+  if (auto* integer = llvm::dyn_cast<llvm::ConstantInt>(value)) {
+    // Two's-complement negation, which is exact for the same reason.
+    return llvm::ConstantInt::get(context_, -integer->getValue());
+  }
+  // A `str`: there is no `-"abc"`, and the checker refused one before it got
+  // here. Returning the value unchanged keeps this function total.
+  return value;
+}
+
+// The bytes of an initializer, converted to the object's type by the pair the
+// **record** holds.
+//
+// Read, never re-derived, and the difference is the whole point. A conversion is
+// a fact about the program (`ir.md`, *The coercion record*), and a lowering that
+// derived one itself -- from the value's type to the object's -- would be a
+// second copy of `convert.h`: the copy that turns a value the checker refused
+// into a silent cast. `convertible` refuses an integer in a float's place in
+// both directions, so `const half: f64 = 1;` is an error one stage up and not a
+// widening here, and the record is what makes that refusal structural instead of
+// something this stage has to remember.
+//
+// The absent record is therefore not "no conversion needed" but *no conversion
+// was recorded*, which is only consistent when the value was built at the
+// object's own type. A difference under an absent record is a disagreement
+// between two stages -- not a licence to convert.
+llvm::Constant* Lowering::convertGlobalValue(const sema::GlobalInfo& info, llvm::Constant* value,
+                                             sema::TypeId valueType) {
+  if (value == nullptr) {
+    return nullptr;
+  }
+  const sema::Coercion* coercion = info.init.valid() ? coercionFor(info.decl, info.init) : nullptr;
+  const sema::TypeId from = coercion != nullptr ? coercion->from : valueType;
+  const sema::TypeId to = coercion != nullptr ? coercion->to : valueType;
+  if (to != info.type || (coercion != nullptr && from != valueType)) {
+    fatal(spanOf(info.decl), IRDiagnosticCode::Internal,
+          "the initializer of this file-scope binding is a value of type `" +
+              types_.spelling(valueType) + "` and its recorded conversion is `" +
+              types_.spelling(from) + "` to `" + types_.spelling(to) +
+              "`, which disagrees with the object's type `" + types_.spelling(info.type) + "`");
+    return nullptr;
+  }
+  return convertConstant(value, from, to);
+}
+
+llvm::Constant* Lowering::globalInitializer(const sema::GlobalInfo& info) {
+  llvm::Type* shape = storageType(info.type);
+  if (shape == nullptr) {
+    return nullptr;
+  }
+  switch (info.value) {
+  case sema::GlobalValueKind::Zero:
+    // No initializer, or a `let` whose value is zero: the C ABI's `.bss`, which
+    // is a decision and not an omission (`memory.md`, decision 12). The bytes are
+    // the object's type's zero, so there is no conversion to read.
+    return llvm::Constant::getNullValue(shape);
+  case sema::GlobalValueKind::Null:
+    // `null` is `*void` and the object's type is some pointer, so this is a
+    // pointer constant of the object's own type and not a cast to one. The two
+    // are the *same* LLVM type -- the language's pointers are opaque, all of
+    // them -- so the conversion the checker recorded for this pair is the
+    // identity and is already applied by building the constant at the object.
+    if (!shape->isPointerTy()) {
+      fatal(spanOf(info.decl), IRDiagnosticCode::Internal,
+            "`null` initializes an object whose type is not a pointer");
+      return nullptr;
+    }
+    return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(shape));
+  case sema::GlobalValueKind::Literal: {
+    // One literal, read from its own spelling by the reader that already existed
+    // for it: a float, a `str` (whose bytes are their own private object, so the
+    // initializer is that object's address), or an integer wider than the core.
+    const Value literal = lowerLiteral(info.node);
+    auto* constant = llvm::dyn_cast_or_null<llvm::Constant>(literal.v);
+    if (constant == nullptr) {
+      // `lowerLiteral` records its own refusals; nothing is emitted rather than
+      // an object with wrong bytes.
+      return nullptr;
+    }
+    if (info.negated) {
+      constant = negatedConstant(constant);
+    }
+    return convertGlobalValue(info, constant, literal.type);
+  }
+  case sema::GlobalValueKind::Int: {
+    // The value was folded at the *expression's* type -- the literal's, or the
+    // operation type of the arithmetic -- and the object's type may be another of
+    // the same class: `const wide: i64 = small;` is a `sext` of a `u8`
+    // underneath. Which pair that is comes from the record.
+    const sema::TypeId foldedAt = typeOf(info.init);
+    llvm::ConstantInt* folded = intConstant(info.intValue, foldedAt);
+    if (folded == nullptr) {
+      // A folded *integer* value whose type is not an integer type is not a
+      // statement about the program: it means this stage and `sema` disagree
+      // about what an integer constant is. Left as an internal error rather than
+      // a skipped object, because a skipped object is a symbol the reader's code
+      // refers to and nothing defines.
+      fatal(spanOf(info.decl), IRDiagnosticCode::Internal,
+            "a file-scope binding was folded to an integer at `" + types_.spelling(foldedAt) +
+                "`, which is not an integer type");
+      return nullptr;
+    }
+    return convertGlobalValue(info, folded, foldedAt);
+  }
+  }
+  return nullptr;
 }
 
 } // namespace minc::ir

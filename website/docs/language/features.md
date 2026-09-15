@@ -247,11 +247,46 @@ Everything below is what lands on top of that model. See
 - [x] Top-level functions, including `main`
 - [x] Function parameters, written `name: type` — the same shape as `let`, and
       only that: the C order `type name` is rejected rather than guessed at
-- [ ] Global variables, constants
-- [ ] `extern` declarations bound to C symbols
+- [x] File-scope `const` — a typed constant of the unit:
+      `const maxUsers: i32 = 4096;`, with the same shape as a block-scope
+      binding (annotation or inference)
+- [x] File-scope `let` — a mutable object with static storage:
+      `let requests: u64 = 0;`. See
+      [Variables](/language/variables#file-scope)
+- [x] A file-scope initializer must be an **initializer constant expression**
+      (a literal, arithmetic over constants, or a reference to another file-scope
+      constant). **There is no dynamic initialization at file scope**: nothing
+      runs before `main`, so the static initialization order fiasco is
+      unrepresentable rather than avoided. A value that must be computed is
+      initialized in `main`
+- [x] Constant initializers are evaluated in **dependency order** (`const a =
+      b + 1;` may name a `b` defined further down, since file-scope names are
+      order-independent), and a cycle is an error
+- [x] A `let` with no initializer is **zero-initialized** (the C ABI's `.bss`);
+      a `const` with no initializer is an error
+- [x] A file-scope binding has **external** linkage, `let` and `const` alike: it
+      is a member of the unit's namespace, and a constant is a value a module
+      exports. Visibility is the **module system's** question, not a linkage
+      default's — `pub`/`private` filters lookup without rewriting linkage
+      (`resolve.md` decision F)
+- [x] `static` makes a binding **internal to this unit** — the one word that
+      narrows linkage, and the answer to a shared `.mx` file included twice
+- [x] `const` protects the **name**, not the memory: a global is never
+      `readonly`/`constant` in the IR on the strength of it
+- [x] `#define` is not the constant and the constant is not a `#define`: the
+      preprocessor is for what must be seen before the grammar (guards,
+      conditionals, pasting), a typed constant is for what the type checker must
+      see. The design record is `docs/architectures/globals.md`
+- [x] `extern let` / `extern const` — a declaration of storage defined in
+      another unit, a library, or the C runtime (`extern let environ: *str;`),
+      the same word and meaning as in `extern fn`
+- [ ] Thread-local storage (a storage-duration question for
+      `docs/architectures/memory.md`'s concurrency section)
+- [ ] Aggregate initializers for a file-scope constant (`const t: [4]i32 = ...`)
+- [ ] C symbols bound by name other than `extern` (an `@symbol` attribute) `[?]`
 - [ ] Visibility (`pub` / `private`) and namespaces
 - [ ] Module system and imports `[?]`
-- [ ] Variadic functions, including calling C variadics
+- [x] Variadic functions, including calling C variadics
 - [ ] Default arguments or named arguments `[?]`
 
 ## Scopes and names

@@ -24,10 +24,22 @@ namespace minc::parse {
 // empty answer for a declaration instead of trying two casts. The `extern` token
 // stays a child of the node, so the tree is still lossless and the word a reader
 // wrote is still in it.
-void Parser::parseFnDecl(bool isExtern) {
+void Parser::parseFnDecl(bool isExtern, bool isStatic) {
   Marker decl = start();
+  if (isStatic) {
+    bump(); // `static`
+  }
   if (isExtern) {
     bump(); // `extern`
+  }
+  // Both words answer one question -- who may see this name -- and they answer
+  // it oppositely: `static` is this unit only, `extern` is defined elsewhere. A
+  // declaration that says both is refused here, where both words are in hand,
+  // rather than resolved to a winner one stage down.
+  if (isStatic && isExtern) {
+    error("`static` and `extern` are opposite: one says this unit only, the other says the "
+          "definition is elsewhere",
+          ParseErrorCode::ConflictingLinkage);
   }
   expect(lex::TokenKind::KwFn);
   parseTypeAndName();
