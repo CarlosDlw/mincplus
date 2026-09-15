@@ -221,9 +221,12 @@ TEST(BuildCommandTest, AssemblyListingIsText) {
   EXPECT_EQ(outcome.code, 0) << outcome.err;
   const std::string text = readFile(listing);
   EXPECT_FALSE(text.empty());
-  // A listing is printable and says something about the target's text section;
-  // asserting on an instruction would tie the test to one architecture.
-  EXPECT_NE(text.find(".text"), std::string::npos) << text.substr(0, 200);
+  // A listing is printable text that names the function it contains. It is not
+  // asserted against the text section's directive, because that is the target's
+  // spelling and not the language's: `.text` is ELF's, and Mach-O calls it
+  // `__TEXT,__text`, which is what this test read on the first macOS run.
+  EXPECT_EQ(text.find('\0'), std::string::npos) << "a listing is made of characters";
+  EXPECT_NE(text.find("main"), std::string::npos) << text.substr(0, 200);
 }
 
 TEST(BuildCommandTest, AUnitThatFailsToCheckWritesNoObjectAtAll) {

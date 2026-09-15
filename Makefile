@@ -19,6 +19,21 @@
 CMAKE ?= cmake
 CTEST ?= ctest
 
+# The tools the two source-level gates use, as variables rather than fixed names,
+# because `clang-format` and `clang-tidy` change their minds between releases: the
+# tree that is clean under 22 is not clean under 18, so *which* version runs the
+# gate is part of the gate. CI pins them to the LLVM release the project builds
+# against and exports these names (`.github/actions/install-llvm`), so the same
+# tools run here and there.
+#
+# `TIDY_CXX` is the compiler the tidy gate configures with: clang-tidy cannot
+# consume a GNU compile database, and the version of clang that reads the sources
+# is part of the same answer.
+CLANG_FORMAT ?= clang-format
+CLANG_TIDY ?= clang-tidy
+RUN_CLANG_TIDY ?= run-clang-tidy
+TIDY_CXX ?= clang++
+
 # The preset that plain `make build` / `make test` use. `make BUILD=ci test`
 # switches it without a second set of targets.
 BUILD ?= dev
@@ -112,11 +127,11 @@ gates: ci sanitize format-check tidy
 # is the one non-POSIX tool here; it is present in Git Bash on Windows, which is
 # what the Windows instructions assume.
 format:
-	find $(SOURCES) \( -name '*.h' -o -name '*.cc' \) -print0 | xargs -0 clang-format -i
+	find $(SOURCES) \( -name '*.h' -o -name '*.cc' \) -print0 | xargs -0 $(CLANG_FORMAT) -i
 
 format-check:
 	find $(SOURCES) \( -name '*.h' -o -name '*.cc' \) -print0 \
-	  | xargs -0 clang-format --dry-run --Werror
+	  | xargs -0 $(CLANG_FORMAT) --dry-run --Werror
 	@echo "format clean"
 
 # clang-tidy cannot consume a GNU compile database (GCC emits flags it does not
@@ -132,13 +147,13 @@ format-check:
 # gate takes. It is a separate binary, so where it is missing the sequential
 # invocation is the fallback rather than a build error.
 tidy:
-	$(CMAKE) --preset ci -DCMAKE_CXX_COMPILER=clang++ -B build/tidy
-	@if command -v run-clang-tidy >/dev/null 2>&1; then \
-	  run-clang-tidy -p build/tidy -j $(JOBS) -quiet \
+	$(CMAKE) --preset ci -DCMAKE_CXX_COMPILER=$(TIDY_CXX) -B build/tidy
+	@if command -v $(RUN_CLANG_TIDY) >/dev/null 2>&1; then \
+	  $(RUN_CLANG_TIDY) -clang-tidy-binary $(CLANG_TIDY) -p build/tidy -j $(JOBS) -quiet \
 	    -warnings-as-errors '*' 'src/.*\.cc'; \
 	else \
 	  echo "minc+: run-clang-tidy not found, using one clang-tidy at a time"; \
-	  clang-tidy -p build/tidy --warnings-as-errors='*' $$(find src -name '*.cc'); \
+	  $(CLANG_TIDY) -p build/tidy --warnings-as-errors='*' $$(find src -name '*.cc'); \
 	fi
 
 # --- the corpus -------------------------------------------------------------

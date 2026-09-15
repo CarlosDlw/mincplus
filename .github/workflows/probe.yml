@@ -1,0 +1,54 @@
+# TEMPORARY. Answers one question per platform, by running rather than by
+# guessing: where the LLVM development files actually are on a fresh runner, and
+# which C++ toolchain CMake would pick there. Deleted once the answers are in the
+# workflow that needs them.
+name: probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: probe (windows)
+    runs-on: windows-latest
+    steps:
+      - name: LLVM and toolchain layout
+        shell: pwsh
+        run: |
+          Write-Host "=== C:\Program Files\LLVM"
+          Get-ChildItem "C:\Program Files\LLVM" -ErrorAction SilentlyContinue |
+            Select-Object -First 25 -ExpandProperty Name
+          Write-Host "=== LLVMConfig.cmake under Program Files"
+          Get-ChildItem "C:\Program Files" -Filter LLVMConfig.cmake -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+          Write-Host "=== choco llvm package"
+          Get-ChildItem "C:\ProgramData\chocolatey\lib\llvm" -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+            Select-Object -First 25 -ExpandProperty FullName
+          Write-Host "=== choco installed versions"
+          choco list --local-only 2>$null | Select-String -Pattern "llvm|clang|msys"
+          Write-Host "=== cl.exe on PATH (MSVC environment present?)"
+          (Get-Command cl.exe -ErrorAction SilentlyContinue).Source
+          Write-Host "=== Visual Studio installations"
+          Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+          Write-Host "=== mingw / msys2"
+          (Get-Command g++.exe -ErrorAction SilentlyContinue).Source
+          Test-Path "C:\msys64"
+          Get-ChildItem "C:\msys64\mingw64\lib\cmake" -ErrorAction SilentlyContinue |
+            Select-Object -First 10 -ExpandProperty Name
+
+  macos:
+    name: probe (macos)
+    runs-on: macos-latest
+    steps:
+      - name: Homebrew LLVM formulae
+        run: |
+          uname -m
+          brew --version | head -1
+          echo "=== available llvm formulae ==="
+          brew search '/^llvm/' | head -20
+          echo "=== installed ==="
+          brew list --formula | grep -i llvm || echo "(no llvm formula installed)"
+          echo "=== what is already on the image ==="
+          ls -d /opt/homebrew/opt/llvm* 2>/dev/null || true
+          ls /opt/homebrew/opt/llvm/lib/cmake 2>/dev/null || true

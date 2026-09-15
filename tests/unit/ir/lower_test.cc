@@ -37,8 +37,12 @@ TEST(IrLowerTest, AMainFunctionBecomesAModule) {
   EXPECT_NE(text.find("define i32 @main()"), std::string::npos);
   EXPECT_NE(text.find("ret i32 0"), std::string::npos);
   // The triple and the layout are LLVM's, and they are the target's identity
-  // rather than the host's.
-  EXPECT_NE(text.find("target triple = \"x86_64-unknown-linux-gnu\""), std::string::npos);
+  // rather than the host's -- and the target here is the *default*, which is the
+  // host, so the expected spelling is asked for rather than written down. A
+  // literal `x86_64-unknown-linux-gnu` is what this test used to say, which made
+  // it a statement about the machine running it.
+  const std::string triple = "target triple = \"" + std::string(sema::kDefaultTriple) + "\"";
+  EXPECT_NE(text.find(triple), std::string::npos) << text;
   EXPECT_NE(text.find("target datalayout = \""), std::string::npos);
 }
 
@@ -331,8 +335,16 @@ TEST(IrLowerTest, EveryExampleLowers) {
   }
   ASSERT_FALSE(files.empty()) << "examples/ is missing files";
 
+  // A *stated* target, not the host. The corpus is a statement about the
+  // language, and one of its files uses `f80` -- the x87 extended format, which a
+  // target without x87 has no LLVM type for and the lowering therefore refuses by
+  // name. Running the sweep against whatever machine executes it would make "every
+  // example lowers" a claim about the CI runner rather than about the corpus.
+  const std::optional<sema::TargetInfo> reference = sema::targetFromName(sema::kTripleLinuxAmd64);
+  ASSERT_TRUE(reference.has_value());
+
   for (const std::string& path : files) {
-    test::IrFixture fixture(path);
+    test::IrFixture fixture(path, *reference);
     std::ifstream in(path, std::ios::binary);
     ASSERT_TRUE(in.good()) << path;
     const std::string source((std::istreambuf_iterator<char>(in)),

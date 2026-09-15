@@ -97,17 +97,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install clang-format
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format
+      # The formatter comes from the pinned LLVM release and not from the
+      # distribution, and that is the whole point of this job: `clang-format`
+      # changes its mind between majors, so a tree that is clean under 22 is not
+      # clean under 18. The gate compares a developer against CI, which only
+      # means something if both run the same tool.
+      - uses: ./.github/actions/install-llvm
+      # The command itself lives in the Makefile, which is where a developer runs
+      # it too: the action exports `CLANG_FORMAT`, and the target uses it.
       - name: Check formatting
-        run: |
-          # Keep this version close to the one developers run locally: a newer
-          # formatter can reflow code the older one accepted.
-          clang-format --version
-          find include src tests \( -name '*.h' -o -name '*.cc' \) -print0 \
-            | xargs -0 clang-format --dry-run --Werror
+        run: make format-check
 
   # The documentation site. It is a real check and not a deploy: the site is
   # built with `onBrokenLinks: 'throw'`, so a page that links to a page that does
@@ -133,29 +132,22 @@ jobs:
         run: npm run build
         working-directory: website
 
+  # The analysis, not the build, is what this job spends its time on. The command
+  # is the Makefile's (`make tidy`): it configures a clang build of its own --
+  # clang-tidy cannot consume a GNU compile database -- and drives the analyzer in
+  # parallel through the helper from the same release, with a sequential fallback.
+  # The job only says which LLVM that release is, through the action.
   tidy:
     name: clang-tidy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install clang and clang-tidy
+      - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang clang-tidy ninja-build cmake ccache
+          sudo apt-get install -y ninja-build cmake ccache
       - uses: ./.github/actions/install-llvm
-      - name: Configure
-        # clang-tidy cannot consume a GNU compile database (GCC emits flags
-        # such as -fmodules-ts that it does not understand), so this job
-        # configures with clang++.
-        run: cmake --preset ci -DCMAKE_CXX_COMPILER=clang++
-      # The analysis, not the build, is what this job spends its time on: a
-      # single clang-tidy invocation checks its files one at a time, which is
-      # minutes of a runner sitting idle. `run-clang-tidy` drives the same tool
-      # in parallel with the same checks and the same failure exit code, so the
-      # only thing that changes is the wall clock. `make tidy` runs exactly this,
-      # with a sequential fallback for a machine that lacks the helper.
       - name: Run clang-tidy
         run: |
-          clang-tidy --version
-          run-clang-tidy -p build/ci -j "$(nproc)" -quiet \
-            -warnings-as-errors '*' 'src/.*\.cc'
+          "$CLANG_TIDY" --version
+          make tidy

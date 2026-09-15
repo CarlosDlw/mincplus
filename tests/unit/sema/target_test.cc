@@ -73,14 +73,23 @@ TEST(TargetTest, TheDefaultIsTheHostAndHasATableRow) {
     EXPECT_EQ(sema::kDefaultTriple, sema::kFallbackTriple);
   }
 
-  // On this machine the host is Linux/amd64, so the widths are still System V's:
-  // the point of the default moving to the host is not that the numbers changed
-  // here, it is that they are the *host's* numbers everywhere.
-  EXPECT_EQ(info.triple.os, OsFamily::linux);
-  EXPECT_EQ(info.triple.arch, Arch::x86_64);
-  EXPECT_EQ(info.pointerBits, 64u);
-  EXPECT_EQ(info.longBits, 64u);
-  EXPECT_EQ(info.longDoubleBits, 80u);
+  // And what the default *answers* is what naming the same triple answers: it is
+  // a row of the table, not a synthesis of one. The widths themselves are
+  // checked by the per-target tests below, where the target is named.
+  //
+  // Asserting them here would assert the machine this test happens to run on --
+  // 80-bit `long double` is System V's x86 answer, and `OsFamily::linux` is where
+  // this file was written, not what the language promises. The first CI run on
+  // macOS arm64 is what made that visible: this test failed there, reading
+  // `LongDouble` on a target that has no x87.
+  const std::optional<Triple> spelled = sema::parseTriple(sema::kDefaultTriple);
+  ASSERT_TRUE(spelled.has_value()) << sema::targetRefusal(sema::kDefaultTriple);
+  const std::optional<TargetInfo> stated = sema::targetInfo(*spelled);
+  ASSERT_TRUE(stated.has_value());
+  EXPECT_EQ(info.name(), stated->name());
+  EXPECT_EQ(info.pointerBits, stated->pointerBits);
+  EXPECT_EQ(info.longBits, stated->longBits);
+  EXPECT_EQ(info.longDoubleBits, stated->longDoubleBits);
 }
 
 TEST(TargetTest, AnArchitectureAliasParsesToTheCanonicalSpelling) {
