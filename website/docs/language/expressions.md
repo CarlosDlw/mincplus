@@ -22,7 +22,9 @@ let grouped: i32 = (1 + 2) * (3 - 4);
 `+` `-` `*` `/` `%` take arithmetic operands. When the two sides differ, the
 result is the type the usual arithmetic conversions pick — the wider of the two,
 and the unsigned side when the two are the same width with different signedness.
-`1 + 2.0` is an `f64`: the integer converts.
+**An integer and a float do not meet**: `1 + 2.0` is an error and not an `f64`,
+because the class of a number is the class of its spelling — see
+[Conversions](/language/types#conversions).
 
 Unary `-` and `+` take one operand, and `-` on an unsigned type is defined —
 it wraps, like every other unsigned operation.

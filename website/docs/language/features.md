@@ -162,6 +162,12 @@ as well.
       or a byte array
 - [x] Integer promotions follow C (smaller than `i32` widens to `i32`) and the
       usual arithmetic conversions follow C17 6.3.1.8, with ranks by width
+- [x] **An integer and a float never convert into each other**, in either
+      direction: the class of a number is the class of its *spelling* (`1` is an
+      integer, `1.0` is a float), so `let a: f64 = 1;` and `1 + 2.0` are errors
+      rather than silent widenings, and crossing is a cast. This is the one place
+      the arithmetic departs from C, and the departure is on purpose: C's answer
+      is a value the reader did not write, with a rounding they cannot see
 - [x] **A condition must be `bool`** — an arithmetic value does not implicitly
       convert (`x != 0` is the explicit form). C's "any scalar is a condition"
       is rejected

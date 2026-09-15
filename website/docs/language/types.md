@@ -175,10 +175,11 @@ The rules are short, and the type checker **records every one it inserts** —
 which instruction the lowering emits is read from that record and never
 decided a second time.
 
-**Arithmetic converts to arithmetic.** Any integer or floating type converts to
-any other: `let a: i64 = 1;`, `let b: f64 = 5;`, `let c: i8 = someI32;`. The
-conversion is exact when the target can represent every value of the source, and
-truncating or rounding when it cannot.
+**Arithmetic converts to arithmetic — inside its own class.** An integer
+converts to another integer and a float to another float: `let a: i64 = 1;`,
+`let c: i8 = someI32;`, `let d: f32 = someF64;`. The conversion is exact when the
+target can represent every value of the source, and truncating or rounding when
+it cannot.
 
 ```console
 $ mincc check -Wconversion main.mx
@@ -191,6 +192,26 @@ A conversion that may lose information is **silent by default** and reported
 with `-Wconversion`. It is a warning and not an error because C programmers
 write `let byte: u8 = value & 0xFF;` on purpose, and the masking is right there
 in the source.
+
+**An integer and a float do not convert into each other**, in either direction.
+This is the one place the arithmetic departs from C, and it departs on purpose: C
+turns `double d = 1;` into a silent widening and `1 + 2.0` into a `double`, both
+values the reader did not write — the second with a rounding the reader cannot
+see. Here the class of a number is the class of its **spelling**: `1` is an
+integer, `1.0` is a float, and crossing between the two is a cast (which the
+language does not have yet), never a conversion.
+
+```console
+$ printf 'fn i32 main() { let a: f64 = 1; return 0; }\n' | mincc check -
+<stdin>:1:30: error[sema-invalid-assignment]: `i32` does not convert to `f64` in this initializer: an integer and a float are different classes of number and do not convert into each other -- write the value in the class you want, as in `1.0` for a float
+  fn i32 main() { let a: f64 = 1; return 0; }
+                               ^
+```
+
+The rule is one function in the checker (`mixedNumberPair`) that every consumer
+asks — an initializer, an assignment, an argument, a `return`, and the operands
+of an arithmetic operator — so `1 + 2.0` is the same refusal with the same
+sentence.
 
 **A literal has to fit.** The one case that is an error rather than a warning is
 a constant whose value does not fit the type it is given:
