@@ -82,6 +82,8 @@ Five failure modes recur, and every one of them is a decision in this record:
 | **27** | **A written-out fill is bounded, and a zero fill is exempt**: a non-zero fill may not exceed `kMaxFillElements` (2²⁰), while `[1 << 40]u8{0; …}` compiles to one `zeroinitializer` | LLVM's `splat` is a *vector* expression, so an array fill has to be materialised one `Constant*` per element — and the count of a fill is a number in the **type**, which the source can make arbitrarily large in ten characters. The exemption is not a courtesy: a zero fill is one constant whatever the count, so the bound would be refusing work the compiler does not do. What the bound buys is that the compiler's cost is a function of the source and not of a number in it |
 | **28** | **The frame is bounded too**: an object this function would place in its own frame may not exceed `kMaxStackObjectBytes` (16 MiB), refused at the declaration, at the two places a slot is created (a local binding, and a by-value argument's caller-side copy) | Decision 14 promised this and the promise is worth restating where it is enforced: without it `let a: [1 << 40]u8;` builds a terabyte `alloca`, the backend emits a stack subtraction that size, and the failure is a segfault at the function's first instruction — a bug handed to a debugger instead of to a diagnostic. The by-value *parameter* has no slot of its own (13 says its storage is the pointer it arrived as), which is why the *caller's* copy is the second call site and not the callee's binding |
 
+| **29** | **The lexer gains one character of lookbehind**: `.` in front of a digit starts a fraction only when the character before it is not a `.` | `a[1..2]` and `.5` are both legal spellings of different things, and which one a `.` is belongs to a character the token starts *after* — so the decision cannot be made by longest-match alone. Without it, `..` is unlexable under every input (the second dot becomes `.2`), and the spelling a slice will be taken with would not have existed: a reserved spelling that the lexer cannot produce is not reserved, it is missing |
+
 ## The surface
 
 ```minc
@@ -184,9 +186,14 @@ recursive, with the element's own type), the constant `ir` emits for it
 on `examples/014_arrays.mx` is the end-to-end proof, and it now writes its tables
 at file scope as well as inside `main`.
 
-Step **10** is the remaining work: the `..` half of the reserved spellings. `[]T`
-already parses and is refused by name; `a[1..2]` is a parse error today, and it
-deserves the same *reserved* sentence rather than "expected `]`".
+Step **10** landed with it: both reserved spellings now have their sentence.
+`[]T` parses and is refused by the reader of types, and `a[1..2]` is
+`parse-reserved-range` at the operator -- **one** message, where before it was two
+about the bracket. The `..` needed one character of lookbehind in the *lexer* to
+get there: `.` in front of a digit is a fraction (`.5`, `1.5`) unless the
+character before it is another `.`, so `a[1..2]` is `1`, `.`, `.`, `2` and not
+`1`, `.`, `.2`. Without that, the operator a slice will be taken with had no
+spelling at all -- which is exactly the failure mode this step exists to prevent.
 
 Two bounds landed with step 8, and they are decisions rather than details
 (27, 28): a **frame** object may not exceed `kMaxStackObjectBytes` (16 MiB) and a
@@ -222,7 +229,7 @@ identity and its size are pinned by tests of their own.
 | 7 | **The context form** | `sema/type.h` (the deferred aggregate kind), `check_expr.cc`/`coerce.cc` (the decision and its recursion into the elements), the new `sema-literal-type-unknown` | `let a: [3]i32 = [1, 2, 3];`, nesting, `[0; 64]`, and the refusal whose sentence names both fixes | file scope |
 | 8 | **File scope** | `sema/global.cc` (the ICE's array case), `ir/declarations.cc` (the constant), `ir/debug.cc` (the composite type) | `const TABLE = [_]i32{...};`, the splat, nesting, an array of `str`, `static`, and `-g` naming the elements | the slice spellings |
 | 9 | **The example and the page** | `examples/014_arrays.mx`, the corpus test, `website/docs/language/arrays.md` | the only specification a reader can run, and the page with a *not implemented yet* mark wherever a piece above is still refused | — |
-| 10 | **The reserved spellings** | `parse` + `validate` + `sema` for `[]T` and `..` | two sentences saying *reserved*, so the day a slice lands the message changes in one place and no `.mx` file ever spelled `[]T` as something else | the slice itself |
+| 10 | **The reserved spellings** | `parse` + `validate` + `sema` for `[]T` and `..`, plus the lexer's one-character lookbehind so `..` is reachable at all | two sentences saying *reserved*, so the day a slice lands the message changes in one place and no `.mx` file ever spelled `[]T` as something else | the slice itself |
 
 Two of these steps are the ones to resist merging. **Step 1 must not carry a
 literal**: the interner's hash and `equal` are where a count compared as text
@@ -336,7 +343,7 @@ the table is the work list, one row per module and per mini-behaviour.
 | **The value shape in the module** | a by-value parameter is a `ptr` and **not** a `[N x T]` in the signature, the call site holds exactly **one** memory intrinsic, a return is `sret`-shaped, and no `insertvalue` chain appears for a copy (decision 13) |
 | **The extent is recorded, and the checked build uses it** | `a[i]` on a local records `object` plus the count and `-fcheck` emits the bounds comparison; the same subscript on a parameter records `foreign` and emits none (decision 26) |
 | **The splat is a shape, not bytes** | a large `[0; N]` lowers to `zeroinitializer`/`ConstantAggregateZero` from the record's shape, asserted on the module — a folded element list would show up as a compile time and as a count mismatch (decisions 15, 20) |
-| The reserved spellings stay reserved | `[]T` and `..` each have a test asserting the sentence, so the day a slice lands the message changes in one place |
+| The reserved spellings stay reserved | `[]T` and `..` each have a test asserting the sentence (`parse-reserved-range` is in the reachability sweep, so it cannot go dead), and the lexer has one asserting `a[1..2]` is two dots while `.5` and `1.5` are still numbers |
 
 ## References
 

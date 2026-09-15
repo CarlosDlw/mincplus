@@ -91,6 +91,12 @@ constexpr CodeCase kCases[] = {
     {"nested braces inside an initializer",
      "fn i32 main() { let a: [2][3]i16 = {{1, 2, 3}, {4, 5, 6}}; return 0; }\n",
      ParseErrorCode::BraceWithoutType},
+    // The second reserved spelling. `[]T` is parsed and refused a stage later by
+    // the type reader (its own sentence, its own code); `..` is refused here, by
+    // the parser, so the operator is never read as anything but a range.
+    {"the reserved range operator",
+     "fn i32 main() { let a: [4]i32 = [1, 2, 3, 4]; return a[1..2]; }\n",
+     ParseErrorCode::ReservedRange},
 };
 
 [[nodiscard]] std::string deepInput() {

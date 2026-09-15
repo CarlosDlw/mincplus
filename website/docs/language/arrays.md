@@ -135,14 +135,14 @@ the size and comes at the declaration.
 
 ## What is not here yet
 
-- **The `..` of a slice range** (`a[1..2]`) is a parse error today. Slices are
-  reserved, and `a[1..2]` will get the same *reserved* sentence `[]T` already has
-  before anything can be meant by it.
 - **Slices** (`[]T`, a pointer and a length together) are **reserved**: the
   spelling parses and is refused with a sentence, so no program can mean anything
   else by it in the meantime.
 - **`sizeof`/`alignof`** are not in the grammar yet. The layout is defined and
   testable; the operator that exposes it arrives with them.
+- **The `..` of a slice range** (`a[1..2]`) is refused by name: the operator is
+  **reserved** for slices, exactly as `[]T` is, so nothing can come to mean
+  something else by it in the meantime.
 - **Braces on a scalar or a `struct` name** (`i32{1}`, `Point{...}`) are not a
   typed initializer: today a typed initializer is recognized by the `[N]` its type
   starts with. The general `T{...}` lands with the first non-array aggregate.

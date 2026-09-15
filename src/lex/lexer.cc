@@ -212,7 +212,14 @@ Token lexOne(std::string_view text, std::uint32_t offset) {
   if (isAsciiDigit(byte)) {
     return detail::scanNumber(text, offset);
   }
-  if (c == '.' && offset + 1 < text.size() && isAsciiDigit(static_cast<Byte>(text[offset + 1]))) {
+  // `.5`, and **not** the second dot of a `..`: the one character of lookbehind
+  // is what keeps `..` readable as two punctuators. Without it `a[1..2]` lexes as
+  // `1` `.` `.2`, and the range operator the language reserves for slices would
+  // be unreachable under any spelling -- a `.` in front of a digit is a number
+  // only when the character before it is not a `.` (so `.5`, `1.5` and `a.5` are
+  // untouched, and `1..2` is `1`, `.`, `.`, `2`).
+  if (c == '.' && offset + 1 < text.size() && isAsciiDigit(static_cast<Byte>(text[offset + 1])) &&
+      (offset == 0 || text[offset - 1] != '.')) {
     return detail::scanNumber(text, offset);
   }
   if (isIdentifierStart(byte)) {

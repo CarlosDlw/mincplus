@@ -85,6 +85,13 @@ enum class ParseErrorCode : std::uint8_t {
   // "expected an expression" at a token that starts an expression everywhere
   // else, which teaches nothing about the characters to change.
   BraceWithoutType,
+  // `..` where a slice's range will go: `a[1..2]`. The operator is *reserved*,
+  // like `[]T` is, so the sentence says so instead of leaving the reader with
+  // "expected `]`" about a bracket two tokens away from the operator they typed.
+  // Two spellings reserved in two stages is the point: the day a slice lands,
+  // both messages change in one place and no `.mx` file ever meant something else
+  // by either.
+  ReservedRange,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

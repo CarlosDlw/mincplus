@@ -237,6 +237,26 @@ TEST(LexerTest, DecimalIntegers) {
   }
 }
 
+TEST(LexerTest, TheSecondDotOfARangeIsNotAFraction) {
+  // `.5` is a number, and a `.` followed by a digit is a fraction -- except when
+  // the character *before* the dot is another dot, because then the reader wrote
+  // the range operator the language reserves for slices. One character of
+  // lookbehind, and it is what makes `a[1..2]` reach the parser as `1`, `.`, `.`,
+  // `2` instead of `1`, `.`, `.2` -- which is the difference between the parser
+  // being able to say "`..` is reserved" and it saying "expected `]`".
+  EXPECT_EQ(
+      significantKinds("a[1..2]"),
+      (std::vector<TokenKind>{TokenKind::Identifier, TokenKind::LBracket, TokenKind::IntegerLiteral,
+                              TokenKind::Dot, TokenKind::Dot, TokenKind::IntegerLiteral,
+                              TokenKind::RBracket, TokenKind::EndOfFile}));
+  // And the two forms that *are* numbers, unchanged by the lookbehind.
+  const std::string_view text = ".5 1.5";
+  EXPECT_EQ(significantKinds(text),
+            (std::vector<TokenKind>{TokenKind::FloatLiteral, TokenKind::FloatLiteral,
+                                    TokenKind::EndOfFile}));
+  EXPECT_EQ(spellingOf(text, lexFirst(".5")), ".5");
+}
+
 TEST(LexerTest, BasePrefixWithoutDigitsIsFlaggedNotSwallowed) {
   const std::string_view text = "0x";
   const Token token = lexFirst(text);

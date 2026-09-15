@@ -390,9 +390,12 @@ which also records the reversal.
       sentence (decisions 27, 28 of
       [`architectures/arrays.md`](architectures/arrays.md)) — while a zero fill
       of any count stays legal, because it is one constant
-- [ ] The reserved `..` spelling: `a[1..2]` deserves the *reserved* sentence
-      `[]T` already has (step 10 of
-      [`architectures/arrays.md`](architectures/arrays.md))
+- [x] The **reserved spellings** (step 10 of
+      [`architectures/arrays.md`](architectures/arrays.md)): `[]T` and `..` each
+      parse and are refused by name, so no `.mx` file can mean anything else by
+      either before slices land — and the lexer gained the one character of
+      lookbehind that makes `..` lexable at all (`a[1..2]` is two dots; `.5` is
+      still a float)
 - [x] **Raw pointers** (stage one of
       [`architectures/memory.md`](architectures/memory.md)): `*T` at any depth,
       `&x` on a **modifiable** lvalue, `*p` and `p[i]` as places, element-scaled

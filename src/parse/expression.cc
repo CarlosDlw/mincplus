@@ -127,6 +127,22 @@ CompletedMarker Parser::parsePostfix() {
       Marker index = expr.precede();
       bump(); // `[`
       parseExpr();
+      // `a[1..2]` -- the range a future slice is taken with. Refused by name and
+      // not left to the `expected ']'` two tokens later, which is what the `..`
+      // used to produce: that message is about the *bracket* and says nothing
+      // about the operator that is reserved. The second bound is read anyway, so
+      // the subscript closes and the reader gets one sentence instead of two
+      // (`arrays.md` step 10, decision 17).
+      if (at(lex::TokenKind::Dot) && nth(1) == lex::TokenKind::Dot) {
+        error("`..` is reserved for slices: `a[1..2]` has no value today, and `a[i]` is an "
+              "element of the array",
+              ParseErrorCode::ReservedRange);
+        bump(); // `.`
+        bump(); // `.`
+        if (!at(lex::TokenKind::RBracket) && !atEnd() && !bailedOut_) {
+          parseExpr();
+        }
+      }
       expect(lex::TokenKind::RBracket);
       expr = index.complete(SyntaxKind::IndexExpr);
     } else if (at(lex::TokenKind::PlusPlus) || at(lex::TokenKind::MinusMinus)) {
