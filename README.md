@@ -199,6 +199,13 @@ The compiler is **cross-platform**. It builds and runs on **Linux, macOS, and
 Windows**, with **Clang, GCC, or MSVC**, and CI runs the full build, test,
 format, and static-analysis suite on all three operating systems.
 
+Windows is built and tested with **MSYS2's MinGW-w64** toolchain, and that is not
+an arbitrary pick: LLVM's own prebuilt Windows packages are a *toolchain*
+package — binaries with no `LLVMConfig.cmake` and no libraries to link against —
+so there is nothing there for a compiler that embeds LLVM to build against. MSVC
+is supported (the build sets `/utf-8`, `/Zc:__cplusplus` and `/W4 /permissive-`
+for it) and is not exercised in CI yet, which is a gap rather than a claim.
+
 C interoperability is a *separate axis* from host support:
 
 | Axis | Support today |

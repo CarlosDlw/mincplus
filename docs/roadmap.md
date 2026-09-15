@@ -712,15 +712,29 @@ the two cannot disagree about what the pipeline means.
 - [ ] ThreadSanitizer run for the driver
 - [ ] Coverage reporting and compile-time/memory benchmarks
 - [x] Cross-platform CI extended from `support` to the whole pipeline: the
-      `build-test` job configures, builds and runs the whole suite on Linux,
-      macOS and Windows, and `sanitize`, `format` and `tidy` are separate jobs
+      `build-test` job configures, builds and runs the whole suite on Linux and
+      macOS, `build-test-windows` does the same on Windows under MSYS2's
+      MinGW-w64 toolchain (LLVM's prebuilt Windows packages ship no CMake package
+      or libraries to link against, so a development tree has to come from
+      somewhere else), and `sanitize`, `format`, `tidy` and `docs` are separate
+      jobs. The first run on a real runner found four tests that assumed a Linux
+      x86-64 host and two more that assumed a Unix one, which is the whole point
+      of running it
+- [ ] The MSVC configuration exercised in CI: `cmake/minc_cxx.cmake` has flags
+      for it and no job builds with it, because an LLVM for Windows that ships a
+      CMake package *and* matches this project's build configuration is not
+      available as a binary. Building LLVM from source on a runner is the price
+      of asking, and it is its own decision
 - [x] Install and pin LLVM in CI rather than relying on the runner image having
       it: `find_package(LLVM CONFIG REQUIRED)` means a runner without LLVM
       development files fails at *configure*, which is a red CI run that says
       nothing about the change. One composite action
-      (`.github/actions/install-llvm`) installs the pinned major on all three
-      platforms and exports `MINC_LLVM_ROOT`, the single variable every preset
-      reads — so the version and the path are stated once, not per job
+      (`.github/actions/install-llvm`) installs the pinned release on Linux and
+      macOS and exports `MINC_LLVM_ROOT` — the single variable every preset reads
+      — along with the names of the matching clang tools, so the version and the
+      path are stated once and the gates run the same tools a developer does.
+      Windows gets its development tree from MSYS2's MinGW-w64 packages instead,
+      and the job that uses it says why
 
 ## 13. Release and maintenance
 
