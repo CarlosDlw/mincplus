@@ -125,6 +125,13 @@ TEST(IrLowerTest, ABoolArrayIsBytesAsAnObjectAndBitsAsAValue) {
   EXPECT_NE(text.find("alloca [4 x i8]"), std::string::npos);
   EXPECT_EQ(text.find("alloca [4 x i1]"), std::string::npos);
   EXPECT_NE(text.find("bool.load"), std::string::npos);
+  // And the *initializer* is the storage form too. The object is `[4 x i8]`,
+  // so the constant that reaches it has to be one -- an `[4 x i1]` here is a
+  // store between two types, whose in-memory verifier is silent and whose
+  // answer is whatever byte the assembler chose. This is the assertion that
+  // fails if the element ever goes in as the value the expression produced.
+  EXPECT_NE(text.find("store [4 x i8] c\"\\01\\00\\01\\00\""), std::string::npos) << text;
+  EXPECT_EQ(text.find("store [4 x i1]"), std::string::npos) << text;
 }
 
 TEST(IrLowerTest, AByValueArrayIsACallerCopyAndAPointer) {

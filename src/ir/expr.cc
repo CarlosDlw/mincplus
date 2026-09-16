@@ -688,6 +688,20 @@ Value Lowering::lowerArrayInitializer(ast::AstId expr) {
     return {};
   }
 
+  // **An element of the aggregate is a storage-shaped value, and not the value
+  // the expression produced.** The array's LLVM type is built from
+  // `storageType(element)`, so a `[3]bool` is `[3 x i8]` even as a *value* -- and
+  // an `i1` handed to `ConstantArray::get` or `insertvalue` for that type is a
+  // constant whose element type does not match its own (`llvm-as` says "constant
+  // expression type mismatch", the in-memory verifier says nothing, and the
+  // assembler's answer is whatever byte it wrote). `toStorage` is the one rule
+  // for the difference, and folding it here is what makes an element of a `bool`
+  // array a byte wherever the aggregate is built.
+  const auto asElement = [&](const Value& value) -> llvm::Value* {
+    const Value stored = toStorage(Value{value.v, element});
+    return stored.v;
+  };
+
   std::vector<llvm::Value*> pieces;
   if (isFill) {
     const Value value = lowerOperand(expr, elements[0]);
@@ -697,7 +711,11 @@ Value Lowering::lowerArrayInitializer(ast::AstId expr) {
     // The fill's value is evaluated **once** and written `count` times: the shape
     // is the splat and not the bytes (`arrays.md` decision 15), so a fill whose
     // value is a call calls it once.
-    pieces.assign(static_cast<std::size_t>(count), value.v);
+    llvm::Value* stored = asElement(value);
+    if (stored == nullptr) {
+      return {};
+    }
+    pieces.assign(static_cast<std::size_t>(count), stored);
   } else {
     pieces.reserve(elements.size());
     for (const ast::AstId elementNode : elements) {
@@ -705,7 +723,11 @@ Value Lowering::lowerArrayInitializer(ast::AstId expr) {
       if (value.v == nullptr) {
         return {};
       }
-      pieces.push_back(value.v);
+      llvm::Value* stored = asElement(value);
+      if (stored == nullptr) {
+        return {};
+      }
+      pieces.push_back(stored);
     }
     if (pieces.size() != count) {
       return {};
