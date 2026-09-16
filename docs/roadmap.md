@@ -657,7 +657,7 @@ come first.
 - [ ] Reading variadic arguments (`va_start`/`va_arg`, or the builtin that would
       replace them), which is what a variadic *definition* needs; and bitfields `[?]`
 **Shipped**: the **builtin system** — one `constexpr` table in its own module
-(`include/builtins`, depending on nothing at all) where a row is the identity, the
+(`include/builtins`, depending on `support` alone) where a row is the identity, the
 spelling, the *class* of the spelling, a closed signature (families resolved per
 target), an effect, the lowering as data, a status and a sentence. Five stages read
 it — `resolve` binds the names, `sema` types the call, `ir` lowers it, `mincc
