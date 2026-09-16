@@ -160,6 +160,35 @@ TEST(IrDebugTest, ABindingIsDeclaredAtItsFrameSlot) {
             std::string::npos);
 }
 
+TEST(IrDebugTest, AParametersSpillCarriesNoLocationAndTheParameterStillDoes) {
+  // The spill that makes a parameter a place is the ABI's arrival and not a
+  // statement, so it carries no line -- and that is not cosmetic. LLVM puts the
+  // line table's `prologue_end` flag on a function's first instruction that has a
+  // non-zero line, and a debugger reads the flag to decide where `break <name>`
+  // lands: with a line on the spill, every function breakpoint stops on the `fn`
+  // line, before the arguments have left their registers, and `gdb` prints them as
+  // zero. It is the shape `clang` emits, and this is the assertion that keeps it.
+  test::IrFixture fixture;
+  ASSERT_TRUE(fixture.source(std::string(kProgram)).debugInfo().build());
+  ASSERT_TRUE(fixture.moduleBuilt());
+  const std::string module = fixture.module();
+
+  // The two stores, whole lines and ending where they end: a location would sit
+  // after the alignment and these would not be found. `%left` and `%right` are the
+  // only instructions that name a slot through a pointer, so the same text
+  // appearing *with* a location is the failure the two negative checks are for.
+  EXPECT_NE(module.find("store i32 %0, ptr %left, align 4\n"), std::string::npos) << module;
+  EXPECT_NE(module.find("store i32 %1, ptr %right, align 4\n"), std::string::npos) << module;
+  for (const std::string_view name : {"left", "right"}) {
+    EXPECT_EQ(module.find("ptr %" + std::string(name) + ", !dbg"), std::string::npos) << module;
+    // The parameter is not left without a line either: the record the slot's
+    // declaration wrote still carries the parameter's own span, which is how a
+    // debugger names the argument and shows the line it was written on.
+    EXPECT_NE(module.find("#dbg_declare(ptr %" + std::string(name) + ", !"), std::string::npos)
+        << module;
+  }
+}
+
 TEST(IrDebugTest, DebugInformationIsRecordsAndNotIntrinsicCalls) {
   // LLVM 19+ made records the default representation and the reference forbids the
   // two in one module: a module that mixes them verifies and produces a debugger
@@ -219,6 +248,25 @@ TEST(IrDebugTest, AnArrayBindingIsACompositeTypeWithItsCount) {
   // The size is the object's, which is the count times the element -- and the
   // alignment is the element's, because an array adds no padding of its own.
   EXPECT_NE(text.find("size: 96, align: 32"), std::string::npos) << text;
+}
+
+TEST(IrDebugTest, ASlicesLengthWordHasTheLanguagesTypeAndNotOneInventedHere) {
+  // The descriptor reaches a debugger as a struct with two members, and the second
+  // one's type has to be the *checker's* `usize` -- the unsigned integer of the
+  // pointer's width -- rather than a basic type named in this stage. A name of its
+  // own is what makes `ptype` answer `len len` for a member of type `len`, and it
+  // gives one number two types inside one module.
+  test::IrFixture fixture;
+  ASSERT_TRUE(fixture.source("fn i32 first(a: []i32) { return a[0]; }\n").debugInfo().build());
+  ASSERT_TRUE(fixture.moduleBuilt());
+  const std::string text = fixture.module();
+
+  // The member itself is there, which is what answers "no member named len" -- and
+  // it is unsigned, which is the half `print -1 < view.len` depends on.
+  EXPECT_NE(text.find("name: \"len\""), std::string::npos) << text;
+  EXPECT_NE(text.find("DW_ATE_unsigned"), std::string::npos) << text;
+  // And no *basic type* is named after the member.
+  EXPECT_EQ(text.find("!DIBasicType(name: \"len\""), std::string::npos) << text;
 }
 
 TEST(IrDebugTest, DebugInformationDoesNotChangeTheInstructionsOnlyTheirLocations) {

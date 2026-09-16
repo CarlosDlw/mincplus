@@ -160,6 +160,40 @@ private:
   [[nodiscard]] bool debugEnabled() const {
     return debug_ != nullptr;
   }
+  // Runs one instruction with **no** location, and restores what was current.
+  //
+  // For the instruction that is not a statement in the program: the one caller is
+  // the parameter spill (`function.cc`), which is the ABI's arrival rather than
+  // something the reader wrote.
+  //
+  // It matters because of what a line table is *for*. LLVM places the line table's
+  // `prologue_end` flag on the first instruction of a function that is not frame
+  // setup and carries a non-zero line, and a debugger reads that flag to decide
+  // where `break <function>` lands -- so a line here says "the body starts on the
+  // `fn` line", and every breakpoint a reader sets by function name stops on the
+  // declaration, with the arguments still in their registers and therefore printed
+  // as zero. Without one the flag lands on the first statement, and the frame is
+  // already built at the first stop. `clang` emits the same store with no location
+  // for the same reason, and `#dbg_declare` -- which carries the parameter's own
+  // span -- is what names the argument in a debugger either way.
+  class NoLocation {
+  public:
+    explicit NoLocation(llvm::IRBuilder<>& builder) : builder_(builder) {
+      saved_ = builder_.getCurrentDebugLocation();
+      builder_.SetCurrentDebugLocation(llvm::DebugLoc{});
+    }
+    ~NoLocation() {
+      builder_.SetCurrentDebugLocation(saved_);
+    }
+    NoLocation(const NoLocation&) = delete;
+    NoLocation& operator=(const NoLocation&) = delete;
+    NoLocation(NoLocation&&) = delete;
+    NoLocation& operator=(NoLocation&&) = delete;
+
+  private:
+    llvm::IRBuilder<>& builder_;
+    llvm::DebugLoc saved_;
+  };
 
   // --- diagnostics ------------------------------------------------------------
   void error(ast::AstId at, IRDiagnosticCode code, std::string message);

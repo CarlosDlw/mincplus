@@ -240,6 +240,27 @@ $ mincc build -o prog main.mx util.mx -L build -l math
 The invariant scan runs before the object is written: a module that violates a
 rule of the language produces a diagnostic and **no file at all**.
 
+`-g` is meant to be left on while a program is being developed, and three things
+about it are worth knowing before a session in `gdb`. `break <function>` stops on
+the **first statement** of the function and not on its declaration, so the
+arguments are already in their slots and `info args` shows their values rather
+than the registers they arrived in. Every parameter and local has a name and the
+type the checker decided — an `i32` prints as an `i32`, an array as its elements,
+a slice as its two members. And a line and column in a backtrace are the numbers a
+diagnostic would print, because both read one line index:
+
+```console
+$ mincc build -g -o prog main.mx
+$ gdb ./prog
+(gdb) break add
+Breakpoint 1 at 0x1150: file main.mx, line 10.
+(gdb) run
+Breakpoint 1, add (a=2, b=3) at main.mx:10
+10	  let sum: i32 = a + b;
+(gdb) ptype sum
+type = i32
+```
+
 ## `mincc run`
 
 `build`, and then the executable is run. The program is a child process and not a

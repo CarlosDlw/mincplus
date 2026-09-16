@@ -412,8 +412,10 @@ has a tool that answers it:
 | --- | --- |
 | `gdb ./prog`, `run` | `DW_AT_low_pc`/`high_pc` per function: the `DISubprogram` is attached to the `llvm::Function`, and the linker's symbol table has the name |
 | breakpoint on a line | a line table: a `DILocation` on every instruction that has a span, from the same `support/line` index the diagnostics use |
+| `break add`, by function name | the parameter spill carries **no** line, so the `prologue_end` flag LLVM derives from the line table lands on the function's first *statement* and not on its declaration: the frame exists when the breakpoint fires, and `info args` shows values rather than registers (decision 22) |
 | `bt` shows a source frame | the `DILocation` on the `call`, plus `DW_AT_name`/`DW_AT_linkage_name` on the `DISubprogram` |
 | `print x`, `ptype x` | `#dbg_declare` per binding, with a `DILocalVariable` carrying a `DIBasicType`/`DIDerivedType` whose size and encoding match the type `sema` decided |
+| `ptype` a slice, `print s.len` | the descriptor is a `DW_TAG_structure_type` with two `DW_TAG_member`s, `ptr` and `len` — and each member's *type* is read through `debugType` by `TypeId`, so the length is the checker's `usize` and not a basic type named in `ir`: one number, one type, and `ptype` does not answer `len len` |
 
 Three details decide whether that table is true rather than aspirational:
 
@@ -749,6 +751,7 @@ rather than assuming).
 | 19 | **One refusal code per failure *class*, and the classes are environment / program / internal** | `ir.md`'s two classes (`unsupported` vs `internal`) plus the one this stage adds. A message that blames the wrong party wastes the reader's afternoon, and the third class is the one every other stage does not have |
 | 20 | **There is no semantic refusal in this stage** | The promise is "if the checker lets it pass, it must run": `ir`'s module is verified and scanned, so a construct this stage cannot lower would mean `ir` emitted something it should not have — an internal error, not an unsupported feature |
 | 21 | **The object is written by LLVM, the PDB by the linker, the `.dSYM` by `dsymutil`** | Which artifact a debugger reads differs by host, and a tool that pretends otherwise has a `-g` flag that no debugger honours |
+| 22 | **A parameter's spill store carries no debug location** | LLVM places the line table's `prologue_end` flag on a function's first instruction that has a line, and a debugger reads that flag to decide where `break <function>` lands: a line on the spill puts every function breakpoint on the declaration, before the arguments have left their registers — `gdb` then prints `a=0 b=0` and stepping twice shows the same line. The parameter is not left without a line of its own: the `#dbg_declare` beside the store carries its span. `clang` emits the same store without a location, and the flag itself is worth having — it is what makes every debugger, not only this one, stop *after* the prologue |
 
 ## Non-goals
 

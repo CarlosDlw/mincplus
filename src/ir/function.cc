@@ -139,6 +139,12 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
         } else {
           llvm::AllocaInst* slot =
               declareLocal(*paramDef, paramType, name, paramAt, parameterNumber);
+          // The spill is the ABI's arrival and not a statement, so it carries no
+          // line: a location here is what puts a debugger's `break <function>` on
+          // the declaration instead of on the first statement (`NoLocation`).
+          // The parameter still has a line of its own -- the record
+          // `declareLocal` wrote just above, from the parameter's own node.
+          const NoLocation unlocated(builder_);
           storePlace(Place{slot, paramType}, Value{argument, paramType}, ast::AstId{});
         }
       }

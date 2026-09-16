@@ -55,6 +55,24 @@ namespace {
   return type.isSigned ? llvm::dwarf::DW_ATE_signed : llvm::dwarf::DW_ATE_unsigned;
 }
 
+// The predefined id of the unsigned integer of the pointer's width, which is what
+// `usize` is: a spelling that resolves to a registered type and not a type of its
+// own (`sema/type.h`), so the length word of a slice descriptor is one of these
+// ids and not a name to invent. Asked of the target rather than tabulated, the
+// same way `Lowering::pointerIntType` asks for the signed twin -- and read
+// through `debugType`, which is keyed by the id, so a `usize` binding and a
+// descriptor's length are the *same* type to a reader.
+[[nodiscard]] sema::TypeId pointerUnsignedInt(const sema::TypeStore& types) {
+  switch (types.target().pointerBits) {
+  case 16:
+    return sema::kTypeU16;
+  case 32:
+    return sema::kTypeU32;
+  default:
+    return sema::kTypeU64;
+  }
+}
+
 // A line and a column, or 1:1. `lookup` clamps, so an offset at end of file
 // resolves to the position just past the last byte rather than wrapping -- and a
 // debug line of 0 is invalid DWARF, which is why the floor is 1 and not 0.
@@ -321,8 +339,10 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
     const std::uint32_t memberAlign = static_cast<std::uint32_t>(pointerBits);
     llvm::DIType* const pointerType = builder_.createPointerType(
         debugType(types, types.elementOf(id)), pointerBits, memberAlign, std::nullopt);
-    llvm::DIType* const lengthType =
-        builder_.createBasicType("len", pointerBits, llvm::dwarf::DW_ATE_unsigned);
+    // The length is the language's `usize` and not a type of this function's own:
+    // a basic type named here answers `ptype` with `len len` for a member whose
+    // type is `len`, and gives one number two types in one module.
+    llvm::DIType* const lengthType = debugType(types, pointerUnsignedInt(types));
     llvm::DIType* const pointerMember =
         builder_.createMemberType(file_, "ptr", file_, 0, pointerBits, memberAlign,
                                   /*OffsetInBits=*/0, llvm::DINode::FlagPublic, pointerType);
