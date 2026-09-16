@@ -42,6 +42,7 @@
 #include "sema/type_store.h"
 #include "sema/typed_ast.h"
 #include "sema/typespec.h"
+#include "support/consteval/suffix.h"
 #include "support/intern/interner.h"
 
 // The operator tokens the checker names, spelled once. Internal to this module,
@@ -321,6 +322,17 @@ private:
   // `u128`), and refused with a range error everywhere else.
   [[nodiscard]] TypeId checkLiteral(ast::AstId expr, TypeId expected, ExprInfo& info);
   [[nodiscard]] TypeId checkPath(ast::AstId expr, ExprInfo& info);
+  // `x as T` and `(T)x`, one worker for both spellings -- they are one node, so
+  // there is nothing to tell apart. The matrix is `castResult`, the operand is
+  // typed **by itself** (a cast is where the context stops deciding: that is
+  // what crossing a class means), and the pair is recorded at the cast so the
+  // lowering converts through the record like every other conversion.
+  [[nodiscard]] TypeId checkCast(ast::AstId expr, ExprInfo& info);
+  // The type a literal's *suffix* names, resolved against the target: `10u8` is
+  // a `u8`, `10L` is the target's `long`, `1.5L` the target's `long double`.
+  // Called by `checkLiteral` for both classes, so the two spellings of "this
+  // literal is this type" cannot disagree.
+  [[nodiscard]] TypeId typeOfSuffix(const support::LiteralSuffix& suffix);
   [[nodiscard]] TypeId checkPrefix(ast::AstId expr, ExprInfo& info);
   [[nodiscard]] TypeId checkPostfix(ast::AstId expr, ExprInfo& info);
   // `&e`: the address of a place. Refused for anything that has no address, and
@@ -405,6 +417,16 @@ private:
                               TypeId opType);
   void recordConversion(ast::AstId consumer, std::uint8_t operand, ast::AstId node, TypeId from,
                         TypeId to);
+  // The same record, for a conversion the **source wrote**: the pair is legal by
+  // the cast matrix and not by `convertible`, so this is the one path that
+  // records a pair the implicit rules refuse (`i32` → `f64`, `*u8` → `usize`).
+  void recordCast(ast::AstId consumer, std::uint8_t operand, ast::AstId node, TypeId from,
+                  TypeId to);
+  // The expression a cast converts: the one interior child that is not the
+  // `Type` node. The rule is `bindingInitializer`'s, one node kind over, and it
+  // is written here rather than counted because a cast's children differ between
+  // its two spellings -- `(`, type, `)`, operand against operand, `as`, type.
+  [[nodiscard]] ast::AstId castOperand(ast::AstId expr) const;
   // Give a deferred literal the type something decided for it. A deferred type
   // has no width, so it has no LLVM mapping, and no consumer can convert a value
   // of one: deciding it here is what keeps `1` in `let x: i64 = 1;` from reaching

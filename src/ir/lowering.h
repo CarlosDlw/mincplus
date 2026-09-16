@@ -118,7 +118,11 @@ private:
     return file_.spellingOf(id);
   }
   [[nodiscard]] support::Span spanOf(ast::AstId id) const {
-    return file_.at(id).origin;
+    // An invalid id names no node, and one caller passes none on purpose: a store
+    // into a slot a binding just created is not an access, so `lowerBinding` has no
+    // expression to point at. An empty span is the answer that keeps a diagnostic
+    // about that store reportable instead of a lookup that cannot succeed.
+    return id.valid() ? file_.at(id).origin : support::Span{};
   }
   // The token's kind for a leaf, as the checker's `tagOf` reads it.
   [[nodiscard]] lex::TokenKind tokenKindOf(ast::AstId id) const;
@@ -247,7 +251,13 @@ private:
   // Applies the conversion the record states, so the lowering is a
   // *materialiser*: `sext`/`zext`/`trunc`/`sitofp`/`uitofp`/`fptosi`/`fptoui`/
   // `fpext`/`fptrunc`, chosen from the pair and never from a rule of its own.
-  [[nodiscard]] Value convert(const Value& value, sema::TypeId to);
+  //
+  // `at` is the expression that asked for it. One arm needs it: a float-to-
+  // integer conversion of a *constant* the destination cannot hold is a refusal
+  // about the program, and a refusal without a place in the source is a message a
+  // reader cannot act on. The default is for the call sites whose value is not a
+  // constant of that pair by construction.
+  [[nodiscard]] Value convert(const Value& value, sema::TypeId to, support::Span at = {});
   // Lowers an operand and applies its recorded conversion, if any. Every
   // consumer of a value goes through here, which is the single place a
   // conversion can be missed.
@@ -328,6 +338,9 @@ private:
   [[nodiscard]] Value lowerExpr(ast::AstId expr);
   [[nodiscard]] Value lowerLiteral(ast::AstId expr);
   [[nodiscard]] Value lowerPath(ast::AstId expr);
+  // `x as T` and `(T)x`: the operand, converted through the pair `sema`
+  // recorded at the cast node. A cast adds no concept to this stage.
+  [[nodiscard]] Value lowerCast(ast::AstId expr);
   [[nodiscard]] Value lowerPrefix(ast::AstId expr);
   [[nodiscard]] Value lowerPostfix(ast::AstId expr);
   [[nodiscard]] Value lowerBinary(ast::AstId expr);
@@ -447,6 +460,16 @@ private:
                                  bool isRemainder);
   [[nodiscard]] Value checkedShift(const Value& value, const Value& count, sema::TypeId opType,
                                    bool left);
+  // Float → integer, and the one conversion the language defines with a
+  // *precondition* rather than a value: LLVM's `fptosi`/`fptoui` on an
+  // out-of-range operand is poison, and this language has no poison, so the
+  // instruction is reached only through a test of the operand that traps
+  // (`casts.md`). Same shape as `checkedDiv`, and the scan knows it by shape.
+  //
+  // A **constant** operand never reaches the guard: it is folded where it is
+  // representable and refused where it is not, so no `fptosi`/`fptoui` in the
+  // module is ever a constant-folded `fcmp` away from being unguarded.
+  [[nodiscard]] Value checkedFloatToInt(const Value& value, sema::TypeId to, support::Span at);
   void trapBlock();
 
   // Which conversion a pair of types needs. Named rather than reduced to a cast
@@ -465,6 +488,16 @@ private:
     FPToUI,
     FPExt,
     FPTrunc,
+    // `x != 0`, which is how any integer becomes a `bool`. Not a `CastOps`: the
+    // `i1` a `bool` is has no cast instruction from a wider integer.
+    ToBool,
+    // The two named joins of `memory.md`. Each is one instruction, and each is
+    // reachable only from a cast -- no implicit rule reaches either.
+    PtrToInt,
+    IntToPtr,
+    // A `!` operand: no instruction, and the answer is a poison of the type the
+    // consumer asked for (`never.md`).
+    Poison,
     // A pair the language does not permit. Only reachable from a bug in this
     // compiler, since the checker refuses the program first.
     Invalid,
@@ -482,7 +515,57 @@ private:
   // instruction: LLVM's own folder, so the constant and the runtime path round
   // the same way.
   [[nodiscard]] llvm::Constant* convertConstant(llvm::Constant* value, sema::TypeId from,
-                                                sema::TypeId to);
+                                                sema::TypeId to, support::Span at = {});
+  // Is a *constant* float inside the integer type's range, by the rule the
+  // run-time guard uses: the value itself against the type's bounds, and not its
+  // truncation. A constant outside them is refused here rather than folded to
+  // LLVM's poison (`casts.md`, *Float → integer*).
+  [[nodiscard]] bool floatFitsInteger(const llvm::APFloat& value, sema::TypeId to) const;
+  // One end of the range a float has to be inside to become an integer: `-2^n`
+  // when `negative`, `2^n` otherwise, and **zero** for the one end that is not a
+  // power of two at all (an unsigned destination's floor).
+  //
+  // It is an exponent and not an `APFloat`, because the two questions asked of a
+  // bound are "does this format hold it exactly" and "what is it in this format",
+  // and exponent arithmetic answers both exactly: a power of two has one
+  // significant bit, so a format holds it exactly whenever its largest exponent
+  // reaches it. Asking either question by *converting* a number would introduce a
+  // rounding, and a rounded bound is a bound that admits a value LLVM still calls
+  // poison -- a guard that does not guard.
+  struct FloatBound {
+    int exponent = 0;
+    bool negative = false;
+    bool isZero = false;
+  };
+  // The half-open range the destination holds: `[ low, high )`.
+  struct FloatRange {
+    FloatBound low;
+    FloatBound high;
+  };
+  // One function for the two readers, because the run-time test and the constant
+  // check may not disagree about which values the conversion is defined for.
+  [[nodiscard]] FloatRange floatRangeOf(sema::TypeId to) const;
+  // Whether a float format holds a bound exactly. An exponent comparison and not a
+  // conversion, and that is not only about rounding: `APFloat::convert` takes a
+  // `bool *` that LLVM 22 dereferences unconditionally, so "convert and see
+  // whether anything was lost" is a segfault when the answer is not wanted.
+  [[nodiscard]] static bool holdsBound(const FloatBound& bound, const llvm::fltSemantics& in) {
+    return bound.isZero || bound.exponent <= llvm::APFloatBase::semanticsMaxExponent(in);
+  }
+  // The bound as the constant it is **in a given format**, exact wherever
+  // `holdsBound` said yes.
+  [[nodiscard]] static llvm::APFloat boundIn(const llvm::fltSemantics& in, const FloatBound& bound);
+  // The one refusal for a float-to-integer cast of a value the destination cannot
+  // hold, and it is one function because it is one fact: the compiler sees the
+  // value, and the conversion is defined as a trap on a value it cannot hold, so
+  // the program could only ever trap. A file-scope object and a local `let` are
+  // the same mistake with two places to be noticed, and two sentences about it
+  // would be two chances for one of them to say something untrue.
+  void refuseCastOutOfRange(sema::TypeId from, sema::TypeId to, support::Span at);
+  // The constant a float becomes, by `APFloat`'s own conversion -- the exact one,
+  // reached only for a value already known to be in range, so the result is the
+  // truncation toward zero the instruction would have performed.
+  [[nodiscard]] llvm::Constant* foldedInteger(const llvm::APFloat& value, sema::TypeId to);
 
   // Whether a value of this type is interpreted as signed. Not `static`: the
   // answer is a property of the *store*, and a type this stage cannot look up is

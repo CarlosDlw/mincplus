@@ -114,6 +114,8 @@ bool FrontEnd::run(const std::vector<std::string>& inputs, std::ostream& err) {
     // same answer rather than a second check.
     sema::SemaOptions semaOptions;
     semaOptions.warnConversion = options_.warnConversion;
+    semaOptions.warnCast = options_.warnCast;
+    semaOptions.warnProvenance = options_.warnProvenance;
     lowered_.push_back(std::move(lowerOutput.file));
     const sema::SemaOutput* typed = sema_.check(file->id, file->revision, lowered_.back(),
                                                 resolved->map, session_.symbols(), semaOptions);

@@ -16,6 +16,9 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 
 #include "sema/type.h"
 #include "sema/type_store.h"
@@ -85,5 +88,109 @@ namespace minc::sema {
 // `u128`) answer `true`, and the caller has already refused a literal that did
 // not fit the core at all.
 [[nodiscard]] bool fitsIn(const TypeStore& types, TypeId type, support::ConstInt value);
+
+// --- casts ---------------------------------------------------------------------
+//
+// A cast is a conversion the **source** wrote down, and the matrix below is the
+// whole of what one may be (`casts.md`). It is a function over `(from, to)` and
+// not a set of arms in the checker, for the reason the implicit rules above are
+// functions: the checker, the lowering and the constant folder have to give one
+// answer about a pair, and a second copy of the rule is the copy that disagrees.
+//
+// The one row that is not a plain conversion is float → integer: LLVM's
+// `fptosi` on an out-of-range operand is *poison*, and this language has no
+// poison, so that row is **guarded** and the lowering emits the test and the trap
+// (`casts.md`, *Float → integer*). It is the same shape division already has.
+// NOLINTBEGIN(readability-identifier-naming): the names are the record's.
+enum class CastKind : std::uint8_t {
+  // Not castable. `message` in the result says what to write instead.
+  None,
+  // The bits are the value and no instruction is emitted: the same width with a
+  // different name (`i32`↔`u32`), `char`↔`u8`, a pointer↔pointer, `str`↔`*u8`,
+  // and a `!` operand (whose conversion is vacuous -- `never.md`).
+  Identity,
+  // An integer to a wider integer: `sext`/`zext`, by the **source's** signedness.
+  IntegerExtend,
+  // An integer to a narrower one: `trunc`. Defined, and it wraps.
+  IntegerTruncate,
+  BoolToInteger,
+  IntegerToBool,
+  IntegerToFloat,
+  // Guarded: the lowering tests the value against the destination's bounds and
+  // traps, so no poison is ever created.
+  FloatToInteger,
+  FloatExtend,
+  FloatTruncate,
+  // `memory.md`'s two *named* joins. Never implicit, always written, and counted
+  // by `-Wprovenance`: `expose` and `with_exposed_provenance`.
+  PointerToInteger,
+  IntegerToPointer,
+};
+// NOLINTEND(readability-identifier-naming)
+
+// The losses an explicit cast may have. A **bit set** rather than one value,
+// because a cast can lose two things at once (`f64` → `i8` is a range *and* a
+// truncation) and a name that dropped one would be a name that lies. Read by
+// `-Wcast`, which is opt-in (`casts.md`, decision 16).
+enum class CastLoss : std::uint8_t {
+  None = 0,
+  // The destination is narrower, so high bits are dropped.
+  Truncation = 1U << 0U,
+  // One side is signed and the other is not, at a width that changes what the
+  // same bits mean.
+  Sign = 1U << 1U,
+  // The destination cannot represent every value of the source's magnitude (the
+  // mantissa is smaller than the integer's width, or the float is narrower).
+  Precision = 1U << 2U,
+  // A float → integer cast, whose out-of-range values trap.
+  Range = 1U << 3U,
+}; // The combination is the definition and not a mistake: a **bit set** has values
+// with no enumerator (`Range | Truncation` is the float → integer row), which is
+// what "a cast can lose two things at once" means. The range checker cannot
+// express that, hence the targeted suppression -- the same one `parse/syntax_kind.h`
+// uses for its own deliberate integer conversion.
+[[nodiscard]] constexpr CastLoss operator|(CastLoss left, CastLoss right) {
+  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+  return static_cast<CastLoss>(static_cast<std::uint8_t>(left) | static_cast<std::uint8_t>(right));
+}
+[[nodiscard]] constexpr CastLoss& operator|=(CastLoss& left, CastLoss right) {
+  left = left | right;
+  return left;
+}
+[[nodiscard]] constexpr bool hasLoss(CastLoss set, CastLoss one) {
+  return (static_cast<std::uint8_t>(set) & static_cast<std::uint8_t>(one)) != 0;
+}
+// The loss kinds' stable names (`truncation`, `sign`, `precision`, `range`), in
+// the order the table lists them.
+[[nodiscard]] std::string_view toString(CastLoss loss);
+// The whole set as one phrase for a diagnostic: "may lose sign and precision".
+[[nodiscard]] std::string lossPhrase(CastLoss loss);
+
+struct CastResult {
+  CastKind kind = CastKind::None;
+  bool ok = false;
+  CastLoss loss = CastLoss::None;
+  // A complete sentence, when `ok` is false. Empty when the refusal was already
+  // reported -- a poison operand, which the caller has a sentence for.
+  std::string message;
+};
+
+// What a cast of `from` to `to` is, or why there is none. Pure over types, so a
+// test can walk every pair the language has and pin the answer for each.
+[[nodiscard]] CastResult castResult(const TypeStore& types, TypeId from, TypeId to);
+
+// A cast between integers (`char` and `bool` included), folded.
+//
+// The same conversion the lowering emits, computed here as well, so `(u8)300`
+// and a run-time `(u8)x` cannot disagree (`casts.md`, decision 15) -- and so a
+// `const` binding can be a cast, which is what keeps `const a = (u8)5;` usable in
+// another constant expression.
+//
+// `nullopt` when either side is not an integer-shaped type, and when the result
+// is an **integer and a float** conversion, whose value this stage deliberately
+// does not have (`sema.md`, *Constant folding*): those keep `isConstant` and lose
+// only the folded number, and the lowering folds them from the operand.
+[[nodiscard]] std::optional<support::ConstInt> foldIntCast(const TypeStore& types, TypeId from,
+                                                           TypeId to, support::ConstInt value);
 
 } // namespace minc::sema

@@ -55,6 +55,8 @@ struct FrontEndOptions {
   std::vector<std::string> systemDirs;
   sema::TargetInfo target = sema::defaultTarget();
   bool warnConversion = false;
+  bool warnCast = false;
+  bool warnProvenance = false;
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;

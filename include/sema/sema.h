@@ -45,6 +45,18 @@ struct SemaOptions {
   // default: C's narrowing is what makes C code compile at all, and the
   // diagnosis a reader wants here is a lint, not an error.
   bool warnConversion = false;
+  // Warn on an explicit cast that may lose something -- truncated bits, a sign
+  // that changes meaning, a rounded value, or an out-of-range trap. Off by
+  // default: an explicit cast is the source saying it knows, and a lint that
+  // fires on every one of them is a lint nobody keeps on (`casts.md`,
+  // decision 16).
+  bool warnCast = false;
+  // Name every cast between a pointer and an integer -- `memory.md`'s `expose`
+  // and `with_exposed_provenance`. Not a lint about accuracy: it is the count the
+  // model chose *instead* of an `unsafe` keyword, so it is off by default the way
+  // the others are and its sites are the whole record of where an address crosses
+  // into an integer and back.
+  bool warnProvenance = false;
   std::size_t maxTypes = support::kMaxTypesPerUnit;
 };
 

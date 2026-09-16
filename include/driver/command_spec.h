@@ -68,6 +68,8 @@ enum class OptionId : std::uint8_t {
   WarnUnused,
   WarnShadow,
   WarnConversion,
+  WarnCast,
+  WarnProvenance,
 };
 
 // Whether an option is followed by a value, and how the value is written.

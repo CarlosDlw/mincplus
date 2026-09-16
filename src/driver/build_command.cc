@@ -175,6 +175,8 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
   frontEndOptions.systemDirs = request.systemDirs;
   frontEndOptions.target = request.target;
   frontEndOptions.warnConversion = request.warnConversion;
+  frontEndOptions.warnCast = request.warnCast;
+  frontEndOptions.warnProvenance = request.warnProvenance;
   frontEndOptions.warnUnused = request.warnUnused;
   frontEndOptions.warnShadow = request.warnShadow;
   frontEndOptions.diagnosticColor = request.diagnosticColor;
@@ -409,6 +411,8 @@ namespace {
   request.systemDirs = options.systemDirs;
   request.target = *target;
   request.warnConversion = options.warnConversion;
+  request.warnCast = options.warnCast;
+  request.warnProvenance = options.warnProvenance;
   request.warnUnused = options.warnUnused;
   request.warnShadow = options.warnShadow;
   request.diagnosticColor =

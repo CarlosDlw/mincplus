@@ -61,6 +61,8 @@ struct CheckRequest {
   bool stats = false;
   // `-Wconversion`: warn when an implicit conversion may lose information.
   bool warnConversion = false;
+  bool warnCast = false;
+  bool warnProvenance = false;
   // `-Wunused`, `-Wshadow`: forwarded to resolution, which is where those two
   // are decided. A `check` that swallowed them would make the warnings a user
   // asked for depend on which command they happened to run.

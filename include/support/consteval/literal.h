@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "support/consteval/const_int.h"
+#include "support/consteval/suffix.h"
 
 namespace minc::support {
 
@@ -43,6 +44,12 @@ enum class IntegerBaseRule : std::uint8_t {
 
 struct IntegerLiteral {
   ConstInt value;
+  // The **number** of the spelling, prefix included and suffix left out, as a
+  // view into `text`. The value above is what the 64-bit core could hold; this is
+  // what a reader with a wider type needs (`i128`/`u128`, which deliberately keep
+  // no `ConstInt`), and it is produced here because this is the reader that knows
+  // where the digits end.
+  std::string_view number;
   // The spelling is a well-formed integer literal.
   bool ok = false;
   // The spelling is well formed but the value does not fit the core's 64 bits.
@@ -52,7 +59,27 @@ struct IntegerLiteral {
   // Set when `ok` is false, and when `tooWide` is set. Always a complete
   // sentence, because it is what a diagnostic prints.
   std::string message;
+  // What the literal's spelling says its type is, when it says one: `10u8` is a
+  // `u8` and `10` is deferred. The split between the digits and the suffix is
+  // this reader's -- it is the only stage that reads the digits -- so the
+  // descriptor comes back here instead of being cut off the spelling again by
+  // each caller (`casts.md`).
+  LiteralSuffix suffix;
 };
+
+// A *float* literal's spelling, split the same way: the number, and the suffix
+// that decides its type. The number is a view into `text`.
+struct FloatLiteral {
+  std::string_view number;
+  LiteralSuffix suffix;
+};
+
+// The split, for a float. The numeric part is read with the scanner's own grammar
+// (`numericPartOfFloat`) and what follows is classified: `1.5f32` is `1.5` and an
+// `f32`, `1.5` is `1.5` with no suffix, and a spelling the scanner would not have
+// produced comes back whole with no suffix -- the reader's own failure is then
+// what reports it.
+[[nodiscard]] FloatLiteral readFloatLiteral(std::string_view text);
 
 // The value of an integer literal's spelling. An empty spelling is refused
 // rather than read as zero.

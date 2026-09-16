@@ -20,7 +20,8 @@ namespace {
 //
 // Sorted by spelling so the table can be binary-searched and so that a diff
 // adding a keyword is obviously in the right place.
-constexpr std::array<Keyword, 12> kKeywords{{
+constexpr std::array<Keyword, 13> kKeywords{{
+    {"as", TokenKind::KwAs},
     {"break", TokenKind::KwBreak},
     {"const", TokenKind::KwConst},
     {"continue", TokenKind::KwContinue},
@@ -83,6 +84,8 @@ const char* toString(TokenKind kind) {
     return "HeaderName";
   case TokenKind::KwFn:
     return "KwFn";
+  case TokenKind::KwAs:
+    return "KwAs";
   case TokenKind::KwExtern:
     return "KwExtern";
   case TokenKind::KwStatic:

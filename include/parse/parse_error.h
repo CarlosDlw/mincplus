@@ -85,6 +85,15 @@ enum class ParseErrorCode : std::uint8_t {
   // "expected an expression" at a token that starts an expression everywhere
   // else, which teaches nothing about the characters to change.
   BraceWithoutType,
+  // A literal written *against* an identifier: `10z`, `1.5u8x`, `'a'u8`.
+  //
+  // The scanner claims a trailing run only when the run is a suffix the language
+  // knows (`suffix.h`), so an unknown run leaves the literal and the name as two
+  // tokens -- and two tokens written with nothing between them are one mistake.
+  // This is a *parse* finding and not a lexical one because telling `10z` from
+  // `10 z` needs the spans, and because the sentence names the set of suffixes
+  // the reader could have meant, which is the grammar's table.
+  InvalidLiteralSuffix,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

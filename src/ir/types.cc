@@ -14,6 +14,7 @@
 // `TypedFile::coercionAt`.
 #include "lowering.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -22,6 +23,7 @@
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/APSInt.h"
 #include "llvm/IR/ConstantFold.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -297,6 +299,54 @@ Lowering::Conversion Lowering::conversionFor(const sema::TypeStore& types, sema:
   if (from == to) {
     return Conversion::Identity;
   }
+  // A `!` operand. The conversion is *vacuous* and not a value change: the
+  // expression never produces a value, so there is nothing to convert and nothing
+  // to emit, and what the consumer asked for is a poison of its own type -- the
+  // one value of that type this program can never reach. `never.md` states the
+  // rule; this is where it becomes an instruction sequence (none at all).
+  //
+  // Here rather than in `lowerCast`, because an *implicit* conversion of a `!`
+  // operand reaches this same function -- `let x: i32 = die();`, a call argument,
+  // a `return` -- and a second copy of the rule is the copy that disagrees.
+  if (types.isNever(from)) {
+    return Conversion::Poison;
+  }
+  // `bool` is not an integer type in this language, so its directions are written
+  // out. Each is one instruction and each is defined: `i1` zero-extends into any
+  // integer, any integer is `!= 0`, and `true` is `1.0` -- which is the same
+  // definition as the first, one type over, and the one the matrix publishes as
+  // `IntegerToFloat` (`casts.md`).
+  if (types.get(from).kind == sema::TypeKind::Bool) {
+    if (types.isInteger(to)) {
+      return Conversion::Zext;
+    }
+    if (types.isFloat(to)) {
+      // `bool` is unsigned, so this is `uitofp i1` and a `true` is exactly `1.0`.
+      return Conversion::UIToFP;
+    }
+  }
+  if (types.isInteger(from) && types.get(to).kind == sema::TypeKind::Bool) {
+    return Conversion::ToBool;
+  }
+  // `str` is a pointer with a sentinel obligation, so the two names for the same
+  // bytes convert with no instruction. `*void` is already an implicit conversion
+  // one stage up; a cast is what reaches any other pair.
+  const auto addressLike = [&types](sema::TypeId id) {
+    const sema::TypeKind kind = types.get(id).kind;
+    return kind == sema::TypeKind::Pointer || kind == sema::TypeKind::Str;
+  };
+  if (addressLike(from) && addressLike(to)) {
+    return Conversion::Identity;
+  }
+  // The two named joins of `memory.md`: `expose` and `with_exposed_provenance`.
+  // They exist only as casts -- no implicit rule reaches them -- and each is the
+  // one LLVM instruction that means exactly what the model says.
+  if (addressLike(from) && types.isInteger(to)) {
+    return Conversion::PtrToInt;
+  }
+  if (types.isInteger(from) && addressLike(to)) {
+    return Conversion::IntToPtr;
+  }
   // Pointers convert to pointers -- only through `*void`, by the checker's rule
   // -- and LLVM has one pointer type, so this is the *same* value with a new
   // label. No instruction: an opaque pointer conversion is an identity, and
@@ -362,6 +412,12 @@ std::optional<llvm::Instruction::CastOps> Lowering::castOpcodeOf(Conversion conv
     return llvm::Instruction::FPExt;
   case Conversion::FPTrunc:
     return llvm::Instruction::FPTrunc;
+  case Conversion::PtrToInt:
+    return llvm::Instruction::PtrToInt;
+  case Conversion::IntToPtr:
+    return llvm::Instruction::IntToPtr;
+  case Conversion::ToBool:
+  case Conversion::Poison:
   case Conversion::Identity:
   case Conversion::Invalid:
     return std::nullopt;
@@ -369,7 +425,7 @@ std::optional<llvm::Instruction::CastOps> Lowering::castOpcodeOf(Conversion conv
   return std::nullopt;
 }
 
-Value Lowering::convert(const Value& value, sema::TypeId to) {
+Value Lowering::convert(const Value& value, sema::TypeId to, support::Span at) {
   const sema::TypeId from = value.type;
   if (from == to) {
     return value;
@@ -388,6 +444,30 @@ Value Lowering::convert(const Value& value, sema::TypeId to) {
   if (conversion == Conversion::Identity) {
     return Value{value.v, to};
   }
+  if (conversion == Conversion::Poison) {
+    // A `!` operand (`never.md`): nothing converts, because there is nothing --
+    // and the instruction the call left behind is still lowered, because a call
+    // inside a mistake is still a call the reader wrote.
+    return Value{llvm::PoisonValue::get(destination), to};
+  }
+  if (conversion == Conversion::ToBool) {
+    // `x != 0`, at the source's own width. A `bool` is an `i1` in the module, so
+    // the comparison is the conversion.
+    llvm::Type* source = value.v->getType();
+    if (!source->isIntegerTy()) {
+      fatal(support::Span{}, IRDiagnosticCode::Internal,
+            "a conversion to `bool` reached lowering from a non-integer type");
+      return value;
+    }
+    return Value{builder_.CreateICmpNE(value.v, llvm::ConstantInt::get(source, 0), "tobool"), to};
+  }
+  if (conversion == Conversion::FPToSI || conversion == Conversion::FPToUI) {
+    // **The one row with a precondition.** Both arms are the same guard with a
+    // different opcode, and it is emitted here -- at the single place a
+    // conversion materialises -- so no future path can reach the bare
+    // instruction (`casts.md`, *Float → integer*).
+    return checkedFloatToInt(value, to, at);
+  }
   if (conversion == Conversion::Invalid) {
     // A pair the language does not permit, and one cannot reach here: the checker
     // reported it and the unit has errors, so the lowering was never called. It
@@ -396,7 +476,11 @@ Value Lowering::convert(const Value& value, sema::TypeId to) {
     fatal(support::Span{}, IRDiagnosticCode::Internal,
           "a conversion from `" + types_.spelling(from) + "` to `" + types_.spelling(to) +
               "` reached the lowering; the language does not permit one");
-    return value;
+    // A refusal, and not the unconverted value: `convert`'s callers all stop on an
+    // empty value (`storePlace`, `lowerReturn`, an argument), so handing one back
+    // is what keeps a bug in this stage from becoming a wrong-typed instruction in
+    // the module -- a well-formed module is not the same thing as a correct one.
+    return Value{};
   }
   const std::optional<llvm::Instruction::CastOps> opcode = castOpcodeOf(conversion);
   if (!opcode.has_value()) {
@@ -409,14 +493,135 @@ Value Lowering::convert(const Value& value, sema::TypeId to) {
       to};
 }
 
-llvm::Constant* Lowering::convertConstant(llvm::Constant* value, sema::TypeId from,
-                                          sema::TypeId to) {
+Lowering::FloatRange Lowering::floatRangeOf(sema::TypeId to) const {
+  // The destination is an integer type with a width: `llvmType` has answered for
+  // it at every call site, and a `bitsOf` of zero would be a type this stage
+  // cannot see -- which `llvmType` refuses as an internal error before reaching
+  // any of this.
+  const int bits = static_cast<int>(bitsOf(to));
+  // The smallest value the destination holds and one past the largest: `-2^(n-1)`
+  // and `2^(n-1)` for a signed one, `0` and `2^n` for an unsigned one. The two
+  // ends are built apart rather than from one magnitude, because the sign is the
+  // difference between a range that admits `-5.0` and one that refuses it.
+  if (isSigned(to)) {
+    return FloatRange{FloatBound{bits - 1, /*negative=*/true}, FloatBound{bits - 1, false}};
+  }
+  return FloatRange{FloatBound{0, false, /*isZero=*/true}, FloatBound{bits, false}};
+}
+
+llvm::APFloat Lowering::boundIn(const llvm::fltSemantics& in, const FloatBound& bound) {
+  if (bound.isZero) {
+    // The one end that is not a power of two, and the one that needs no
+    // exactness question asked about it: a zero has no bits to round.
+    return llvm::APFloat::getZero(in);
+  }
+  // One, scaled: exact wherever `holdsBound` said the format reaches it, and the
+  // same operation for every format.
+  const auto one = static_cast<llvm::APFloatBase::integerPart>(1);
+  llvm::APFloat value =
+      llvm::scalbn(llvm::APFloat(in, one), bound.exponent, llvm::APFloat::rmNearestTiesToEven);
+  if (bound.negative) {
+    value.changeSign();
+  }
+  return value;
+}
+
+void Lowering::refuseCastOutOfRange(sema::TypeId from, sema::TypeId to, support::Span at) {
+  fatal(at, IRDiagnosticCode::CastOutOfRange,
+        "this cast converts the constant `" + std::string(types_.spelling(from)) + "` to `" +
+            types_.spelling(to) + "`, and no value of `" + types_.spelling(to) +
+            "` holds it: a float-to-integer conversion is defined as a trap when the value "
+            "is not representable, and this value is known here, so the program could only "
+            "trap -- change the value or the type");
+}
+
+llvm::Constant* Lowering::foldedInteger(const llvm::APFloat& value, sema::TypeId to) {
+  const auto* integerType = llvm::dyn_cast_or_null<llvm::IntegerType>(llvmType(to));
+  if (integerType == nullptr) {
+    return nullptr;
+  }
+  llvm::APSInt truncated(integerType->getBitWidth(), /*isUnsigned=*/!isSigned(to));
+  // The exactness out-parameter is **given a real `bool`**, and it is not a
+  // stylistic choice: LLVM 22's `convertToInteger` dereferences it unconditionally
+  // (`APFloat.cpp`, `*isExact = false;` at the top), so the API's optional-looking
+  // pointer is a segfault when it is null. It is a `const` member, so the operand
+  // is read where it is rather than through a copy of it.
+  bool isExact = false;
+  if ((value.convertToInteger(truncated, llvm::APFloat::rmTowardZero, &isExact) &
+       llvm::APFloat::opInvalidOp) != llvm::APFloat::opOK) {
+    return nullptr;
+  }
+  return llvm::ConstantInt::get(context_, truncated);
+}
+
+bool Lowering::floatFitsInteger(const llvm::APFloat& value, sema::TypeId to) const {
+  const std::uint16_t bits = bitsOf(to);
+  if (bits == 0) {
+    return false;
+  }
+  // The comparison is made in `f64`, whose bounds are exact for every width this
+  // language has (they are powers of two, and `f64` reaches 2^1023): comparing in
+  // the source's own format would have to *round* `2^128` on an `f32` source,
+  // which is how a check like this becomes a check that lets poison through.
+  llvm::APFloat asDouble = value;
+  bool losesInfo = false;
+  asDouble.convert(llvm::APFloat::IEEEdouble(), llvm::APFloat::rmNearestTiesToEven, &losesInfo);
+  if (asDouble.isNaN()) {
+    // NaN is neither in nor out of a range: it is not a value the destination can
+    // hold, and `fptosi` on one is poison, so it is refused.
+    return false;
+  }
+  // The *same* two bounds the run-time guard compares against, from the one place
+  // that produces them, and in `f64` -- which holds every bound in the store
+  // (`2^128` is far inside its range) so that a bound is never the rounded thing
+  // the comparison is about. `asDouble` is where the compared value lives too.
+  const FloatRange range = floatRangeOf(to);
+  const llvm::fltSemantics& wide = llvm::APFloat::IEEEdouble();
+  if (asDouble.compare(boundIn(wide, range.low)) == llvm::APFloat::cmpLessThan) {
+    return false;
+  }
+  return asDouble.compare(boundIn(wide, range.high)) == llvm::APFloat::cmpLessThan;
+}
+
+llvm::Constant* Lowering::convertConstant(llvm::Constant* value, sema::TypeId from, sema::TypeId to,
+                                          support::Span at) {
   if (value == nullptr || from == to) {
     return value;
   }
   const Conversion conversion = conversionFor(types_, from, to);
   if (conversion == Conversion::Identity) {
     return value;
+  }
+  if (conversion == Conversion::ToBool) {
+    // The same `!= 0` the runtime path emits, folded: `ConstantFoldCastInstruction`
+    // has no arm for it, and a `bool` is an `i1` either way.
+    if (auto* integer = llvm::dyn_cast<llvm::ConstantInt>(value)) {
+      return llvm::ConstantInt::get(context_, llvm::APInt(1, integer->getValue().isZero() ? 0 : 1));
+    }
+    return nullptr;
+  }
+  if (conversion == Conversion::FPToSI || conversion == Conversion::FPToUI) {
+    // **No folding of an out-of-range constant.** `ConstantFoldCastInstruction`
+    // returns a *poison* constant for one, and this language has no poison: the
+    // value the program asked to write is not a value, so the program is refused
+    // -- by the checker where it could see it, and here where it could not,
+    // because the front end deliberately keeps no float value to compare with
+    // (`casts.md`, *Float → integer*).
+    if (auto* floating = llvm::dyn_cast<llvm::ConstantFP>(value)) {
+      // **The same refusal and the same fold the run-time path uses**, so a
+      // constant and a computed value cannot answer differently about the same
+      // pair -- which is the whole point of the two appliers sharing
+      // `conversionFor` above.
+      if (!floatFitsInteger(floating->getValueAPF(), to)) {
+        refuseCastOutOfRange(from, to, at);
+        return nullptr;
+      }
+      return foldedInteger(floating->getValueAPF(), to);
+    }
+    // Not a float constant (already an instruction, or a value this stage cannot
+    // classify): a file-scope initializer has to be a constant, so this is the
+    // disagreement between two stages it looks like.
+    return nullptr;
   }
   const std::optional<llvm::Instruction::CastOps> opcode = castOpcodeOf(conversion);
   if (!opcode.has_value()) {
@@ -470,7 +675,9 @@ Value Lowering::lowerOperand(ast::AstId consumer, ast::AstId child) {
     return value;
   }
   if (const sema::Coercion* coercion = coercionFor(consumer, child)) {
-    return convert(value, coercion->to);
+    // The child's own span: it is the expression whose conversion this is, and
+    // the one arm that reports from `convert` reports about it.
+    return convert(value, coercion->to, spanOf(child));
   }
   return value;
 }
@@ -507,9 +714,14 @@ std::optional<llvm::APFloat> Lowering::floatValue(ast::AstId literal) {
   // `APFloat`'s reader and not a hand-rolled one: the rounding this stage cannot
   // verify is exactly why `sema` refuses to fold a float literal (`sema.md`,
   // *Constant folding*), and the answer here has to be the correctly rounded one.
+  //
+  // The **number** of the spelling and not the whole token: a suffix is part of
+  // the literal (`1.5f32` is one token, `casts.md`), and `APFloat`'s reader is
+  // handed a number. The split is `support`'s -- the same table the scanner and
+  // the checker ask -- so no stage cuts a suffix off a spelling twice.
   llvm::APFloat value(*semantics);
-  llvm::Expected<llvm::APFloat::opStatus> parsedResult =
-      value.convertFromString(spelling(token), llvm::APFloat::rmNearestTiesToEven);
+  llvm::Expected<llvm::APFloat::opStatus> parsedResult = value.convertFromString(
+      support::readFloatLiteral(spelling(token)).number, llvm::APFloat::rmNearestTiesToEven);
   if (!parsedResult) {
     // The lexer already validated the *shape* of a float literal, so a string
     // this reader cannot parse is a disagreement between two readers.
@@ -585,7 +797,13 @@ std::optional<llvm::APInt> Lowering::wideInteger(ast::AstId literal) {
   if (!token.valid()) {
     return std::nullopt;
   }
-  std::string_view text = spelling(token);
+  // The **digits** of the spelling, through the one reader that knows where they
+  // stop: a suffix is part of the token (`0xFFusize` is one literal) and it is
+  // not a digit. Reading them here rather than cutting the suffix off a second
+  // time is what keeps this stage and the scanner agreeing about the split.
+  std::string_view text =
+      support::parseIntegerLiteral(spelling(token), support::IntegerBaseRule::DecimalLeadingZero)
+          .number;
   unsigned radix = 10;
   std::size_t offset = 0;
   if (text.size() > 2 && text[0] == '0') {

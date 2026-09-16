@@ -142,6 +142,11 @@ public:
   [[nodiscard]] support::Span currentSpan() const {
     return source_.spanOfCurrent();
   }
+  // The span of `nth(n)`. The grammar asks it for one thing: whether two tokens
+  // were *written together* (`10z`), which no kind can answer.
+  [[nodiscard]] support::Span spanOf(std::uint32_t n) const {
+    return source_.spanOf(n);
+  }
   [[nodiscard]] bool bailedOut() const {
     return bailedOut_;
   }
@@ -198,6 +203,12 @@ public:
   void parseJumpStmt(SyntaxKind kind);
   void parseType();        // type-only position (after `:`)
   void parseTypeAndName(); // `fn` return type followed by the function name
+  // The type of a cast, in either spelling. Not `parseType`: a cast's type is
+  // followed by an *expression*, so a `*` after the type's last word is the
+  // multiplication it looks like -- `a as i32 * 2` is `(a as i32) * 2`, and a
+  // reader that ran the declaration grammar here would swallow the `*` and build
+  // a type nothing can spell (`casts.md`, decision 3).
+  void parseCastType();
   // One `[`, count, `]` group of a type position, always consumed whole: the
   // group is the unit the count belongs to, and a group the parser leaves half
   // read is a group the next construct re-reads as something else.
@@ -224,7 +235,23 @@ public:
   CompletedMarker parseAssign();
   CompletedMarker parseConditional();
   CompletedMarker parseBinary(std::uint8_t minPrecedence);
+  // The `as` level: a postfix operator above every binary operator and below the
+  // prefix ones, so `-a as i64` is `(-a) as i64` and `a as i64 * 2` is
+  // `(a as i64) * 2`. Chains are left-associative.
   CompletedMarker parseUnary();
+  // The operand of a cast, an operand of `as`, or the expression a prefix
+  // operator applies to. Split out of `parseUnary` because `as` sits *between*
+  // the two: a prefix operator and `as` do not nest in the same direction.
+  CompletedMarker parsePrefix();
+  // `(T)x`, which is a cast only when the run inside the parentheses is a
+  // complete type of reserved type names and an expression follows the `)`; that
+  // is what `atCastStart` decides, and this builds the node.
+  CompletedMarker parseCastPrefix();
+  [[nodiscard]] bool atCastStart() const;
+  // A literal written against an identifier: `10z`. Reported and consumed as an
+  // `Error` child so one slip costs one diagnostic instead of a cascade from
+  // whatever expected the expression to end.
+  [[nodiscard]] bool atLiteralSuffixRun() const;
   CompletedMarker parsePostfix();
   CompletedMarker parsePrimary();
   void parseArgList();

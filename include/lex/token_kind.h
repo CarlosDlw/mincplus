@@ -62,6 +62,11 @@ enum class TokenKind : std::uint8_t {
   KwFn,
   KwExtern,
   KwStatic,
+  // `as`, the cast operator. A keyword because it changes what the following
+  // tokens mean -- a *complete type run* follows it, which is the same test
+  // `let` passes -- and because a postfix operator has to be recognised where an
+  // identifier would otherwise be an unexpected token (`casts.md`, decision 3).
+  KwAs,
   KwLet,
   KwConst,
   KwReturn,
@@ -172,6 +177,7 @@ enum class TokenKind : std::uint8_t {
   case TokenKind::KwFn:
   case TokenKind::KwExtern:
   case TokenKind::KwStatic:
+  case TokenKind::KwAs:
   case TokenKind::KwLet:
   case TokenKind::KwConst:
   case TokenKind::KwReturn:

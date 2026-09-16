@@ -72,6 +72,12 @@ enum class ModuleAssumption : std::uint8_t {
   // A division or remainder reached without a test of its divisor: the language
   // defines the operation as a trap, so the guard is part of the code.
   UnguardedDivision,
+  // A float-to-integer conversion without a test of its operand. `fptosi` on a
+  // value the destination cannot hold is LLVM *poison* and this language has no
+  // poison, so the conversion is one more operation with a precondition -- and
+  // the second row of the same shape, which is why the two are separate rows and
+  // not one: the bounds and the operand are different in each.
+  UnguardedFloatToInt,
 };
 
 struct ModuleAssumptionInfo {

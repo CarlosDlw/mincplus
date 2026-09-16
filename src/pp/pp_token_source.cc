@@ -44,6 +44,25 @@ public:
     const std::size_t index = significantIndex();
     return index < tokens_.size() ? tokens_[index].span() : support::Span{};
   }
+  [[nodiscard]] support::Span spanOf(std::uint32_t n) const override {
+    // The span of the `n`-th significant token, walked the same way `kindAhead`
+    // walks: a `PPToken` carries the range it was *written* at, which is what
+    // "are these two written together" has to be asked about.
+    std::size_t index = index_;
+    std::uint32_t ahead = n;
+    while (index < tokens_.size()) {
+      if (isPPTrivia(tokens_[index].kind)) {
+        ++index;
+        continue;
+      }
+      if (ahead == 0) {
+        return tokens_[index].span();
+      }
+      --ahead;
+      ++index;
+    }
+    return support::Span{};
+  }
   [[nodiscard]] std::string_view textOf(std::uint32_t n) const override {
     // Empty, and deliberately: a `PPToken` stores where its spelling *is* and not
     // the bytes (`pp_token.h`, `PPToken::span`), and the file it points at can be

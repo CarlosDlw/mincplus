@@ -60,6 +60,7 @@ minc_add_executable(minc_unit_tests
     support/session/session_test.cc
     support/term/terminal_test.cc
     support/utf8/utf8_test.cc
+    support/consteval/literal_test.cc
     lex/lexer_test.cc
     lex/header_name_test.cc
     lex/token_stream_test.cc
@@ -89,6 +90,7 @@ minc_add_executable(minc_unit_tests
     resolve/def_index_test.cc
     sema/type_test.cc
     sema/target_test.cc
+    sema/cast_test.cc
     sema/convert_test.cc
     sema/coerce_test.cc
     sema/check_test.cc
@@ -106,6 +108,7 @@ minc_add_executable(minc_unit_tests
     ir/lower_test.cc
     ir/slice_test.cc
     ir/builtins_test.cc
+    ir/cast_test.cc
     ir/global_test.cc
     ir/debug_test.cc
     ir/invariants_test.cc

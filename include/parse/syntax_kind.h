@@ -92,6 +92,12 @@ enum class SyntaxKind : std::uint16_t {
   LiteralExpr,
   PathExpr,
   ParenExpr,
+  // `x as T` and `(T)x`: **one kind for both spellings**, because they are one
+  // operation. The parse tree keeps the tokens of whichever was written (the
+  // `as`, or the parentheses), so a formatter still round-trips the source, while
+  // everything above this stage sees one node with a `Type` child and one operand
+  // (`casts.md`, decision 2).
+  CastExpr,
   // `&x` and `*p` are `PrefixExpr`, like `-x`: an operator token and one
   // operand. A pointer is not a second kind of expression, only a second thing
   // the same shape can mean, which is what keeps this list from growing per

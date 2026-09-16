@@ -14,7 +14,7 @@ minc_add_library(minc_parse
     declaration.cc
     statement.cc
     expression.cc
-  DEPS minc_lex minc_span
+  DEPS minc_lex minc_span minc_typenames
 )
 
 # Reporting layer: turns syntax errors into diagnostics. Kept separate so a

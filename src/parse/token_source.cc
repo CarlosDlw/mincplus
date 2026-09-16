@@ -73,6 +73,15 @@ public:
     return support::Span(stream_->file(), end, end);
   }
 
+  [[nodiscard]] support::Span spanOf(std::uint32_t n) const override {
+    const std::size_t index = index_ + static_cast<std::size_t>(n);
+    if (index < significant_.size()) {
+      return stream_->spanOfAt(significant_[index]);
+    }
+    const std::uint32_t end = static_cast<std::uint32_t>(stream_->text().size());
+    return support::Span(stream_->file(), end, end);
+  }
+
 private:
   [[nodiscard]] lex::TokenKind kindAt(std::size_t index) const {
     return stream_->significantAt(index).kind;

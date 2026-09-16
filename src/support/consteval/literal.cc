@@ -190,17 +190,35 @@ IntegerLiteral parseIntegerLiteral(std::string_view text, IntegerBaseRule baseRu
     result.message = "malformed integer literal " + quoted(text);
     return result;
   }
+  // The digits' own range, before the suffix is classified: the one thing a
+  // caller with a type wider than the core needs, and the split belongs to the
+  // reader that just decided where the digits stop.
+  result.number = text.substr(0, index);
 
+  // The suffix, through the one table -- the same one the scanner asked to decide
+  // how long the token was, so the two cannot disagree about where the number
+  // ends. An unknown run is not a suffix at all (`suffix.h`), and a reader that
+  // quietly ignored one would be reading a literal the source did not write.
+  const std::string_view suffixText = text.substr(index);
+  result.suffix = classifySuffix(suffixText, /*literalIsFloat=*/false);
   bool isUnsigned = false;
-  for (; index < text.size(); ++index) {
-    const char suffix = text[index];
-    if (suffix == 'u' || suffix == 'U') {
-      isUnsigned = true;
-    } else if (suffix != 'l' && suffix != 'L') {
+  switch (result.suffix.status) {
+  case SuffixStatus::None:
+    if (!suffixText.empty()) {
       result.message = "unknown suffix in integer literal " + quoted(text);
       return result;
     }
+    break;
+  case SuffixStatus::Refused:
+    result.message = result.suffix.message;
+    return result;
+  case SuffixStatus::Typed:
+    // The suffix's own signedness, which is what the digits are read as: `10u` is
+    // an unsigned ten, and `10i8` is a signed eight-bit ten.
+    isUnsigned = isUnsignedSuffix(result.suffix.type);
+    break;
   }
+
   if (overflowed) {
     result.value = ConstInt{value, isUnsigned};
     result.tooWide = true;
@@ -208,12 +226,21 @@ IntegerLiteral parseIntegerLiteral(std::string_view text, IntegerBaseRule baseRu
     return result;
   }
   // A decimal literal too large for `intmax_t` is evaluated as unsigned, which
-  // is the standard's behaviour rather than a diagnostic.
-  if (!isUnsigned && value > static_cast<std::uint64_t>(INT64_MAX)) {
+  // is the standard's behaviour rather than a diagnostic -- and only when the
+  // spelling did not say what it is: a suffixed literal is the type its suffix
+  // names, and re-reading `300u8` as unsigned would be inventing a rule.
+  if (!result.suffix.typed() && !isUnsigned && value > static_cast<std::uint64_t>(INT64_MAX)) {
     isUnsigned = true;
   }
   result.value = ConstInt{value, isUnsigned};
   result.ok = true;
+  return result;
+}
+
+FloatLiteral readFloatLiteral(std::string_view text) {
+  FloatLiteral result;
+  result.number = numericPartOfFloat(text);
+  result.suffix = classifySuffix(text.substr(result.number.size()), /*literalIsFloat=*/true);
   return result;
 }
 

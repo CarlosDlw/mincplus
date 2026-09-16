@@ -65,6 +65,8 @@ struct BuildRequest {
   // Forwarded to the front end, so a warning a user asked for does not depend on
   // which command they ran.
   bool warnConversion = false;
+  bool warnCast = false;
+  bool warnProvenance = false;
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;

@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "byte_class.h"
+#include "support/consteval/suffix.h"
 
 namespace minc::lex::detail {
 namespace {
@@ -134,6 +135,24 @@ struct NumberParts {
         parts.isFloat = true;
       }
     }
+  }
+
+  // The suffix, and whether the token has one at all is this scanner's answer:
+  // `10u8` is one literal, while `10z` is the number `10` and then the name `z`,
+  // because a trailing run counts only when it is a spelling the language knows
+  // (`suffix.h`). The run is claimed *into the token*, so the reader sees the
+  // bytes the source wrote and nothing has to be reassembled.
+  const std::size_t suffixLength = support::suffixLengthAt(text, i, parts.isFloat);
+  if (suffixLength != 0) {
+    const support::LiteralSuffix suffix =
+        support::classifySuffix(text.substr(i, suffixLength), parts.isFloat);
+    // A float suffix on an integer-spelled literal *makes* it a float: `12f` is
+    // `12.0` as an `f32`, and the value is exact (`casts.md`). The token kind is
+    // therefore decided after the suffix rather than before it.
+    if (suffix.makesFloat) {
+      parts.isFloat = true;
+    }
+    i += suffixLength;
   }
 
   parts.end = i;

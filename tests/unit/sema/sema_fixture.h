@@ -60,6 +60,14 @@ public:
     source_ = std::move(text);
     return *this;
   }
+  SemaFixture& warnCast(bool on = true) {
+    options_.warnCast = on;
+    return *this;
+  }
+  SemaFixture& warnProvenance(bool on = true) {
+    options_.warnProvenance = on;
+    return *this;
+  }
   SemaFixture& warnConversion(bool on = true) {
     options_.warnConversion = on;
     return *this;

@@ -135,6 +135,7 @@ constexpr IRDiagnosticCodeInfo kDiagnosticCodeInfos[] = {
     {IRDiagnosticCode::Assumption, "ir-assumption"},
     {IRDiagnosticCode::Alignment, "ir-alignment"},
     {IRDiagnosticCode::UnguardedOp, "ir-unguarded-op"},
+    {IRDiagnosticCode::CastOutOfRange, "ir-cast-out-of-range"},
     {IRDiagnosticCode::ObjectTooLarge, "ir-object-too-large"},
     {IRDiagnosticCode::InitializerTooLarge, "ir-initializer-too-large"},
 };

@@ -95,6 +95,12 @@ struct CliOptions {
   bool warnShadow = false;
   // `-Wconversion`. Off by default for the same reason as the others.
   bool warnConversion = false;
+  // `-Wcast` and `-Wprovenance`, the two flags over the casts. Separate from
+  // `-Wconversion` because they read different records: one is about an implicit
+  // conversion the assignment made, the others about a conversion the source
+  // wrote -- and `-Wprovenance` is not about accuracy at all.
+  bool warnCast = false;
+  bool warnProvenance = false;
   // `--at [file:]line` for `pp`, `[file:]line:col` for `resolve`.
   std::string at;
 

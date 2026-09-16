@@ -17,7 +17,7 @@ struct NodeKindInfo {
   const char* name;
 };
 
-constexpr std::array<NodeKindInfo, 39> kNodeKindInfos{{
+constexpr std::array<NodeKindInfo, 40> kNodeKindInfos{{
     {SyntaxKind::File, "File"},
     {SyntaxKind::Error, "Error"},
     {SyntaxKind::FnDecl, "FnDecl"},
@@ -43,6 +43,7 @@ constexpr std::array<NodeKindInfo, 39> kNodeKindInfos{{
     {SyntaxKind::LiteralExpr, "LiteralExpr"},
     {SyntaxKind::PathExpr, "PathExpr"},
     {SyntaxKind::ParenExpr, "ParenExpr"},
+    {SyntaxKind::CastExpr, "CastExpr"},
     {SyntaxKind::PrefixExpr, "PrefixExpr"},
     {SyntaxKind::PostfixExpr, "PostfixExpr"},
     {SyntaxKind::BinaryExpr, "BinaryExpr"},

@@ -28,6 +28,7 @@
 #include "support/intern/sym_id.h"
 #include "support/span/file_id.h"
 #include "support/span/span.h"
+#include "support/typenames/type_name.h"
 
 namespace minc::resolve {
 namespace {
@@ -126,14 +127,39 @@ private:
   // compilation stops before any stage can act on the name, and nothing needs to
   // pretend the declaration is usable.
   void reportReservedName(support::Span nameSpan, support::SymId name) {
-    if (name == support::kInvalidSym || !builtins::isReservedPrefix(nameOf(name))) {
+    if (name == support::kInvalidSym) {
       return;
     }
-    errors_.push_back(ResolveError{nameSpan,
-                                   "'" + nameOf(name) + "' is a name the compiler keeps for itself",
-                                   ResolveErrorCode::ReservedIdentifier,
-                                   {},
-                                   {}});
+    // A `std::string` and not a view of one: `nameOf` returns by value, and a view
+    // of its result would dangle at the end of the full expression (`-Wdangling-gsl`,
+    // which is how this was written the first time).
+    const std::string spelling = nameOf(name);
+    // **A type name is reserved**, and this is the half of `(T)x` that is not
+    // about casts at all: the C spelling is decidable without a symbol table
+    // *because* a reserved word can never be a declaration, so the parser may
+    // read a run of type names inside parentheses as a type and be right
+    // (`casts.md`, decision 4). The sentence says so, because "reserved" alone
+    // would leave the reader looking for a reason.
+    if (support::isTypeNameWord(spelling)) {
+      errors_.push_back(
+          ResolveError{nameSpan,
+                       "'" + std::string(spelling) +
+                           "' names a type, and a type name is reserved: it is what makes "
+                           "`(T)x` a cast rather than a call -- choose another name",
+                       ResolveErrorCode::ReservedIdentifier,
+                       {},
+                       {}});
+      return;
+    }
+    if (!builtins::isReservedPrefix(spelling)) {
+      return;
+    }
+    errors_.push_back(
+        ResolveError{nameSpan,
+                     "'" + std::string(spelling) + "' is a name the compiler keeps for itself",
+                     ResolveErrorCode::ReservedIdentifier,
+                     {},
+                     {}});
   }
 
   [[nodiscard]] DefId insertDef(ScopeId scopeId, Namespace ns, support::SymId name,
@@ -595,7 +621,19 @@ private:
     // Not found. One error and at most one note; the note points at the
     // declaration the reader probably meant, which is more useful than the same
     // words on the line that is already wrong.
-    const std::string message = "unknown name '" + nameOf(self.name) + "'";
+    //
+    // A *type name* is the one case with a better sentence than "unknown": it is
+    // not a name that could be declared and was not, it is a name that may not be
+    // declared at all, so the mistake is using a type where a value belongs --
+    // `x = (i32);` -- and the fix is the cast the reader was reaching for.
+    std::string message;
+    if (support::isTypeNameWord(nameOf(self.name))) {
+      const std::string spelling(nameOf(self.name));
+      message = "'" + spelling + "' names a type, and a type is not a value; write a cast -- `(" +
+                spelling + ")value` or `value as " + spelling + "`";
+    } else {
+      message = "unknown name '" + std::string(nameOf(self.name)) + "'";
+    }
     const support::SymId suggestion =
         suggestName(map_, scope, Namespace::Ordinary, self.name, symbols_,
                     options_.maxSuggestionCandidates, options_.maxSuggestionDistance);

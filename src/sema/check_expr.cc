@@ -198,6 +198,9 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
     info = out_.typed.infoOf(operands.front());
     break;
   }
+  case ast::NodeKind::CastExpr:
+    type = checkCast(expr, info);
+    break;
   case ast::NodeKind::PrefixExpr:
     type = checkPrefix(expr, info);
     break;
@@ -243,6 +246,58 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
   return adapted;
 }
 
+TypeId Checker::typeOfSuffix(const support::LiteralSuffix& suffix) {
+  const TargetInfo& target = types_.target();
+  switch (suffix.type) {
+  case support::SuffixType::I8:
+    return types_.signedInt(8);
+  case support::SuffixType::I16:
+    return types_.signedInt(16);
+  case support::SuffixType::I32:
+    return types_.signedInt(32);
+  case support::SuffixType::I64:
+    return types_.signedInt(64);
+  case support::SuffixType::I128:
+    return types_.signedInt(128);
+  case support::SuffixType::Isize:
+    return types_.signedInt(target.pointerBits);
+  case support::SuffixType::U8:
+    return types_.unsignedInt(8);
+  case support::SuffixType::U16:
+    return types_.unsignedInt(16);
+  case support::SuffixType::U32:
+    return types_.unsignedInt(32);
+  case support::SuffixType::U64:
+    return types_.unsignedInt(64);
+  case support::SuffixType::U128:
+    return types_.unsignedInt(128);
+  case support::SuffixType::Usize:
+    return types_.unsignedInt(target.pointerBits);
+  case support::SuffixType::F32:
+    return types_.floatOf(32);
+  case support::SuffixType::F64:
+    return types_.floatOf(64);
+  case support::SuffixType::F80:
+    return types_.floatOf(80);
+  case support::SuffixType::F128:
+    return types_.floatOf(128);
+  // The four C spellings whose meaning is the *target's*. `10L` is `i64` on
+  // Linux and `i32` on Windows, which is C's LP64/LLP64 story and the reason
+  // `--target` exists (`casts.md`, *Cross-platform*).
+  case support::SuffixType::CUnsignedInt:
+    return types_.unsignedInt(target.intBits);
+  case support::SuffixType::CLong:
+    return types_.signedInt(target.longBits);
+  case support::SuffixType::CUnsignedLong:
+    return types_.unsignedInt(target.longBits);
+  case support::SuffixType::CLongDouble:
+    return types_.floatOf(target.longDoubleBits);
+  case support::SuffixType::None:
+    break;
+  }
+  return kTypeError;
+}
+
 TypeId Checker::checkLiteral(ast::AstId expr, TypeId expected, ExprInfo& info) {
   const ast::AstId token = tokenOf(expr);
   if (!token.valid()) {
@@ -256,6 +311,33 @@ TypeId Checker::checkLiteral(ast::AstId expr, TypeId expected, ExprInfo& info) {
     const support::IntegerLiteral parsed =
         support::parseIntegerLiteral(text, support::IntegerBaseRule::DecimalLeadingZero);
     info.isConstant = true;
+    // A suffix **types** the literal where it is written, which is the whole
+    // point of the third form of a cast: `let x = 10u8;` is a `u8` and not an
+    // `i32` that happens to fit, while `let y = 10;` stays deferred. A suffix the
+    // language knows and refuses (`10wb`) is named here, with the sentence the
+    // table wrote.
+    if (parsed.suffix.refused()) {
+      error(expr, SemaErrorCode::CastInvalid, parsed.suffix.message);
+      info.isConstant = false;
+      return kTypeError;
+    }
+    if (parsed.suffix.typed()) {
+      const TypeId named = typeOfSuffix(parsed.suffix);
+      if (parsed.ok && !types_.isError(named) && !fitsIn(types_, named, parsed.value)) {
+        // `300u8`: the same code and the same shape as `let x: u8 = 300;`,
+        // because it is the same mistake -- a literal that does not fit the type
+        // it was given, with the type now written in the literal itself.
+        error(expr, SemaErrorCode::LiteralOutOfRange,
+              "`" + std::string(text) + "` does not fit `" + types_.spelling(named) + "`");
+        info.isConstant = false;
+        return kTypeError;
+      }
+      if (parsed.ok) {
+        info.hasIntValue = true;
+        info.value = parsed.value;
+      }
+      return named;
+    }
     if (parsed.ok) {
       info.hasIntValue = true;
       info.value = parsed.value;
@@ -291,12 +373,22 @@ TypeId Checker::checkLiteral(ast::AstId expr, TypeId expected, ExprInfo& info) {
     info.isConstant = false;
     return kTypeIntLiteral;
   }
-  case kTokFloatLiteral:
+  case kTokFloatLiteral: {
     // A float literal has a *type* but deliberately no folded value: a
     // hand-rolled float parser whose rounding this stage cannot verify is a
     // correctness risk, and nothing sema checks needs the number.
     info.isConstant = true;
+    const support::FloatLiteral parsed = support::readFloatLiteral(text);
+    if (parsed.suffix.refused()) {
+      error(expr, SemaErrorCode::CastInvalid, parsed.suffix.message);
+      info.isConstant = false;
+      return kTypeError;
+    }
+    if (parsed.suffix.typed()) {
+      return typeOfSuffix(parsed.suffix);
+    }
     return kTypeFloatLiteral;
+  }
   case kTokCharLiteral: {
     const support::IntegerLiteral parsed = support::parseCharLiteral(text);
     info.isConstant = true;
@@ -378,6 +470,90 @@ bool Checker::checkModifiable(ast::AstId operand, TypeId type, ast::AstId at, Se
     error(at, code, "this expression is not a place a value can be stored" + std::string(what));
   }
   return false;
+}
+
+ast::AstId Checker::castOperand(ast::AstId expr) const {
+  for (const ast::AstId child : operandsOf(expr)) {
+    if (kindOf(child) != ast::NodeKind::Type) {
+      return child;
+    }
+  }
+  return ast::AstId{};
+}
+
+TypeId Checker::checkCast(ast::AstId expr, ExprInfo& info) {
+  const ast::AstId typeNode = childOf(expr, ast::NodeKind::Type);
+  const ast::AstId operand = castOperand(expr);
+  if (!operand.valid()) {
+    // `(i32)` with no operand: the parser only builds a cast when an expression
+    // follows the `)`, so this is a tree with nothing to convert -- the refusal
+    // the parser already gave is the one sentence for it.
+    return kTypeError;
+  }
+  const TypeId to = typeNode.valid() ? resolveTypeNode(typeNode) : kTypeError;
+
+  // The operand is typed **by itself**, with no expectation. A cast is exactly
+  // where the context stops deciding -- that is what crossing a class means --
+  // and passing `to` down would ask an integer literal to *be* a float, which
+  // `decideAt` deliberately refuses (`let x: f64 = 1;`). `1 as f64` is therefore
+  // an `i32` literal with one well-defined rounding on top of it, and
+  // `1e30 as i32` is an `f64` with the guard every runtime conversion has.
+  (void)checkExpr(operand, kInvalidType);
+  const TypeId from = decideAt(operand, kInvalidType);
+  const ExprInfo& operandFacts = out_.typed.infoOf(operand);
+
+  const CastResult cast = castResult(types_, from, to);
+  if (!cast.ok) {
+    // An empty message means the operand was already reported (the poison): one
+    // mistake, one diagnostic.
+    if (!cast.message.empty()) {
+      error(expr, SemaErrorCode::CastInvalid, cast.message);
+    }
+    info.isConstant = false;
+    return kTypeError;
+  }
+
+  // The pair is *published*, which is what makes the lowering materialise it
+  // without knowing what a cast is (`casts.md`, decision 1).
+  recordCast(expr, 0, operand, from, to);
+
+  if (options_.warnCast && cast.loss != CastLoss::None) {
+    warning(expr, SemaErrorCode::CastLoses,
+            "this cast from `" + types_.spelling(from) + "` to `" + types_.spelling(to) +
+                "` may lose something: " + lossPhrase(cast.loss));
+  }
+
+  // The two *named* operations of `memory.md`, counted where they are written.
+  // The text uses the model's own words, so a reader who meets one here can read
+  // the rule there (`casts.md`, *Pointer and integer*); the loss a cast reports is
+  // a separate question and is not this warning's business.
+  if (options_.warnProvenance &&
+      (cast.kind == CastKind::PointerToInteger || cast.kind == CastKind::IntegerToPointer)) {
+    warning(expr, SemaErrorCode::ProvenanceCast,
+            cast.kind == CastKind::PointerToInteger
+                ? "this cast is `expose`: the address in `" + types_.spelling(from) +
+                      "` becomes an integer, and what it addresses afterwards is every "
+                      "allocation whose provenance has been exposed"
+                : "this cast is `with_exposed_provenance`: `" + types_.spelling(from) +
+                      "` becomes an address, and an access through it is defined only for "
+                      "an allocation whose provenance has been exposed");
+  }
+
+  // The facts. The value is the *operand's* converted, so the cast is constant
+  // exactly when its operand is; and it keeps an integer value only where the
+  // 64-bit core can hold the result, which is the same rule every other folded
+  // value follows.
+  info.isConstant = operandFacts.isConstant;
+  info.hasIntValue = false;
+  if (operandFacts.isConstant && operandFacts.hasIntValue) {
+    const std::optional<support::ConstInt> folded =
+        foldIntCast(types_, from, to, operandFacts.value);
+    if (folded.has_value()) {
+      info.hasIntValue = true;
+      info.value = *folded;
+    }
+  }
+  return to;
 }
 
 TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {

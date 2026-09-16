@@ -62,6 +62,32 @@ void Checker::recordConversion(ast::AstId consumer, std::uint8_t operand, ast::A
   out_.typed.addCoercion(Coercion{consumer, operand, node, from, to});
 }
 
+void Checker::recordCast(ast::AstId consumer, std::uint8_t operand, ast::AstId node, TypeId from,
+                         TypeId to) {
+  if (!consumer.valid() || !node.valid() || !from.valid() || !to.valid()) {
+    return;
+  }
+  // `recordConversion`'s three conditions, minus the one this exists for. A
+  // *cast* is the source's statement about a pair, so `convertible` -- the rule
+  // for conversions the language performs by itself -- is deliberately not asked:
+  // `1 as f64` and `p as usize` are exactly the pairs it refuses, and refusing to
+  // publish them is what would leave the lowering with no conversion to
+  // materialise (`casts.md`, decision 1).
+  if (types_.isError(from) || types_.isError(to)) {
+    return;
+  }
+  if (types_.isDeferred(from) || types_.isDeferred(to)) {
+    return;
+  }
+  if (from == to) {
+    // A cast that changes nothing is not a conversion. Decision 14: the record
+    // says "this value is already this type", and the lowering emits nothing for
+    // it -- which is what keeps an explicit cast free.
+    return;
+  }
+  out_.typed.addCoercion(Coercion{consumer, operand, node, from, to});
+}
+
 TypeId Checker::decideAt(ast::AstId node, TypeId decided) {
   if (!node.valid()) {
     return kTypeError;

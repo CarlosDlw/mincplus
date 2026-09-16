@@ -90,6 +90,14 @@ constexpr CodeCase kCases[] = {
     {"nested braces inside an initializer",
      "fn i32 main() { let a: [2][3]i16 = {{1, 2, 3}, {4, 5, 6}}; return 0; }\n",
      ParseErrorCode::BraceWithoutType},
+    // A literal written against a name. The scanner claims a suffix only when it
+    // is one the language knows (`suffix.h`), so `10z` arrives as two tokens --
+    // and two tokens with nothing between them is the mistake, not a missing
+    // operator. `10 z` is *not* this code: the space is the difference.
+    {"a literal written against a name", "fn i32 main() { return 10z; }\n",
+     ParseErrorCode::InvalidLiteralSuffix},
+    {"a character literal with a suffix", "fn i32 main() { return 'a'u8; }\n",
+     ParseErrorCode::InvalidLiteralSuffix},
 };
 
 [[nodiscard]] std::string deepInput() {

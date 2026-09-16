@@ -350,7 +350,7 @@ and the diagnostic is "a type is not a value; did you mean to cast?" rather than
 | `src/sema/check_expr.cc` | `checkCast`: the matrix, the constant rule, the refusal sentences, and the record | The checker decides and records; it does not emit |
 | `include/lex/token_kind.h`, `src/resolve/*` | the reserved set (`i8`…`usize`, `bool`, `char`, `str`, `void`, the C spellings) shares the `__builtin_*` machinery | One predicate, two callers — the shape the builtin reserved names already use |
 | `include/sema/sema_error.h` | `CastInvalid`, `CastOutOfRange` | Named codes, in the enumeration the tests sweep |
-| `src/ir/types.cc`, `src/ir/expr.cc` | the arms the record newly reaches (`sitofp`, `fptosi`, `ptrtoint`, `inttoptr`, `icmp ne 0`), the **float → integer guard**, and nothing else | It materialises the record; the guard is new because the model forbids poison |
+| `src/ir/types.cc`, `src/ir/expr.cc` | the arms the record newly reaches (`sitofp`, `uitofp`, `fptosi`, `ptrtoint`, `inttoptr`, `icmp ne 0`), the **float → integer guard**, and `bool → float` as `uitofp i1`; a `!` operand converts to a **poison of the consumer's type** with no instruction, and nothing else | It materialises the record; the guard is new because the model forbids poison, and the `!` arm is `never.md`'s rule reaching a value position — one lookup of the record, so no path can be forgotten |
 | `src/ir/invariants.cc` | the row: no `fptosi`/`fptoui` without a range test | The assumption list is closed and scanned, and this is a new assumption-shaped emission |
 | `src/driver` | `-Wcast` (opt-in) and the `-Wprovenance` text | Both are flags over decisions the checker made |
 | `docs/architecture.md`, `docs/roadmap.md`, the site | the item, and the surface page | The record is linked from the two places a reader starts |
@@ -383,10 +383,45 @@ Each step is a commit that passes the gates on its own; steps 1–4 are the surf
 
 ## Tests
 
-- **The matrix, exhaustively.** `cast_test.cc` walks every `(from, to)` pair the
-  matrix accepts and asserts the recorded `CastKind` and the emitted instruction —
-  and every pair it refuses, asserting the code and the sentence. A pair that has
-  no test fails the walk.
+- **The universe, in one place.** `tests/unit/casts/universe.h` holds every type
+  the language has today (the `iN`/`uN`/`fN` families, `bool`, `char`, `str`,
+  `void`, `!`, four pointers, an array, a slice, and the two deferred literals),
+  the name→`TypeId` lookup, and the "which instruction does this pair need" table.
+  Two suites read it, so they cannot drift into testing different alphabets. The C
+  spellings are deliberately absent: they resolve to the *same* `TypeId`s, and a row
+  per spelling would test nothing a second time.
+- **The whole product, every pair.** `sema/cast_test.cc` walks *every* ordered
+  pair of that universe — 676 of them — and asserts the properties a matrix of this
+  shape has to have whatever its rows say: `ok` and `CastKind` agree; an accepted
+  pair carries no message and a refusal carries one; **a cast never refuses a pair
+  of decided types that the language converts by itself** (`convertible ⇒
+  castable`, the direction that would otherwise let a conversion exist that no
+  reader can spell — a deferred literal is the state of a literal and not a type a
+  value has, so it is outside the question and `checkCast` decides it before
+  asking the matrix); a cast to the
+  same type is the identity and loses nothing; and the loss reported is the loss the
+  *kind* has and no other, so `-Wcast` cannot lie about what happened to a value.
+  The count of accepted pairs is pinned, so a pair that stops being answered is a
+  line in a diff rather than a suite that quietly covers less.
+- **The rows, pinned.** The hand-written table beside it names the pair, the kind
+  and the loss for the cases a reader would ask about one by one — including the
+  four refusals a reader *will* attempt (an aggregate, `void`, a `bool` from a float,
+  a deferred literal).
+- **Every accepted pair, in the module.** `ir/cast_test.cc` writes every pair the
+  matrix accepts into one program, each as a function taking the source as a
+  **parameter** — a run-time value, so nothing folds and no pair can pass by having
+  been decided as a constant — and then reads the module back: the instruction the
+  kind calls for, and no other, for each function. The trap is counted against the
+  number of guarded pairs, which is how a site that lost its guard is caught even
+  though LLVM would still verify the module.
+- **Nesting, the bottom type, and constants, in one build.** `ir/cast_test.cc`
+  lowers `((u8)((x as i64) as u32)) as u8` and the int→float→int chain beside it,
+  and asserts each step is the instruction its own pair asks for — nesting adds no
+  instruction of its own. In the same module: a `!` operand in a value position
+  (implicitly and through a cast) becomes a poison of the consumer's type with no
+  instruction, and a function whose return type is `!` ends in `ret void` — never a
+  `ret` fed the `void`-typed call its body ends in, which is a module the verifier
+  rejects.
 - **The row sweep.** `invariants_test.cc` gains the unguarded-`fptosi` input, so
   the new row is tripped like the twelve beside it.
 - **The guard, both builds.** A program that casts an out-of-range float traps in
@@ -490,6 +525,17 @@ Each step is a commit that passes the gates on its own; steps 1–4 are the surf
   their own roadmap item; a cast in this record never changes a qualifier.
 - **User-defined conversions** (a `struct` with an `as`): they arrive with
   operator overloading, which is not designed.
+- **A cast as a file-scope constant expression.** `const a: u8 = (u8)300;` folds
+  (the checker folds integer pairs with the same core `#if` uses), and so does a
+  cast of an earlier constant (`const b: i32 = a as i32;`). But `const half: f64 =
+  (f64)2;` and `const n: i32 = (i32)1.5;` are refused with
+  `sema-global-not-constant`: the file-scope walk folds today reads a *literal* or a
+  *name*, and a cast involving a float has no value in the 64-bit core the checker
+  folds with. The refusal is honest and names the shape ("a float value is read from
+  the literal that spells it", so write `2.0`), and the fix is its own item: teach the
+  initializer walk to carry a cast the way it carries a literal, and fold it in the
+  lowering with `llvm::ConstantFoldCastInstruction` — the machinery the global path
+  already uses for a conversion between two integer types.
 - **`sizeof`/`alignof` in a cast expression** (`x as sizeof(...)`): a type name is
   what follows `as`, and the grammar family that reads a type in a value position
   is its own item.

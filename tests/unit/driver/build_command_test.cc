@@ -650,6 +650,58 @@ TEST(BuildCommandTest, ATrapStopsTheProgramWhereItStands) {
       << "the driver did not report the death: " << executed.err;
 }
 
+TEST(BuildCommandTest, ACastOfAValueThatCannotFitTrapsAtBothOptimizationLevels) {
+  // `casts.md`: float → integer is *defined as a trap* on a value the destination
+  // cannot hold, and a check the optimizer can delete is not a check -- so the
+  // program runs at both ends of the pipeline. The value is computed rather than
+  // written (`1.0e30` in a binding, added to), because a literal operand is folded
+  // at compile time and would prove nothing about the guard that is emitted.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  const std::string source = "fn i32 main()\n"
+                             "{\n"
+                             "  let x: f64 = 1.0e30;\n"
+                             "  let y: f64 = x + 1.0;\n"
+                             "  let n: i32 = y as i32;\n"
+                             "  return n;\n"
+                             "}\n";
+  for (const auto level : {backend::OptLevel::O0, backend::OptLevel::O2}) {
+    const std::string path =
+        scratch.write("cast_" + std::to_string(static_cast<int>(level)) + ".mx", source);
+    BuildRequest request = requestFor(path);
+    request.run = true;
+    request.level = level;
+    const Outcome executed = run(request, /*execute=*/true);
+    if (executed.skippedForNoLinker()) {
+      GTEST_SKIP() << "no C linker driver on PATH";
+    }
+    // Not a return, and not a status the program chose: the trap.
+    EXPECT_NE(executed.code, 0) << executed.err;
+    EXPECT_NE(executed.err.find("terminated abnormally"), std::string::npos) << executed.err;
+  }
+}
+
+TEST(BuildCommandTest, ACastOfAConstantThatCannotFitIsRefusedAndWritesNoProgram) {
+  // The other half of the same rule, and the reason it is a *diagnostic*: the
+  // compiler can see this value, so the program could only ever trap -- which
+  // makes it a mistake about the source and not a property of the run.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  const std::string path =
+      scratch.write("cast_const.mx", "fn i32 main() { let n = 1.0e30 as i32; return n; }\n");
+  BuildRequest request = requestFor(path);
+  request.output = scratch.file("cast_const.out");
+  const Outcome built = run(request, /*execute=*/false);
+  EXPECT_NE(built.code, 0);
+  EXPECT_NE(built.err.find("ir-cast-out-of-range"), std::string::npos) << built.err;
+  // No artifact: a refusal that still wrote an executable would leave the previous
+  // one in place for a runner to pick up.
+  std::ifstream produced(request.output, std::ios::binary);
+  EXPECT_FALSE(produced.good()) << request.output;
+}
+
 TEST(BuildCommandTest, RunWithDebugInformationStillReturnsTheProgramsStatus) {
   // `-g` composes with `run`: it is a normal binary with debug information in it,
   // and the exit status still belongs to the program.

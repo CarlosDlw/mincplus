@@ -110,17 +110,20 @@ TEST(IrInvariantsTest, EveryAssumptionRowHasAName) {
 
 // The program every tripwire starts from: a file-scope object (for the object
 // rows), a function with parameters (for the attribute row), a `getelementptr`, an
-// integer `add`, a `fadd`, and a guarded `sdiv` (for the guard row). One program,
-// so a row's mutation is one line rather than a module written from scratch.
-constexpr std::string_view kTripwireProgram = "const SIZE: i32 = 8;\n"
-                                              "fn i32 mix(a: i32, b: i32, p: *i32)\n"
-                                              "{\n"
-                                              "  let x: f32 = 1.5;\n"
-                                              "  let y: f32 = x + x;\n"
-                                              "  *p = a;\n"
-                                              "  return a + b + (a / b) + p[1] + SIZE;\n"
-                                              "}\n"
-                                              "fn i32 main() { return 0; }\n";
+// integer `add`, a `fadd`, and one guarded operation per guard row -- a `sdiv` and
+// a float-to-integer conversion of a value that is *not* a constant, which is the
+// only shape the second one has. One program, so a row's mutation is one line
+// rather than a module written from scratch.
+constexpr std::string_view kTripwireProgram =
+    "const SIZE: i32 = 8;\n"
+    "fn i32 mix(a: i32, b: i32, p: *i32)\n"
+    "{\n"
+    "  let x: f32 = 1.5;\n"
+    "  let y: f32 = x + x;\n"
+    "  *p = a;\n"
+    "  return a + b + (a / b) + p[1] + SIZE + (y as i32);\n"
+    "}\n"
+    "fn i32 main() { return 0; }\n";
 
 // A mutation of that module which states something the language did not.
 using Mutation = void (*)(llvm::Module&);
@@ -242,6 +245,26 @@ void tripUnguardedDivision(llvm::Module& module) {
   }
 }
 
+void tripUnguardedFloatToInt(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  auto* conversion = function == nullptr ? nullptr
+                                         : llvm::dyn_cast_or_null<llvm::CastInst>(
+                                               firstOfOpcode(*function, llvm::Instruction::FPToSI));
+  if (conversion == nullptr || conversion->getParent() == nullptr) {
+    return;
+  }
+  llvm::BasicBlock* predecessor = conversion->getParent()->getUniquePredecessor();
+  auto* branch = predecessor == nullptr
+                     ? nullptr
+                     : llvm::dyn_cast_or_null<llvm::BranchInst>(predecessor->getTerminator());
+  if (branch != nullptr && branch->isConditional()) {
+    // The same mutation the division row uses, for the same reason: the test is
+    // still there and the conversion is no longer *reached through* it, which is
+    // exactly the code the guard is not.
+    branch->setCondition(llvm::ConstantInt::getTrue(module.getContext()));
+  }
+}
+
 [[nodiscard]] const std::map<ModuleAssumption, Mutation>& tripwires() {
   static const std::map<ModuleAssumption, Mutation> table{
       {ModuleAssumption::Metadata, &tripMetadata},
@@ -253,6 +276,7 @@ void tripUnguardedDivision(llvm::Module& module) {
       {ModuleAssumption::ConstantObject, &tripConstantObject},
       {ModuleAssumption::Alignment, &tripAlignment},
       {ModuleAssumption::UnguardedDivision, &tripUnguardedDivision},
+      {ModuleAssumption::UnguardedFloatToInt, &tripUnguardedFloatToInt},
   };
   return table;
 }

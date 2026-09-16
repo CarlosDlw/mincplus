@@ -51,6 +51,12 @@ public:
   // Span of the current token, for the caret on an error.
   [[nodiscard]] virtual support::Span spanOfCurrent() const = 0;
 
+  // Span of the token `nth(n)` looks at, clamped like `nth` itself. Two tokens
+  // are *written together* when one's end is the other's start in the same file,
+  // and that is a question only the spans can answer: `10z` and `10 z` are the
+  // same two token kinds and two different programs (`casts.md`).
+  [[nodiscard]] virtual support::Span spanOf(std::uint32_t n) const = 0;
+
   // The spelling of the token `nth(n)` looks at, exactly as the source wrote it.
   //
   // The kind is what almost every rule is written against, and this exists for

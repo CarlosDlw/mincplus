@@ -1,0 +1,177 @@
+// Casts -- the conversion the **source** writes down.
+//
+// A cast is how a program crosses a class: an integer and a float do not convert
+// into each other implicitly, an address is not an integer, and a byte-wide value
+// does not quietly become a `bool`. Everything a cast may do is one table over
+// `(from, to)`, and there are exactly three ways to write one:
+//
+//   x as T        the postfix form, and the one to prefer: it chains
+//   (T)x          the C form, for people and code that speak C
+//   literal       the suffix, which *types* the literal it is written on
+//
+// The first two produce the **same node** -- same record, same instruction -- so
+// this is a choice of spelling and not a choice of meaning.
+
+// A function whose return type is `!` never gives control back, and its body may
+// end in the call that proves it -- no `return` after it, because there is no
+// "after it". Section 7 is where a value of that type is converted.
+fn ! stop()
+{
+  return stop();
+}
+
+fn i32 main() {
+  // ---------------------------------------------------------------------------
+  // 1. The suffix: a literal that already has its type.
+  // ---------------------------------------------------------------------------
+  //
+  // The suffix is not a cast at all, it is the spelling of the value: `10u8` is a
+  // `u8` and no context has to decide one. That is what makes it usable in a
+  // constant expression, and why `300u8` is refused at the literal rather than at
+  // some later conversion.
+  let small = 10u8;       // u8
+  let mask = 0xFFusize;   // the widest unsigned, spelled in hex
+  let ratio = 1.5f32;     // f32, and not f64 that a context would narrow
+  let bits = 1.0e3L;      // `long double` -- `f80` where the target has one
+  let plain = 300;        // still deferred: `i32` here, because nothing decided
+
+  // A suffix on an *integer* spelling can name a float: `12f` is `12.0f32`.
+  let twelve = 12f;
+
+  // Every spelling C has is here (`u`, `l`, `ll`, `L`, in any order and either
+  // case), plus the language's own names (`10u8`, `0xFFusize`).
+  //
+  //   let bad = 300u8;   the suffix is the type, and `300` is not a `u8`
+  //   let b2 = 10wb;     C23's bit-precise suffix has no type here: use `i64`
+
+  // ---------------------------------------------------------------------------
+  // 2. `as`, the postfix form.
+  // ---------------------------------------------------------------------------
+  //
+  // `as` binds tighter than every binary operator and looser than a call, so it
+  // chains left to right and needs no parentheses around its operand.
+  let wide: i64 = small as i64;         // a `u8` zero-extended: 10
+  let back: u8 = wide as u8;            // and truncated: 10
+  let signed_bit: i8 = back as i8;      // the same bits, read as signed
+  let as_float: f64 = wide as f64;      // 10.0, exactly
+
+  // `bool` is not an integer in this language, so its conversions are written out
+  // one at a time instead of falling out of a promotion -- and each of the three
+  // has a *definition*, which is why none of them is refused: `true` is `1`, and
+  // `1.0`, and any integer is `x != 0`.
+  let as_int: i32 = true as i32;         // 1
+  let flag: bool = signed_bit as bool;   // `signed_bit != 0`
+  let as_real: f32 = true as f32;        // `1.0`: `uitofp i1`, not a claim about a sign
+  let non_zero: bool = 3 as bool;        // `3 != 0`, so `true`
+  let rounded: f32 = 0.1 as f32;        // the same value with 24 bits of mantissa
+
+  // Chaining, which is the whole reason the postfix form is the one to reach for.
+  let chained: i64 = small as i16 as i64;
+
+  // An address and an integer are two different things, and the language names
+  // both directions instead of hiding one behind the other: `expose` and
+  // `with_exposed_provenance`. `-Wprovenance` names every site.
+  let counter: i32 = 1;
+  let address: *i32 = &counter;
+  let number: usize = address as usize;  // expose(address)
+  let again: *i32 = number as *i32;      // with_exposed_provenance(number)
+  *again = 2;                            // the access is the one the model allows
+
+  // ---------------------------------------------------------------------------
+  // 3. `(T)x`, the same cast written the other way round.
+  // ---------------------------------------------------------------------------
+  //
+  // Written without a space around the type, because `(i32) - x` is a subtraction
+  // of a parenthesized expression and `(i32)-x` is a negation. The parentheses
+  // are the C form's only difference from `as`.
+  let c_style: i64 = (i64)small;
+  let c_back: u8 = (u8)c_style;
+  let c_chained: i64 = (i64)(i16)small;
+
+  // ---------------------------------------------------------------------------
+  // 4. What a cast may lose, named.
+  // ---------------------------------------------------------------------------
+  //
+  // `-Wcast` reports a cast that may lose something, and the message says which:
+  // truncation (`bits are dropped`), sign (`the sign changes meaning`), precision
+  // (`the value is rounded`) and range (`an out-of-range value traps`). It is off
+  // by default, because an explicit cast is the source saying it knows.
+  let wide_again: i64 = 300;
+  let truncated: i8 = wide_again as i8;  // bits are dropped: 44
+  let unsigned_view: u8 = -1 as i8 as u8; // the sign changes meaning: 255
+
+  // ---------------------------------------------------------------------------
+  // 5. The one conversion with a precondition: float -> integer.
+  // ---------------------------------------------------------------------------
+  //
+  // The value is in the destination's range, or the program does not run. It is
+  // not undefined behaviour (LLVM's `fptosi` on an out-of-range operand is
+  // poison, and this language has no poison) and it is not a wrapped or a
+  // saturated value (a wrong number that propagates); it is a **trap**, exactly
+  // as division by zero already is, and the guard is emitted at every conversion
+  // a constant does not decide.
+  //
+  // The comparison is on the **value** and not on its truncation, so `-0.5` is
+  // not a `u8` -- and the bounds are exact powers of two, which is the only bound
+  // every float format can hold without rounding the check itself.
+  let measured: f64 = 41.9;
+  let count: i32 = measured as i32;      // 41, truncated toward zero
+  let negative: i32 = -7.5 as i32;       // -7
+
+  // A constant the destination can hold is folded and emits nothing; one it
+  // cannot is a *diagnostic*, because the compiler can see the value and a
+  // program that could only trap is a mistake about the source:
+  //
+  //   let n = 1e30 as i32;      refused: no `i32` holds it
+  //   let n = (-1.0) as u8;     refused: the floor of a `u8` is zero
+
+  // ---------------------------------------------------------------------------
+  // 6. Refusals, each with the sentence that replaces it.
+  // ---------------------------------------------------------------------------
+  //
+  // Nothing here compiles, and each line is here because the refusal is the
+  // feature -- a cast that says only "no" is a cast that gets worked around:
+  //
+  //   table as *i32      an array is not a pointer and does not decay:
+  //                      `&table[0]` is the address, and the length is yours
+  //   view as *i32       a view is a pointer *and* a length: `&view[0]` is the
+  //                      address of its first element
+  //   p as []i32         there is no view of a pointer without a length
+  //   f as bool          NaN is neither true nor false: write `f != 0.0`
+  //   n as void          `void` is the absence of a value, not a type to cast to
+  //   "abc" as u8        `str` is a pointer: `("abc" as *u8) as u8` if the byte
+  //                      is what was meant
+  //   (i32)              a type is not a value; the parser says so and asks
+  //                      whether a cast was meant
+  //
+  // And a type name is **reserved**, which is the half of `(T)x` that is not
+  // about casts at all: `let i32 = 5;` is refused, because a reserved word can
+  // never be a declaration -- that is what lets the parser read a run of type
+  // names inside parentheses as a type and be right, with no symbol table.
+
+  // ---------------------------------------------------------------------------
+  // 7. The bottom type: a conversion that is *vacuous*.
+  // ---------------------------------------------------------------------------
+  //
+  // `!` is the type of an expression that never produces a value, so converting
+  // one is not a conversion at all: there is nothing to convert, and the
+  // consumer's type is answered with a value the program can never reach. No
+  // instruction is emitted, and the opposite direction is refused -- a value that
+  // is not a `!` cannot become one, and a type with no values cannot be arrived
+  // at. `never.md` states both rules; here is where they meet a cast.
+
+  return count + truncated + (chained as i32) + (c_chained as i32) + (twelve as i32) +
+         (rounded as i32) + (signed_bit as i32) + (flag as i32) + negative +
+         (mask as i32) + (ratio as i32) + (plain as i32) + (bits as i32) +
+         (unsigned_view as i32) + (as_float as i32) + (back as i32) +
+         (as_int as i32) + (as_real as i32) + (non_zero as i32);
+}
+
+// A `!` value in a value position, which is the case a reader expects to be
+// refused and is not: `stop()` never comes back, so there is every `i32` it will
+// fail to produce, and nothing after it can read one. The cast spelling
+// (`stop() as i32`) is the same node and the same conversion.
+fn i32 never_returns()
+{
+  let value: i32 = stop();
+}

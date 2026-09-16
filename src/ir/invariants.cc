@@ -47,7 +47,7 @@ namespace {
 // same reason.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' tables.
-constexpr std::array<ModuleAssumptionInfo, 9> kModuleAssumptionInfos{{
+constexpr std::array<ModuleAssumptionInfo, 10> kModuleAssumptionInfos{{
     {ModuleAssumption::Metadata, "metadata", IRDiagnosticCode::Assumption},
     {ModuleAssumption::FunctionAttribute, "function-attribute", IRDiagnosticCode::Assumption},
     {ModuleAssumption::Inbounds, "inbounds", IRDiagnosticCode::Assumption},
@@ -57,6 +57,8 @@ constexpr std::array<ModuleAssumptionInfo, 9> kModuleAssumptionInfos{{
     {ModuleAssumption::ConstantObject, "constant-object", IRDiagnosticCode::Assumption},
     {ModuleAssumption::Alignment, "alignment", IRDiagnosticCode::Alignment},
     {ModuleAssumption::UnguardedDivision, "unguarded-division", IRDiagnosticCode::UnguardedOp},
+    {ModuleAssumption::UnguardedFloatToInt, "unguarded-float-to-int",
+     IRDiagnosticCode::UnguardedOp},
 }};
 // NOLINTEND(readability-identifier-naming)
 
@@ -148,22 +150,25 @@ void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function&
   }
 }
 
-// Does the condition tree of a branch test `divisor`? The guard `checkedDiv`
-// emits is an `icmp eq divisor, 0` (or a `or` of that with the `INT_MIN / -1`
-// test), so a division whose divisor is never compared is one that skipped the
-// guard.
-[[nodiscard]] bool testsValue(const llvm::Value* condition, const llvm::Value* divisor, int depth) {
+// Does the condition tree of a branch test `subject`? Both guards -- `checkedDiv`
+// and `checkedFloatToInt` -- are a comparison of the *operand* against something
+// (zero, a range bound, `INT_MIN`), so an operation whose operand is never
+// compared is one that skipped its guard. Asked of the condition tree rather than
+// of the immediate comparison because a guard may combine its tests with `or`.
+[[nodiscard]] bool testsValue(const llvm::Value* condition, const llvm::Value* subject, int depth) {
   if (condition == nullptr || depth > 8) {
     return false;
   }
-  if (const auto* comparison = llvm::dyn_cast<llvm::ICmpInst>(condition)) {
-    return comparison->getOperand(0) == divisor || comparison->getOperand(1) == divisor;
+  // `CmpInst` and not `ICmpInst`: the float guard's test is an `fcmp`, and the
+  // tree walk is about operand identity, not about the comparison's type.
+  if (const auto* comparison = llvm::dyn_cast<llvm::CmpInst>(condition)) {
+    return comparison->getOperand(0) == subject || comparison->getOperand(1) == subject;
   }
   if (const auto* binary = llvm::dyn_cast<llvm::BinaryOperator>(condition)) {
     if (binary->getOpcode() == llvm::Instruction::And ||
         binary->getOpcode() == llvm::Instruction::Or) {
-      return testsValue(binary->getOperand(0), divisor, depth + 1) ||
-             testsValue(binary->getOperand(1), divisor, depth + 1);
+      return testsValue(binary->getOperand(0), subject, depth + 1) ||
+             testsValue(binary->getOperand(1), subject, depth + 1);
     }
   }
   return false;
@@ -201,6 +206,35 @@ void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function&
     return false;
   }
   return testsValue(branch->getCondition(), divisor, /*depth=*/0);
+}
+
+// Is the operand of this conversion tested before it converts? The guard
+// `checkedFloatToInt` emits is an `fcmp` of the operand against the destination's
+// two bounds, with the trap on the failing edge, and the `fptosi`/`fptoui` sits in
+// the block the passing edge enters -- so the shape is the division row's exactly.
+//
+// **No constant-operand escape**, and it is worth saying why the division row has
+// one and this does not: a constant divisor folds its own test away (`icmp eq 3,
+// 0` is `false`), and a constant divisor needs no test to be safe. A constant
+// *float* operand is not the same case: the lowering decides one instead of
+// guarding it (`checkedFloatToInt`), so the two disagreeing possibilities -- a
+// folded-away test and a value that may not fit -- are both absent, and an
+// `fptosi` over a constant in this module is somebody's hand-written instruction
+// rather than something this compiler emitted.
+[[nodiscard]] bool guardedFloatToInt(const llvm::CastInst& cast) {
+  const llvm::BasicBlock* block = cast.getParent();
+  if (block == nullptr) {
+    return false;
+  }
+  const llvm::BasicBlock* predecessor = block->getUniquePredecessor();
+  if (predecessor == nullptr) {
+    return false;
+  }
+  const auto* branch = llvm::dyn_cast<llvm::BranchInst>(predecessor->getTerminator());
+  if (branch == nullptr || !branch->isConditional()) {
+    return false;
+  }
+  return testsValue(branch->getCondition(), cast.getOperand(0), /*depth=*/0);
 }
 
 [[nodiscard]] bool isDivision(llvm::Instruction::BinaryOps opcode) {
@@ -275,6 +309,22 @@ void scanInstruction(const llvm::Instruction& instruction, const llvm::Function&
           "a division or remainder in " + where +
               " is not reached through a test of its divisor; the language defines the "
               "operation as a trap");
+    }
+  }
+
+  // The second operation with a precondition, and the same shape of test: the
+  // operand is compared against the destination's bounds, and the conversion only
+  // happens on the edge that passed. A bare one is *poison* for an operand the
+  // destination cannot hold, and a check the optimizer may delete is not a check
+  // (`casts.md`, *Float → integer*).
+  if (const auto* cast = llvm::dyn_cast<llvm::CastInst>(&instruction)) {
+    const unsigned opcode = cast->getOpcode();
+    if ((opcode == llvm::Instruction::FPToSI || opcode == llvm::Instruction::FPToUI) &&
+        !guardedFloatToInt(*cast)) {
+      add(out, IRDiagnosticCode::UnguardedOp,
+          "a float-to-integer conversion in " + where +
+              " is not reached through a test of its operand; the language defines the "
+              "conversion as a trap on a value the destination cannot hold");
     }
   }
 

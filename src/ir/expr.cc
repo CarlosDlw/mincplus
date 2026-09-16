@@ -118,6 +118,9 @@ Value Lowering::lowerExpr(ast::AstId expr) {
     result = operands.empty() ? Value{} : lowerExpr(operands.front());
     break;
   }
+  case ast::NodeKind::CastExpr:
+    result = lowerCast(expr);
+    break;
   case ast::NodeKind::PrefixExpr:
     result = lowerPrefix(expr);
     break;
@@ -226,6 +229,32 @@ Value Lowering::lowerLiteral(ast::AstId expr) {
     fatal(spanOf(expr), IRDiagnosticCode::Internal, "a literal token of an unknown kind");
     return {};
   }
+}
+
+Value Lowering::lowerCast(ast::AstId expr) {
+  // A cast is the *source's* conversion, and it was recorded at this node, so
+  // there is nothing here to decide: the operand is lowered, and the record says
+  // what the pair is. The two spellings (`x as T`, `(T)x`) are one node kind for
+  // exactly this reason -- one arm, one conversion, whatever was typed.
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  ast::AstId operand;
+  for (const ast::AstId child : operands) {
+    if (kindOf(child) != ast::NodeKind::Type) {
+      operand = child;
+      break;
+    }
+  }
+  if (!operand.valid()) {
+    return {};
+  }
+  const sema::TypeId to = typeOf(expr);
+  const Value value = lowerExpr(operand);
+  if (value.v == nullptr) {
+    return {};
+  }
+  // The cast's own span, and not the operand's: a refusal about a constant here
+  // is a statement about this conversion, and it is the node the source wrote.
+  return convert(value, to, spanOf(expr));
 }
 
 Value Lowering::lowerPath(ast::AstId expr) {
@@ -591,6 +620,16 @@ Value Lowering::lowerPrefix(ast::AstId expr) {
   const sema::TypeId result = typeOf(expr);
   switch (kind) {
   case kTokMinus:
+    // **A constant operand is negated as a value and not as an instruction.** A
+    // sign bit is exact for a float and for two's complement (`typed_ast.h`, the
+    // `negated` flag), and the fold is what keeps `-1.5 as u8` the *refusal* a
+    // value the compiler can see deserves (`casts.md`, *Float → integer*) rather
+    // than an `fsub` a guard has to test at run time. LLVM's own builder refuses
+    // to fold an FP operation and hands back a constant expression instead, which
+    // is the shape that would have made this a run-time question.
+    if (auto* constant = llvm::dyn_cast<llvm::Constant>(value.v)) {
+      return Value{negatedConstant(constant), result};
+    }
     return Value{builder_.CreateNeg(value.v, "neg"), result};
   case kTokPlus:
     return value;

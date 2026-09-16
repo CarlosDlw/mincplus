@@ -3,6 +3,8 @@
 #include "sema/convert.h"
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace minc::sema {
 namespace {
@@ -34,6 +36,62 @@ namespace {
 
 [[nodiscard]] TypeId asFloat(TypeStore& types, std::uint16_t bits) {
   return types.floatOf(bits);
+}
+
+// The width of the value an integer type holds, with `char` counted as the eight
+// bits it is (`README`, *Types*).
+//
+// `bool` is answered as **one** bit and not as the thirty-two its storage leaves
+// empty: it is not an integer type here, and the three rules that mention it are
+// written out on their own -- but this function is asked about a *range*, and a
+// range of 0/1 fits every float there is. Answering 32 would call `true as f32`
+// a loss of precision, which is a `-Wcast` sentence about a rounding that never
+// happens.
+[[nodiscard]] std::uint16_t integerWidth(const TypeStore& types, TypeId id) {
+  const Type& info = types.get(id);
+  if (info.kind == TypeKind::Bool) {
+    return 1;
+  }
+  if (info.kind == TypeKind::Char) {
+    return 8;
+  }
+  return info.bits == 0 ? 32 : info.bits;
+}
+
+[[nodiscard]] std::uint16_t floatWidth(const TypeStore& types, TypeId id) {
+  return types.get(id).bits;
+}
+
+// The bits of an integer a float's mantissa can hold exactly.
+//
+// `f32` has 24 (23 stored plus the implicit one), `f64` has 53, the x87 format
+// 64, and IEEE binary128 113. An integer wider than that converts to a *rounded*
+// float, which is the loss `-Wcast` names.
+[[nodiscard]] std::uint16_t mantissaBits(std::uint16_t floatBits) {
+  switch (floatBits) {
+  case 32:
+    return 24;
+  case 64:
+    return 53;
+  case 80:
+    return 64;
+  default:
+    return 113;
+  }
+}
+
+[[nodiscard]] CastResult refused(std::string message) {
+  CastResult result;
+  result.message = std::move(message);
+  return result;
+}
+
+[[nodiscard]] CastResult accepted(CastKind kind, CastLoss loss = CastLoss::None) {
+  CastResult result;
+  result.kind = kind;
+  result.ok = true;
+  result.loss = loss;
+  return result;
 }
 
 } // namespace
@@ -281,6 +339,279 @@ bool narrows(const TypeStore& types, TypeId from, TypeId to) {
     return false;
   }
   return isSigned(types, from) && !isSigned(types, to);
+}
+
+CastResult castResult(const TypeStore& types, TypeId from, TypeId to) {
+  if (!from.valid() || !to.valid() || types.isError(from) || types.isError(to)) {
+    // The poison spreads, and the checker said nothing about it: a second
+    // sentence here would be about a mistake the reader has already been told
+    // about, at the operand where it was written. The empty message is how the
+    // caller knows to stay quiet.
+    return CastResult{};
+  }
+  if (from == to) {
+    // A cast to the type a value already has is the absence of a conversion: it
+    // is legal, it says something (`x as i32` is how a reader writes "I know"),
+    // and it must cost nothing -- decision 14 of the record.
+    return accepted(CastKind::Identity);
+  }
+
+  const TypeKind fromKind = types.get(from).kind;
+  const TypeKind toKind = types.get(to).kind;
+  const std::string fromName(types.spelling(from));
+  const std::string toName(types.spelling(to));
+
+  // `!` is the type of an expression that never produces a value, so a cast of
+  // one is *vacuous* and not a conversion: `never.md` already ships the rule for
+  // the implicit case, and there is nothing for a cast to add. Nothing converts
+  // *into* `!`: a type that admits no values cannot be arrived at.
+  if (fromKind == TypeKind::Never) {
+    return accepted(CastKind::Identity);
+  }
+  if (toKind == TypeKind::Never) {
+    return refused("`!` is the type of an expression that never produces a value, so nothing "
+                   "converts *into* it");
+  }
+  if (fromKind == TypeKind::Void) {
+    return refused("`void` is the absence of a value, so there is nothing to convert");
+  }
+  if (toKind == TypeKind::Void) {
+    return refused("`void` is the absence of a value: a cast cannot make one -- if the value is "
+                   "unused, do not name it");
+  }
+  if (fromKind == TypeKind::Function || toKind == TypeKind::Function) {
+    // There is one exception a C reader will look for and not find, and the
+    // record names it: a function's *address* is not a function type, so a cast
+    // between the two is a cast of a pointer to a pointer, which is an identity.
+    return refused("a function type is not an object: take the address of the function first, "
+                   "and cast the pointer");
+  }
+
+  // --- aggregates -------------------------------------------------------------
+  //
+  // Each refusal names what to write instead, because a refusal that does not is
+  // a refusal that gets worked around (`casts.md`, *What is refused*).
+  if (fromKind == TypeKind::Array) {
+    return refused("an array is not a pointer and it does not decay: `&a[0]` is the address of "
+                   "its first element, and the count travels beside it");
+  }
+  if (fromKind == TypeKind::Slice) {
+    return refused("a view is a pointer *and* a length: `&s[0]` is the address of its first "
+                   "element, and the extent is the view's own business");
+  }
+  if (toKind == TypeKind::Array || toKind == TypeKind::Slice) {
+    return refused("`" + fromName + "` is not a `" + toName +
+                   "`: an array converts element by element or not at all, and a view is taken "
+                   "from an object that already has one");
+  }
+
+  const bool fromInteger = fromKind == TypeKind::Int || fromKind == TypeKind::Char;
+  const bool toInteger = toKind == TypeKind::Int || toKind == TypeKind::Char;
+  const bool fromFloat = fromKind == TypeKind::Float;
+  const bool toFloat = toKind == TypeKind::Float;
+  const bool fromAddress = fromKind == TypeKind::Pointer || fromKind == TypeKind::Str;
+  const bool toAddress = toKind == TypeKind::Pointer || toKind == TypeKind::Str;
+
+  // --- bool -------------------------------------------------------------------
+  //
+  // `bool` is not arithmetic here, so it is not reached by the integer arms: the
+  // two directions are written out, and `bool` → float is allowed for the same
+  // reason `bool` → integer is (it is a value with a definition).
+  if (fromKind == TypeKind::Bool) {
+    if (toInteger) {
+      return accepted(CastKind::BoolToInteger);
+    }
+    if (toFloat) {
+      return accepted(CastKind::IntegerToFloat);
+    }
+    if (toAddress) {
+      return refused("a `bool` is not an address: `true` and `false` name no object");
+    }
+  }
+  if (toKind == TypeKind::Bool) {
+    if (fromInteger) {
+      return accepted(CastKind::IntegerToBool);
+    }
+    if (fromFloat) {
+      // NaN is neither true nor false, which is why this is refused and not
+      // defined as `x != 0.0` (`casts.md`, decision 10).
+      return refused("NaN is neither true nor false, so a float has no `bool` to convert to: "
+                     "write `" +
+                     fromName + " != 0.0`");
+    }
+    if (fromAddress) {
+      return refused("a pointer is not a truth value: write `p != null`, which says the same "
+                     "thing and says it once");
+    }
+  }
+
+  // --- integers ---------------------------------------------------------------
+  if (fromInteger && toInteger) {
+    const std::uint16_t fromBits = integerWidth(types, from);
+    const std::uint16_t toBits = integerWidth(types, to);
+    if (toBits > fromBits) {
+      // Value-preserving: every value of a narrower integer is a value of a wider
+      // one. Two exceptions, and both are *pushes*, not different rules -- an
+      // unsigned narrower source into a signed wider target is a `zext` and the
+      // result is still a value (there is no sign to lose that was not already
+      // lost in the source's own type).
+      return accepted(CastKind::IntegerExtend);
+    }
+    if (toBits < fromBits) {
+      return accepted(CastKind::IntegerTruncate, CastLoss::Truncation);
+    }
+    // The same width: the bits *are* the value, so there is no instruction and
+    // the only thing that can change is what the bits mean. `char` and `u8` are
+    // the same type in representation, so that pair loses nothing; `i32` and
+    // `u32` are two readings of one pattern, which is what `-Wcast` names.
+    const bool fromSigned = isSigned(types, from);
+    const bool toSigned = isSigned(types, to);
+    return accepted(CastKind::Identity, fromSigned != toSigned ? CastLoss::Sign : CastLoss::None);
+  }
+
+  // --- floats -----------------------------------------------------------------
+  if (fromFloat && toFloat) {
+    if (floatWidth(types, to) > floatWidth(types, from)) {
+      return accepted(CastKind::FloatExtend);
+    }
+    return accepted(CastKind::FloatTruncate, CastLoss::Precision);
+  }
+  if (fromInteger && toFloat) {
+    // Defined and rounded to nearest, as the hardware does it. The loss is real
+    // when the integer holds values the destination's mantissa cannot: `i32`→
+    // `f32`, `i64`→`f32`/`f64`, anything→`f32` above 24 bits.
+    const bool loses = integerWidth(types, from) > mantissaBits(floatWidth(types, to));
+    return accepted(CastKind::IntegerToFloat, loses ? CastLoss::Precision : CastLoss::None);
+  }
+  if (fromFloat && toInteger) {
+    // **The guarded row.** Two losses, and both are named: the conversion
+    // truncates toward zero, and a value outside the destination's range traps
+    // rather than becoming poison (`casts.md`).
+    return accepted(CastKind::FloatToInteger, CastLoss::Range | CastLoss::Truncation);
+  }
+
+  // --- addresses --------------------------------------------------------------
+  if (fromAddress && toAddress) {
+    // Opaque pointers: a pointer cast is a type change with no instruction.
+    return accepted(CastKind::Identity);
+  }
+  if (fromAddress && toInteger) {
+    // `memory.md`'s `expose`, and it is *counted* rather than forbidden --
+    // `-Wprovenance` names every site. The loss is the address's width when the
+    // integer is narrower than the pointer.
+    const bool loses = integerWidth(types, to) < types.target().pointerBits;
+    return accepted(CastKind::PointerToInteger, loses ? CastLoss::Truncation : CastLoss::None);
+  }
+  if (fromInteger && toAddress) {
+    // `with_exposed_provenance`: permission over the allocations whose
+    // provenance has been exposed, and no other.
+    const bool loses = integerWidth(types, from) < types.target().pointerBits;
+    return accepted(CastKind::IntegerToPointer, loses ? CastLoss::Truncation : CastLoss::None);
+  }
+  if (fromFloat && toAddress) {
+    return refused("a float is not an address: expose a pointer with `p as usize` if that is "
+                   "what was meant");
+  }
+
+  // Everything else: two types with no conversion between them, written down or
+  // not. The sentence names both, because the reader has to see which pair it is.
+  return refused("`" + fromName + "` and `" + toName +
+                 "` do not convert into each other, and a cast cannot make one: a conversion "
+                 "changes a value, and these two are not two of one kind");
+}
+
+std::optional<support::ConstInt> foldIntCast(const TypeStore& types, TypeId from, TypeId to,
+                                             support::ConstInt value) {
+  const auto widthOf = [&types](TypeId id) -> std::uint16_t {
+    const TypeKind kind = types.get(id).kind;
+    if (kind == TypeKind::Bool) {
+      return 1;
+    }
+    if (kind == TypeKind::Char) {
+      return 8;
+    }
+    return types.get(id).bits;
+  };
+  const auto integerShaped = [](TypeKind kind) {
+    return kind == TypeKind::Int || kind == TypeKind::Char || kind == TypeKind::Bool;
+  };
+  const TypeKind fromKind = types.get(from).kind;
+  const TypeKind toKind = types.get(to).kind;
+  if (!integerShaped(fromKind) || !integerShaped(toKind)) {
+    return std::nullopt;
+  }
+
+  // An integer to a `bool` is `!= 0`, which is not a truncation: `2 as bool` is
+  // `true` and a bit test would call it false. `bool` is not an integer type
+  // here, so the one row that is not arithmetic is written out.
+  if (toKind == TypeKind::Bool) {
+    return support::ConstInt{value.bits != 0 ? 1U : 0U, false};
+  }
+
+  const std::uint16_t fromBits = widthOf(from);
+  const std::uint16_t toBits = widthOf(to);
+  const bool fromSigned = fromKind == TypeKind::Bool ? false : isSigned(types, from);
+  const bool toSigned = toKind == TypeKind::Bool ? false : isSigned(types, to);
+
+  // The source pattern, and then the *source's* extension to 64 bits: a signed
+  // `-1` is `i32` is sixteen ones at 32 bits and must still be sixteen ones at
+  // the point the target width reads it. Sign-extending here and letting the
+  // target's width read the pattern with the target's own signedness is what
+  // makes `(i128)-1` and `(u64)-1` two different answers from one fold.
+  std::uint64_t source = value.bits;
+  if (fromBits < 64) {
+    source &= (std::uint64_t{1} << fromBits) - 1U;
+  }
+  std::uint64_t extended = source;
+  if (fromSigned && fromBits < 64 && (source >> (fromBits - 1)) != 0) {
+    extended = source | ~((std::uint64_t{1} << fromBits) - 1U);
+  }
+
+  // The target's pattern: the high bits are truncated when it is narrower, and
+  // kept when it is wider (where the *value* reader extends the 64 bits this
+  // core has to the width the type asks for).
+  std::uint64_t pattern =
+      toBits >= 64 ? extended : (extended & ((std::uint64_t{1} << toBits) - 1U));
+  return support::ConstInt{pattern, !toSigned};
+}
+
+std::string_view toString(CastLoss loss) {
+  switch (loss) {
+  case CastLoss::None:
+    return "none";
+  case CastLoss::Truncation:
+    return "truncation";
+  case CastLoss::Sign:
+    return "sign";
+  case CastLoss::Precision:
+    return "precision";
+  case CastLoss::Range:
+    return "range";
+  }
+  return "none";
+}
+
+std::string lossPhrase(CastLoss loss) {
+  std::string out;
+  const auto add = [&out](std::string_view word) {
+    if (!out.empty()) {
+      out += " and ";
+    }
+    out += word;
+  };
+  if (hasLoss(loss, CastLoss::Range)) {
+    add("an out-of-range value traps");
+  }
+  if (hasLoss(loss, CastLoss::Truncation)) {
+    add("bits are dropped");
+  }
+  if (hasLoss(loss, CastLoss::Sign)) {
+    add("the sign changes meaning");
+  }
+  if (hasLoss(loss, CastLoss::Precision)) {
+    add("the value is rounded");
+  }
+  return out;
 }
 
 bool fitsIn(const TypeStore& types, TypeId type, support::ConstInt value) {

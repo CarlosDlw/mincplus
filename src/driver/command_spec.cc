@@ -29,7 +29,7 @@ constexpr std::array<std::string_view, 3> kColorValues{"auto", "always", "never"
 constexpr std::array<std::string_view, 6> kOptLevels{"O0", "O1", "O2", "O3", "Os", "Oz"};
 constexpr std::array<std::string_view, 3> kEmitKinds{"exe", "obj", "asm"};
 
-constexpr std::array<OptionSpec, 31> kOptions{{
+constexpr std::array<OptionSpec, 33> kOptions{{
     // --- global: accepted by every command ---------------------------------
     {.id = OptionId::Help,
      .name = "--help",
@@ -198,6 +198,17 @@ constexpr std::array<OptionSpec, 31> kOptions{{
     {.id = OptionId::WarnConversion,
      .name = "-Wconversion",
      .help = "warn about an implicit conversion that may lose information"},
+    // The two flags over the *casts*, which are two different questions and so two
+    // flags: `-Wcast` is about accuracy (a conversion that drops bits or rounds)
+    // and `-Wprovenance` is about the memory model (an address that becomes an
+    // integer, or the other way, which `memory.md` counts instead of refusing).
+    {.id = OptionId::WarnCast,
+     .name = "-Wcast",
+     .help = "warn about a cast that may lose information"},
+    {.id = OptionId::WarnProvenance,
+     .name = "-Wprovenance",
+     .help = "name every cast between a pointer and an integer (`expose`, "
+             "`with_exposed_provenance`)"},
 }};
 
 // --- the groups -------------------------------------------------------------
@@ -209,8 +220,9 @@ constexpr std::array<OptionId, 4> kGlobalIds{OptionId::Help, OptionId::Version, 
                                              OptionId::ErrorLimit};
 constexpr std::array<OptionId, 5> kInputIds{OptionId::Define, OptionId::Undefine, OptionId::Include,
                                             OptionId::Isystem, OptionId::Target};
-constexpr std::array<OptionId, 3> kWarningIds{OptionId::WarnUnused, OptionId::WarnShadow,
-                                              OptionId::WarnConversion};
+constexpr std::array<OptionId, 5> kWarningIds{OptionId::WarnUnused, OptionId::WarnShadow,
+                                              OptionId::WarnConversion, OptionId::WarnCast,
+                                              OptionId::WarnProvenance};
 constexpr std::array<OptionId, 2> kLintIds{OptionId::WarnUnused, OptionId::WarnShadow};
 
 constexpr std::array<OptionId, 4> kPpIds{OptionId::ListDefines, OptionId::ListIncludes,

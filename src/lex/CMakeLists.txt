@@ -12,7 +12,7 @@ minc_add_library(minc_lex
     literal_scanner.cc
     token_stream.cc
     token_dump.cc
-  DEPS minc_span minc_term
+  DEPS minc_span minc_term minc_consteval
 )
 
 # Reporting layer: turns token flags and invalid bytes into diagnostics. Kept

@@ -82,6 +82,11 @@ enum class IRDiagnosticCode : std::uint8_t {
   Alignment,
   // An operation the language defines as a trap was emitted bare.
   UnguardedOp,
+  // A float → integer conversion of a *constant* whose value is outside the
+  // destination's range. The conversion traps when the value is not
+  // representable, and a file-scope object has no instruction to trap from -- so
+  // this is a refusal and not a folded poison (`casts.md`).
+  CastOutOfRange,
   // An object this function would place in its own frame is larger than
   // `kMaxStackObjectBytes`. A limit and not a bug: the frame is a subtraction
   // from the stack pointer, and the failure without the limit is a segfault at

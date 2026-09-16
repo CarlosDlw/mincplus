@@ -196,6 +196,20 @@ enum class SemaErrorCode : std::uint8_t {
   UnreachableCode,
   // An implicit narrowing conversion (`-Wconversion`, warning).
   ImplicitConversion,
+  // A cast the language does not permit, and the sentence names what to write
+  // instead. The catalogue of refusals is `casts.md`, *What is refused*: an
+  // array that would have to decay, a view, a float into a `bool`, `void`,
+  // a function type, and a suffix that names a type the literal cannot take.
+  CastInvalid,
+  // A cast that *may* lose something (`-Wcast`, warning). Distinct from
+  // `ImplicitConversion` on purpose: the implicit lint fires on the mask idiom
+  // (`(u8)x`) a cast is written for, so the two rules are two flags.
+  CastLoses,
+  // A cast between a pointer and an integer (`-Wprovenance`, warning): the two
+  // named operations of `memory.md`, `expose` and `with_exposed_provenance`. It is
+  // a warning about *where*, not about *how much* -- a 64-bit pointer into a
+  // `usize` loses nothing and is still a site the model wants counted.
+  ProvenanceCast,
 };
 
 struct SemaErrorCodeInfo {

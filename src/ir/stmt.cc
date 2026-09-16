@@ -154,10 +154,17 @@ void Lowering::lowerReturn(ast::AstId stmt) {
   const std::vector<ast::AstId> operands = operandsOf(stmt);
   const ast::AstId expr = operands.empty() ? ast::AstId{} : operands.front();
 
-  if (types_.isVoid(currentReturn_) || !expr.valid()) {
-    // A `return;`, or a value returned from a `void` function -- which the
-    // checker already refused. The expression is still lowered for its effects,
-    // because a call inside a mistake is still a call the reader wrote.
+  if (types_.isVoid(currentReturn_) || types_.isNever(currentReturn_) || !expr.valid()) {
+    // A `return;`, a value returned from a `void` function -- which the checker
+    // already refused -- and a `return boom();` from a function whose return type
+    // is `!`, which is the *only* way such a function may end (`never.md`). The
+    // three are one case here because they are one shape in the module: no value
+    // travels back. A `!` return in particular may not store the call's result
+    // anywhere, because the call has no result -- it is a `void` instruction, and
+    // a `ret` fed one is a malformed module.
+    //
+    // The expression is still lowered for its effects, because a call inside a
+    // mistake is still a call the reader wrote.
     if (expr.valid()) {
       (void)lowerExpr(expr);
     }

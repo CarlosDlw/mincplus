@@ -24,6 +24,8 @@ int checkInputs(const CheckRequest& request, std::ostream& out, std::ostream& er
   options.systemDirs = request.systemDirs;
   options.target = request.target;
   options.warnConversion = request.warnConversion;
+  options.warnCast = request.warnCast;
+  options.warnProvenance = request.warnProvenance;
   options.warnUnused = request.warnUnused;
   options.warnShadow = request.warnShadow;
   options.diagnosticColor = request.diagnosticColor;
@@ -93,6 +95,8 @@ int runCheck(const CliOptions& options) {
   request.showTypes = options.showTypes;
   request.stats = options.stats;
   request.warnConversion = options.warnConversion;
+  request.warnCast = options.warnCast;
+  request.warnProvenance = options.warnProvenance;
   request.warnUnused = options.warnUnused;
   request.warnShadow = options.warnShadow;
   request.diagnosticColor =

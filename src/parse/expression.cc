@@ -18,7 +18,9 @@
 #include "parse/parser.h"
 
 #include <cstdint>
+#include <string>
 
+#include "support/typenames/type_name.h"
 #include "token_class.h"
 
 namespace minc::parse {
@@ -95,6 +97,28 @@ CompletedMarker Parser::parseBinary(std::uint8_t minPrecedence) {
 }
 
 CompletedMarker Parser::parseUnary() {
+  // The `as` level, and where it sits is the whole of its grammar: **above every
+  // binary operator and below the prefix ones**, which is Rust's precedence and
+  // C's for a cast.
+  //
+  //   a as i64 * 2      is  (a as i64) * 2   -- the multiplication is one level up
+  //   -a as i64         is  (-a) as i64      -- the prefix chain below took `-a`
+  //   a as i32 as i64   is  (a as i32) as i64 -- left-associative, so chains read
+  //                                             the way they were written
+  //
+  // The loop is iterative and the recursion is in `parsePrefix`, so a chain of
+  // ten thousand casts costs no depth at all.
+  CompletedMarker expr = parsePrefix();
+  while (!bailedOut_ && at(lex::TokenKind::KwAs)) {
+    Marker cast = expr.precede();
+    bump(); // `as`
+    parseCastType();
+    expr = cast.complete(SyntaxKind::CastExpr);
+  }
+  return expr;
+}
+
+CompletedMarker Parser::parsePrefix() {
   DepthGuard depth(*this);
   if (!depth.ok()) {
     return recursionLimitError();
@@ -102,11 +126,114 @@ CompletedMarker Parser::parseUnary() {
 
   if (isPrefixOperator(current())) {
     Marker prefix = start();
-    bump();       // the operator
-    parseUnary(); // right-associative, so `--x` and `- -x` nest correctly
+    bump(); // the operator
+    // Right-associative, so `--x`, `- -x` and `!!x` nest correctly -- and a
+    // *prefix* level and not `parseUnary`, which is what makes `-a as i64` bind
+    // the cast outside the negation.
+    parsePrefix();
     return prefix.complete(SyntaxKind::PrefixExpr);
   }
   return parsePostfix();
+}
+
+void Parser::parseCastType() {
+  Marker type = start();
+  // Constructors first, whole groups, then the words -- the shape a type
+  // position has (`typespec.h`). The difference from `parseType` is where it
+  // stops: after the words, nothing more is part of the type. `a as i32 * 2` is
+  // a multiplication, `a as *u8` is a pointer, and a run that kept going would
+  // build `i32 *` -- which is a `*` after the words, the one spelling the type
+  // reader refuses by name.
+  while (!atEnd() && !bailedOut_) {
+    if (at(lex::TokenKind::Star) || at(lex::TokenKind::Bang)) {
+      bump();
+      continue;
+    }
+    if (at(lex::TokenKind::LBracket)) {
+      parseArrayCount();
+      continue;
+    }
+    break;
+  }
+  if (!at(lex::TokenKind::Identifier)) {
+    // `x as 1` and `x as`, both one mistake: no type was written.
+    error("expected a type after `as`", ParseErrorCode::ExpectedType);
+    type.complete(SyntaxKind::Type);
+    return;
+  }
+  while (at(lex::TokenKind::Identifier) && !bailedOut_) {
+    bump();
+  }
+  type.complete(SyntaxKind::Type);
+}
+
+bool Parser::atCastStart() const {
+  // Precondition: the current token is `(`. The decision is two lexical
+  // questions and **no symbol table**, which is the whole reason this form is in
+  // the language (`casts.md`, decision 4):
+  //
+  //   1. is the run inside the parentheses a *complete type* -- constructors,
+  //      then one or more **reserved type names**, then `)`;
+  //   2. does the token after `)` start an expression.
+  //
+  // Question 1 asks `support::isTypeNameWord` rather than "is it an identifier",
+  // and that is what makes `(x) + 1` for a variable `x` the parenthesised
+  // expression it looks like: a word that is a type name can never be declared, so
+  // it can never be a variable either.
+  std::uint32_t i = 1;
+  bool sawWord = false;
+  while (true) {
+    const lex::TokenKind kind = nth(i);
+    if (!sawWord && (kind == lex::TokenKind::Star || kind == lex::TokenKind::Bang)) {
+      ++i;
+      continue;
+    }
+    if (!sawWord && kind == lex::TokenKind::LBracket) {
+      // A `[N]` or `[]` group, walked whole. The count is left to the type
+      // reader: `[x]i32` is refused by the answer with a sentence, and a scan
+      // that tried to judge it here would be a second copy of that rule.
+      ++i;
+      if (nth(i) == lex::TokenKind::IntegerLiteral || nth(i) == lex::TokenKind::Identifier) {
+        ++i;
+      }
+      if (nth(i) == lex::TokenKind::RBracket) {
+        ++i;
+      }
+      continue;
+    }
+    if (kind != lex::TokenKind::Identifier || !support::isTypeNameWord(text(i))) {
+      break;
+    }
+    sawWord = true;
+    ++i;
+  }
+  if (!sawWord || nth(i) != lex::TokenKind::RParen) {
+    return false;
+  }
+  // `(i32)` with nothing after it that starts an expression is *not* a cast: it
+  // is a parenthesised type name, and the sentence for it comes from the stage
+  // that can say "a type is not a value; did you mean to cast?".
+  return isExpressionStart(nth(i + 1));
+}
+
+CompletedMarker Parser::parseCastPrefix() {
+  Marker cast = start();
+  bump(); // `(`
+  parseCastType();
+  expect(lex::TokenKind::RParen);
+  // The operand is a *prefix* expression, so the `as` level stays outside the
+  // cast: `(i32)a as i64` is `((i32)a) as i64`.
+  parsePrefix();
+  return cast.complete(SyntaxKind::CastExpr);
+}
+
+bool Parser::atLiteralSuffixRun() const {
+  if (!lex::isLiteral(current()) || nth(1) != lex::TokenKind::Identifier) {
+    return false;
+  }
+  const support::Span here = spanOf(0);
+  const support::Span next = spanOf(1);
+  return here.file == next.file && here.end == next.begin;
 }
 
 CompletedMarker Parser::parsePostfix() {
@@ -176,6 +303,28 @@ CompletedMarker Parser::parsePrimary() {
   case lex::TokenKind::CharLiteral:
   case lex::TokenKind::StringLiteral: {
     Marker literal = start();
+    // `10z`, `1.5x`, `'a'u8`: a literal with a name written against it. The
+    // scanner claims a trailing run only when the run is a suffix the language
+    // knows, so what is left here is the literal and the name as two tokens --
+    // and two tokens with nothing between them are one mistake, not a missing
+    // operator. The run is consumed inside the literal's node so the statement
+    // after it still ends where the reader ended it.
+    if (atLiteralSuffixRun()) {
+      const std::string spelling(text(0));
+      const std::string run(text(1));
+      const bool numeric = at(lex::TokenKind::IntegerLiteral) || at(lex::TokenKind::FloatLiteral);
+      error(numeric ? "`" + spelling + run +
+                          "`: a literal and a name may not be written together, and `" + run +
+                          "` is not a suffix this language has -- write the conversion (`" +
+                          spelling + " as i64`), or a space if two tokens were meant"
+                    : "a suffix on a literal says nothing here: `" + spelling +
+                          "` has one type already, and the conversion is written `" + spelling +
+                          " as ` followed by the type",
+            ParseErrorCode::InvalidLiteralSuffix);
+      Marker junk = start();
+      bump();
+      junk.complete(SyntaxKind::Error);
+    }
     bump();
     return literal.complete(SyntaxKind::LiteralExpr);
   }
@@ -187,6 +336,11 @@ CompletedMarker Parser::parsePrimary() {
     return path.complete(SyntaxKind::PathExpr);
   }
   case lex::TokenKind::LParen: {
+    // `(i32)x` and `(x) + 1` are one token apart and two different programs, and
+    // the difference is decided here, once, by `atCastStart`.
+    if (atCastStart()) {
+      return parseCastPrefix();
+    }
     Marker paren = start();
     bump(); // `(`
     parseExpr();

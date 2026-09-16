@@ -40,6 +40,8 @@ struct IrRequest {
   // on which command they happened to run. The exit code ignores warnings, but a
   // diagnostic a user asked for and did not get is worse than a noisy one.
   bool warnConversion = false;
+  bool warnCast = false;
+  bool warnProvenance = false;
   bool warnUnused = false;
   bool warnShadow = false;
   support::ColorMode diagnosticColor = support::ColorMode::Plain;

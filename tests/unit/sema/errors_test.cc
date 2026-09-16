@@ -465,6 +465,11 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
   struct Case {
     std::string source;
     bool warnConversion = false;
+    // The three warning codes over conversions need the flag that turns them on,
+    // and the flag is part of the input because the input is what *produces* the
+    // code.
+    bool warnCast = false;
+    bool warnProvenance = false;
   };
   const std::vector<Case> cases = {
       {"fn i33 f() { return 0; }\n", false},
@@ -556,11 +561,26 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
        false},
       {"fn i32 main() { let a: [4]i32 = [1, 2, 3, 4]; let s: []i32 = a[3..1]; return 0; }\n",
        false},
+      // The two cast codes. A cast the matrix refuses -- an aggregate is not a
+      // number and has no value to convert -- and a cast it permits but that
+      // loses something, which is the one class of conversion this language
+      // *allows* and names under `-Wcast` (`casts.md`).
+      {"fn i32 main() { let a: [4]i32 = [1, 2, 3, 4]; let n = a as i32; return 0; }\n", false},
+      {"fn i32 main() { let x: i64 = 300; let y = x as i8; return y; }\n", /*warnConversion=*/false,
+       /*warnCast=*/true},
+      {"fn i32 main() { let x: i32 = 1; let p: *i32 = &x; let a = p as usize; return 0; }\n",
+       /*warnConversion=*/false, /*warnCast=*/false, /*warnProvenance=*/true},
   };
 
   for (const Case& one : cases) {
     SemaFixture f;
     f.source(one.source);
+    if (one.warnCast) {
+      f.warnCast();
+    }
+    if (one.warnProvenance) {
+      f.warnProvenance();
+    }
     if (one.warnConversion) {
       f.warnConversion();
     }

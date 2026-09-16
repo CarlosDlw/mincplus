@@ -540,6 +540,12 @@ void parseInto(CliOptions& opts, const PreScan& prescan, int argc, const char* c
     case OptionId::WarnConversion:
       opts.warnConversion = true;
       break;
+    case OptionId::WarnCast:
+      opts.warnCast = true;
+      break;
+    case OptionId::WarnProvenance:
+      opts.warnProvenance = true;
+      break;
     }
   }
 }

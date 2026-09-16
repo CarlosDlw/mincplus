@@ -361,7 +361,7 @@ llvm::Constant* Lowering::elementConstant(const sema::GlobalElementValue& elemen
     // conversion is written anyway and is the same call the scalar path makes:
     // leaving it out would mean this stage *assumes* the two, and an assumption
     // about types is the one kind this stage refuses to carry.
-    return constantToStorage(convertConstant(constant, element.type, type), type, at);
+    return constantToStorage(convertConstant(constant, element.type, type, at), type, at);
   }
   case sema::GlobalValueKind::Aggregate:
     // One level down, the same function: an element that is an array is an array.
@@ -479,7 +479,7 @@ llvm::Constant* Lowering::convertGlobalValue(const sema::GlobalInfo& info, llvm:
               "`, which disagrees with the object's type `" + types_.spelling(info.type) + "`");
     return nullptr;
   }
-  return convertConstant(value, from, to);
+  return convertConstant(value, from, to, spanOf(info.init.valid() ? info.init : info.decl));
 }
 
 llvm::Constant* Lowering::globalInitializer(const sema::GlobalInfo& info) {
