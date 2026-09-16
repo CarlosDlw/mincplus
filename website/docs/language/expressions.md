@@ -287,7 +287,7 @@ see [Types](/language/types).
 | `0xBEEF` | hexadecimal, either case for the digits and the `x` |
 | `0b1010_1010` | binary |
 | `0o755` | octal — **the only octal spelling**; `0755` is decimal 755 |
-| `1.5` `.5` `1e9` `2.5e-3` | decimal float, `f64` |
+| `1.5` `.5` `1e9` `2.5e-3` `.5e3` | decimal float, `f64` — the point, the exponent and the suffix combine freely |
 | `0x1.8p3` `0x1.8` `0x.8p3` | hexadecimal float; the point separates hex digits and `p` is the power of two |
 | `10u8` `12f` `1.5f32` `1.5L` | typed by its [suffix](#10u8--the-literal-suffix) |
 

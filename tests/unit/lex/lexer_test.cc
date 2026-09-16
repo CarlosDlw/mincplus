@@ -474,6 +474,22 @@ TEST(LexerTest, ATrailingPointIsNotAFloat) {
   EXPECT_EQ(lexFirst(".5").length, 2u);
 }
 
+// A fraction with no integer part is a spelling and not a shape: everything a
+// float may have after its digits -- an exponent, a suffix -- belongs to it too,
+// or `.5e3` would be the same number written in a shape the language refused.
+TEST(LexerTest, AFractionWithNoIntegerPartKeepsTheRestOfTheGrammar) {
+  for (const std::string_view spelling : {".5e3", ".5e-2", ".5E3", ".5f32", ".5L", ".5_0"}) {
+    const Token token = lexFirst(spelling);
+    EXPECT_EQ(token.kind, TokenKind::FloatLiteral) << spelling;
+    EXPECT_EQ(token.length, spelling.size()) << spelling;
+    EXPECT_FALSE(token.hasAnyFlag()) << spelling;
+  }
+  // And the name that follows a *complete* number is still a name: `1else` is `1`
+  // and `else`, because an exponent is only one when digits follow it.
+  EXPECT_EQ(lexFirst("1else").length, 1u);
+  EXPECT_EQ(lexFirst("1e").length, 1u);
+}
+
 TEST(LexerTest, HexadecimalFloatsWithoutAnExponentOrAnIntegerPart) {
   EXPECT_EQ(lexFirst("0x1.8p3").kind, TokenKind::FloatLiteral);
   EXPECT_EQ(lexFirst("0x1.8p3").length, 7u);

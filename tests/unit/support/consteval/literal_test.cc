@@ -129,6 +129,15 @@ TEST(ConstevalLiteralTest, AFloatReadersNumberIsTheNumberAndNotTheToken) {
   EXPECT_EQ(exponent.number, "1.5e3");
   EXPECT_EQ(exponent.suffix.type, SuffixType::F64);
 
+  // A fraction with no integer part is split the same way: the point is part of
+  // the number, and `.5e3` is one number and not `.5` and a name.
+  const FloatLiteral leadingPoint = readFloatLiteral(".5e3");
+  EXPECT_EQ(leadingPoint.number, ".5e3");
+  EXPECT_EQ(leadingPoint.suffix.status, SuffixStatus::None);
+  const FloatLiteral leadingPointSuffix = readFloatLiteral(".5f32");
+  EXPECT_EQ(leadingPointSuffix.number, ".5");
+  EXPECT_EQ(leadingPointSuffix.suffix.type, SuffixType::F32);
+
   const FloatLiteral hex = readFloatLiteral("0x1.8p1");
   EXPECT_EQ(hex.number, "0x1.8p1");
   EXPECT_EQ(hex.suffix.status, SuffixStatus::None);

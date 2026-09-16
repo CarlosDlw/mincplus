@@ -128,20 +128,77 @@ struct NumberParts {
   TokenFlags flags = 0;
 };
 
+// The tail every float spelling shares: the exponent when one is written, and the
+// suffix whether or not one is.
+//
+// `.5e3`, `1.5e3`, `1_000.5f32` and `0x1.8p3` differ only in what comes *before*
+// this point in the grammar, so they share one tail and cannot drift apart: a
+// spelling that had no integer part in front of its point used to stop at the
+// fraction and leave `e3` as an identifier, which is the same number written in a
+// shape the language refused.
+[[nodiscard]] NumberParts scanFloatTail(std::string_view text, unsigned base, std::size_t i,
+                                        NumberParts parts) {
+  const std::size_t size = text.size();
+  const char c = i < size ? text[i] : '\0';
+  const bool isExponentMarker = base == 16 ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E');
+  if (isExponentMarker) {
+    const std::size_t next = scanExponent(text, i, parts.flags);
+    if (next != i) {
+      i = next;
+      parts.isFloat = true;
+    }
+  }
+
+  // The suffix, and whether the token has one at all is this scanner's answer:
+  // `10u8` is one literal, while `10z` is the number `10` and then the name `z`,
+  // because a trailing run counts only when it is a spelling the language knows
+  // (`suffix.h`). The run is claimed *into the token*, so the reader sees the
+  // bytes the source wrote and nothing has to be reassembled.
+  std::size_t suffixLength = support::suffixLengthAt(text, i, parts.isFloat);
+  // `10_u8`, `1.5_f32`: a separator is not part of the suffix, but the run has no
+  // reading at all -- the separator is grouped with the suffix so the mistake gets
+  // the sentence about placement, and not "a literal and a name may not be written
+  // together" about a name nobody meant to write (`literals.md`, decision 9).
+  if (suffixLength == 0 && i < size && isSeparator(static_cast<Byte>(text[i]))) {
+    const std::size_t afterSeparator = support::suffixLengthAt(text, i + 1, parts.isFloat);
+    if (afterSeparator != 0) {
+      parts.flags |= flagOf(TokenFlag::MisplacedSeparator);
+      ++i;
+      suffixLength = afterSeparator;
+    }
+  }
+  if (suffixLength != 0) {
+    const support::LiteralSuffix suffix =
+        support::classifySuffix(text.substr(i, suffixLength), parts.isFloat);
+    // A float suffix on an integer-spelled literal *makes* it a float: `12f` is
+    // `12.0` as an `f32`, and the value is exact (`casts.md`). The token kind is
+    // therefore decided after the suffix rather than before it.
+    if (suffix.makesFloat) {
+      parts.isFloat = true;
+    }
+    i += suffixLength;
+  }
+
+  parts.end = i;
+  return parts;
+}
+
 [[nodiscard]] NumberParts scanNumberParts(std::string_view text, std::uint32_t offset) {
   const std::size_t size = text.size();
   std::size_t i = offset;
   NumberParts parts;
 
   if (text[i] == '.') {
-    // `.5`. The caller only routes here when a digit follows the dot.
-    parts.isFloat = true;
+    // `.5`. The caller only routes here when a digit follows the dot. The point is
+    // consumed here and everything after the digits is the code every other float
+    // takes, so `.5e3`, `.5f32` and `.5e-2` are spellings of one number and not a
+    // second-class shape that stops at the fraction.
     const DigitRun fraction = scanDigitRun(text, i + 1, 10);
     if (fraction.misplaced) {
       parts.flags |= flagOf(TokenFlag::MisplacedSeparator);
     }
-    parts.end = fraction.end;
-    return parts;
+    parts.isFloat = true;
+    return scanFloatTail(text, 10, fraction.end, parts);
   }
 
   // Base prefix. A leading zero *without* a prefix is plain decimal: C's
@@ -204,45 +261,8 @@ struct NumberParts {
       parts.isFloat = true;
     }
 
-    const char c = i < size ? text[i] : '\0';
-    const bool isExponentMarker = base == 16 ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E');
-    if (isExponentMarker) {
-      const std::size_t next = scanExponent(text, i, parts.flags);
-      if (next != i) {
-        i = next;
-        parts.isFloat = true;
-      }
-    }
-  }
-
-  // The suffix, and whether the token has one at all is this scanner's answer:
-  // `10u8` is one literal, while `10z` is the number `10` and then the name `z`,
-  // because a trailing run counts only when it is a spelling the language knows
-  // (`suffix.h`). The run is claimed *into the token*, so the reader sees the
-  // bytes the source wrote and nothing has to be reassembled.
-  std::size_t suffixLength = support::suffixLengthAt(text, i, parts.isFloat);
-  // `10_u8`, `1.5_f32`: a separator is not part of the suffix, but the run has no
-  // reading at all -- the separator is grouped with the suffix so the mistake gets
-  // the sentence about placement, and not "a literal and a name may not be written
-  // together" about a name nobody meant to write (`literals.md`, decision 9).
-  if (suffixLength == 0 && i < size && isSeparator(static_cast<Byte>(text[i]))) {
-    const std::size_t afterSeparator = support::suffixLengthAt(text, i + 1, parts.isFloat);
-    if (afterSeparator != 0) {
-      parts.flags |= flagOf(TokenFlag::MisplacedSeparator);
-      ++i;
-      suffixLength = afterSeparator;
-    }
-  }
-  if (suffixLength != 0) {
-    const support::LiteralSuffix suffix =
-        support::classifySuffix(text.substr(i, suffixLength), parts.isFloat);
-    // A float suffix on an integer-spelled literal *makes* it a float: `12f` is
-    // `12.0` as an `f32`, and the value is exact (`casts.md`). The token kind is
-    // therefore decided after the suffix rather than before it.
-    if (suffix.makesFloat) {
-      parts.isFloat = true;
-    }
-    i += suffixLength;
+    // The fraction is done; the exponent and the suffix are the shared tail.
+    return scanFloatTail(text, base, i, parts);
   }
 
   parts.end = i;
@@ -283,7 +303,10 @@ struct NumberParts {
 // The result of scanning one escape, which is what the caller has to know: a
 // continuation contributes no code unit to a character literal, and a backslash
 // at the end of the input leaves the literal unterminated.
-enum class EscapeScan {
+// The base type is explicit for the same reason `TokenFlag`'s is: an enumerator
+// set this small belongs in a byte, and the width is a decision rather than
+// whatever the compiler picked.
+enum class EscapeScan : std::uint8_t {
   Unit,
   Continuation,
   EndOfInput,

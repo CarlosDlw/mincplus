@@ -155,7 +155,9 @@ lossless per-file token buffer.
       token and one sentence rather than a number and a name
 - [x] Floating literals: decimal and hex floats, `e`/`p` exponents only when
       digits follow; a hex float may omit the exponent (`0x1.8`) or the integer
-      part (`0x.8p3`), and a trailing point never starts one (`5.` is `5`, `.`)
+      part (`0x.8p3`), a decimal fraction may have no integer part either (`.5`,
+      `.5e3`, `.5f32` — one grammar tail, so no spelling is second-class), and a
+      trailing point never starts one (`5.` is `5`, `.`)
 - [x] Character and string literals with escape scanning; `''`, unknown
       escapes, and unterminated literals flagged
 - [x] The escape alphabet: the C controls and punctuation, GCC's `\e`, octal
