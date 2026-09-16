@@ -29,6 +29,40 @@
 namespace minc::sema {
 namespace {
 
+// The hex digits of a value with no leading zeros: what a diagnostic quotes when
+// it names a code point (`\u{1F600}`) or the packed value of a multi-character
+// constant (`0x6162`).
+[[nodiscard]] std::string hexDigits(std::uint64_t value) {
+  static constexpr char kDigits[] = "0123456789ABCDEF";
+  std::string out;
+  bool started = false;
+  for (int shift = 60; shift >= 0; shift -= 4) {
+    const auto digit = static_cast<unsigned>((value >> static_cast<unsigned>(shift)) & 0xFU);
+    if (digit != 0 || started || shift == 0) {
+      out.push_back(kDigits[digit]);
+      started = true;
+    }
+  }
+  return out;
+}
+
+// Why a character literal is not a `char`, in the language's own terms: a `char`
+// is one byte (README, *Types*), so a literal of more than one code unit, or
+// whose one unit is above a byte, is refused with the two spellings that *do*
+// mean it (`literals.md`, decisions 21-23).
+[[nodiscard]] std::string characterLiteralMessage(std::string_view text,
+                                                  const support::CharLiteral& parsed) {
+  const std::string body(text.substr(1, text.size() - 2));
+  if (parsed.units != 1) {
+    return "a `char` is one byte and this character literal is " + std::to_string(parsed.units) +
+           " units: write it as a string (`\"" + body + "\"`), or the value as an integer (`0x" +
+           hexDigits(parsed.value.bits) + "`)";
+  }
+  return "a `char` is one byte and this literal is above it: write the string (`\"\\u{" +
+         hexDigits(parsed.value.bits) +
+         "}\"`), which encodes it as UTF-8, or write a wider integer";
+}
+
 // The name of an expression, for a message that has to name one. A path prints
 // its spelling; anything else is described by its type, which is what the reader
 // has in front of them.
@@ -390,12 +424,32 @@ TypeId Checker::checkLiteral(ast::AstId expr, TypeId expected, ExprInfo& info) {
     return kTypeFloatLiteral;
   }
   case kTokCharLiteral: {
-    const support::IntegerLiteral parsed = support::parseCharLiteral(text);
-    info.isConstant = true;
-    if (parsed.ok) {
-      info.hasIntValue = true;
-      info.value = parsed.value;
+    const support::CharLiteral parsed = support::parseCharLiteral(text);
+    // Three ways a character literal can already have been reported, and none of
+    // them is repeated here: the body is empty (`lex-empty-char`), an escape is
+    // unknown or malformed (`lex-unknown-escape`, `lex-escape-digits`,
+    // `lex-escape-out-of-range`, `lex-named-escape`), or the literal never ended
+    // (`lex-unterminated-char`). The scanner owns those sentences because it owns
+    // the spelling; this stage owns the *type* rule below, which no earlier stage
+    // can state. No value leaves here in either case, so the literal can never
+    // reach the lowering as something that is not a byte.
+    if (!parsed.ok || parsed.units == 0) {
+      info.isConstant = false;
+      return kTypeError;
     }
+    // `char` is one byte, so a character literal is one code unit *and* that unit
+    // fits a byte. The value half is the invariant rather than a rule the reader
+    // enforces (`literals.md`, decision 23): the scanner flags an escape above a
+    // byte, and this is what makes the crash that used to follow unreachable even
+    // if a flag is ever missed.
+    if (parsed.units != 1 || parsed.value.bits > 0xFFU) {
+      error(expr, SemaErrorCode::LiteralOutOfRange, characterLiteralMessage(text, parsed));
+      info.isConstant = false;
+      return kTypeError;
+    }
+    info.isConstant = true;
+    info.hasIntValue = true;
+    info.value = parsed.value;
     return kTypeChar;
   }
   case kTokStringLiteral:

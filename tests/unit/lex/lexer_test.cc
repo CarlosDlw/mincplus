@@ -359,11 +359,129 @@ TEST(LexerTest, EmptyCharacterLiteralIsFlagged) {
 
 TEST(LexerTest, UnknownAndShortEscapes) {
   EXPECT_TRUE(lexFirst("\"\\q\"").has(TokenFlag::UnknownEscape));
-  EXPECT_TRUE(lexFirst("\"\\x\"").has(TokenFlag::MissingDigits));
-  EXPECT_TRUE(lexFirst("\"\\u12\"").has(TokenFlag::MissingDigits));
-  EXPECT_TRUE(lexFirst("\"\\U1\"").has(TokenFlag::MissingDigits));
+  // An escape that wants digits and has none is its own flag, because the sentence
+  // is about the escape and not about a numeric prefix that is missing:
+  // `lex-escape-digits` names both the braced form and the exact widths.
+  EXPECT_TRUE(lexFirst("\"\\x\"").has(TokenFlag::EscapeDigits));
+  EXPECT_TRUE(lexFirst("\"\\o\"").has(TokenFlag::EscapeDigits));
+  EXPECT_TRUE(lexFirst("\"\\u12\"").has(TokenFlag::EscapeDigits));
+  EXPECT_TRUE(lexFirst("\"\\U1\"").has(TokenFlag::EscapeDigits));
+  // A braced escape needs digits between its braces, and both braces.
+  EXPECT_TRUE(lexFirst("\"\\x{}\"").has(TokenFlag::EscapeDigits));
+  EXPECT_TRUE(lexFirst("\"\\x{41\"").has(TokenFlag::EscapeDigits));
+  EXPECT_TRUE(lexFirst("\"\\u{}\"").has(TokenFlag::EscapeDigits));
   EXPECT_FALSE(lexFirst("\"\\u0041\"").hasAnyFlag());
   EXPECT_FALSE(lexFirst("\"\\U0001F600\"").hasAnyFlag());
+}
+
+// The whole alphabet of `literals.md`, as tokens: every row the language has is
+// one escape and one token, and the delimited forms put the digits' end where the
+// braces are.
+TEST(LexerTest, TheWholeEscapeAlphabet) {
+  for (const std::string_view spelling :
+       {"\"\\a\"",       "\"\\b\"",      "\"\\e\"",     "\"\\f\"",     "\"\\n\"",
+        "\"\\r\"",       "\"\\t\"",      "\"\\v\"",     "\"\\?\"",     "\"\\'\"",
+        "\"\\\\\"",      "\"\\101\"",    "\"\\377\"",   "\"\\xFF\"",   "\"\\x{41}\"",
+        "\"\\o{101}\"",  "\"\\o{377}\"", "\"\\u0041\"", "\"\\u{e9}\"", "\"\\U0001F600\"",
+        "\"\\U{1F600}\""}) {
+    const Token token = lexFirst(spelling);
+    EXPECT_EQ(token.kind, TokenKind::StringLiteral) << spelling;
+    EXPECT_FALSE(token.hasAnyFlag()) << spelling;
+    EXPECT_EQ(token.length, spelling.size()) << spelling;
+  }
+}
+
+// An escape above a byte has two different owners, and they are not the same
+// stage: a `str` has no byte for it, so the scanner refuses it (nothing later
+// reads a string's escapes); a `char` is a *type* that cannot hold it, so the
+// checker states that rule, and flagging it here as well would put two sentences
+// on one mistake and give the wrong advice (`literals.md`, decision 23).
+TEST(LexerTest, AnEscapeWiderThanAByteIsAStringsRefusal) {
+  EXPECT_TRUE(lexFirst("\"\\x1FF\"").has(TokenFlag::EscapeTooWide));
+  EXPECT_TRUE(lexFirst("\"\\400\"").has(TokenFlag::EscapeTooWide));
+  EXPECT_TRUE(lexFirst("\"\\x{1F600}\"").has(TokenFlag::EscapeTooWide));
+  EXPECT_FALSE(lexFirst("\"\\x{FF}\"").has(TokenFlag::EscapeTooWide));
+  // A code point in a string is a *character*, and its bytes are its UTF-8
+  // encoding: nothing is above a byte there.
+  EXPECT_FALSE(lexFirst("\"\\u{1F600}\"").has(TokenFlag::EscapeTooWide));
+  // And a character literal's width is not a lexical question at all.
+  EXPECT_FALSE(lexFirst("'\\u{1F600}'").hasAnyFlag());
+  EXPECT_FALSE(lexFirst("'\\x{1F600}'").hasAnyFlag());
+  EXPECT_FALSE(lexFirst("'\\400'").hasAnyFlag());
+  EXPECT_FALSE(lexFirst("'\\xFF'").hasAnyFlag());
+}
+
+// C++23's named escape is *known* and refused by name, so the sentence can say
+// what to write instead of calling it an unknown escape.
+TEST(LexerTest, TheNamedEscapeIsRefusedByItsOwnName) {
+  const std::string_view text = "\"\\N{GREEK SMALL LETTER ALPHA}\"";
+  const Token token = lexFirst(text);
+  EXPECT_EQ(token.kind, TokenKind::StringLiteral);
+  EXPECT_TRUE(token.has(TokenFlag::NamedEscape));
+  // The whole name is consumed: the literal still ends where it should.
+  EXPECT_EQ(token.length, text.size());
+}
+
+// `\` before a line ending continues the literal and contributes nothing. LF and
+// CRLF are one rule, because the source may come from either kind of machine.
+TEST(LexerTest, ABackslashContinuesTheLine) {
+  for (const std::string_view text : {"\"a\\\nb\"", "\"a\\\r\nb\"", "'\\\na'"}) {
+    const Token token = lexFirst(text);
+    EXPECT_FALSE(token.hasAnyFlag()) << text.size();
+    EXPECT_EQ(token.length, text.size()) << text.size();
+  }
+}
+
+// The digit separators are *spelling*: claimed into the token, removed before the
+// value is read, and legal on both sides of a point or an exponent.
+TEST(LexerTest, DigitSeparatorsArePartOfTheToken) {
+  for (const std::string_view spelling :
+       {"1_000", "1'000", "0xFE'DC'BA'98", "0b1111_0000", "0o755_000", "1_000.5", "1.414'213'562",
+        "1e1_0", "0xF_Fp1_0"}) {
+    const Token token = lexFirst(spelling);
+    EXPECT_FALSE(token.hasAnyFlag()) << spelling;
+    EXPECT_EQ(token.length, spelling.size()) << spelling;
+  }
+}
+
+// A separator that is not between two digits is one token with one flag -- not a
+// number and a name, which would get the sentence about the wrong mistake.
+TEST(LexerTest, AMisplacedSeparatorIsFlagged) {
+  for (const std::string_view spelling : {"1000_", "1__0", "0x_FF", "10_u8", "1e1_", "1.5_f32"}) {
+    EXPECT_TRUE(lexFirst(spelling).has(TokenFlag::MisplacedSeparator)) << spelling;
+  }
+  EXPECT_FALSE(lexFirst("1_000").has(TokenFlag::MisplacedSeparator));
+}
+
+// A quote only separates when a digit of the same number follows it, so `1'a'` is
+// still a number and a character literal: the spelling has no other reading, and a
+// lexer that cannot be surprised by the source is the point.
+TEST(LexerTest, AQuoteOnlySeparatesTwoDigits) {
+  const std::string_view text = "1'a'";
+  const Token number = lexFirst(text);
+  EXPECT_EQ(number.kind, TokenKind::IntegerLiteral);
+  EXPECT_EQ(number.length, 1u);
+  EXPECT_FALSE(number.hasAnyFlag());
+  EXPECT_EQ(lexOne(text, number.end()).kind, TokenKind::CharLiteral);
+}
+
+// `5.` is `5` and a `.`: a trailing point is the one spelling whose meaning would
+// change if the language grew member access (`literals.md`, decision 8).
+TEST(LexerTest, ATrailingPointIsNotAFloat) {
+  EXPECT_EQ(lexFirst("5.").kind, TokenKind::IntegerLiteral);
+  EXPECT_EQ(lexFirst("5.").length, 1u);
+  EXPECT_EQ(lexFirst(".5").kind, TokenKind::FloatLiteral);
+  EXPECT_EQ(lexFirst(".5").length, 2u);
+}
+
+TEST(LexerTest, HexadecimalFloatsWithoutAnExponentOrAnIntegerPart) {
+  EXPECT_EQ(lexFirst("0x1.8p3").kind, TokenKind::FloatLiteral);
+  EXPECT_EQ(lexFirst("0x1.8p3").length, 7u);
+  EXPECT_EQ(lexFirst("0x.8p3").kind, TokenKind::FloatLiteral);
+  EXPECT_EQ(lexFirst("0x.8p3").length, 6u);
+  // No exponent is needed here: the point and a hex digit after it are enough.
+  EXPECT_EQ(lexFirst("0x1.8").kind, TokenKind::FloatLiteral);
+  EXPECT_EQ(lexFirst("0x1.8").length, 5u);
 }
 
 // The arity of `\u`/`\U` was checked but not the value, which is half a check:
@@ -382,7 +500,7 @@ TEST(LexerTest, UnicodeEscapeMustBeAScalarValue) {
   // A short escape is missing digits, not out of range: only one thing is
   // wrong with it, and it is reported once.
   const Token shortEscape = lexFirst("\"\\u12\"");
-  EXPECT_TRUE(shortEscape.has(TokenFlag::MissingDigits));
+  EXPECT_TRUE(shortEscape.has(TokenFlag::EscapeDigits));
   EXPECT_FALSE(shortEscape.has(TokenFlag::InvalidEscapeValue));
 }
 

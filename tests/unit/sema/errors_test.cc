@@ -76,6 +76,45 @@ TEST(ErrorsTest, ALiteralTooLargeForItsType) {
   EXPECT_EQ(ok.errorCount(), 0u);
 }
 
+// `char` is one byte (README, *Types*), and a literal that is not is refused
+// with the two spellings that *do* mean it. The other half of the rule -- a
+// single escape above a byte -- is the scanner's flag, so it never reaches here;
+// what reaches here is a body of more than one code unit, which the lexer is
+// right to accept (C's `#if` on a multi-character constant needs it) and the
+// language is right to refuse (`literals.md`, decisions 20-23).
+TEST(ErrorsTest, ACharacterLiteralMustBeOneByte) {
+  SemaFixture twoUnits;
+  twoUnits.source("fn i32 main() { let c: char = 'ab'; return 0; }\n");
+  ASSERT_TRUE(twoUnits.build());
+  EXPECT_TRUE(twoUnits.hasError("sema-literal-out-of-range"));
+  EXPECT_EQ(twoUnits.errorCount(), 1u);
+  // Both fixes are named: the string that means it, and the value it packs to.
+  EXPECT_NE(twoUnits.firstError().message.find("as a string"), std::string::npos)
+      << twoUnits.firstError().message;
+  EXPECT_NE(twoUnits.firstError().message.find("0x6162"), std::string::npos)
+      << twoUnits.firstError().message;
+
+  SemaFixture escapes;
+  escapes.source("fn i32 main() { let c: char = '\\xC3\\xA9'; return 0; }\n");
+  ASSERT_TRUE(escapes.build());
+  EXPECT_TRUE(escapes.hasError("sema-literal-out-of-range"));
+
+  // Every byte is a `char`: the whole range is accepted, in every spelling the
+  // reader has (`escapes` above is refused for being two units, not for being
+  // wide).
+  SemaFixture oneByte;
+  oneByte.source("fn i32 main() {\n"
+                 "  let a: char = 'a';\n"
+                 "  let b: char = '\\377';\n"
+                 "  let c: char = '\\x{ff}';\n"
+                 "  let d: char = '\\u{e9}';\n"
+                 "  let e: char = '\\0';\n"
+                 "  return 0;\n"
+                 "}\n");
+  ASSERT_TRUE(oneByte.build());
+  EXPECT_EQ(oneByte.errorCount(), 0u) << oneByte.dump();
+}
+
 TEST(ErrorsTest, ALiteralTooLargeForTheCoreNeedsAWiderContext) {
   SemaFixture wide;
   wide.source(

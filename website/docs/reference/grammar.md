@@ -176,7 +176,7 @@ Full list, with the trivia the lexer keeps and the parser drops:
 | Class | Tokens |
 | --- | --- |
 | keywords | `as` `break` `const` `continue` `else` `extern` `fn` `for` `if` `let` `return` `static` `while` |
-| literals | integer, float, character, string — a literal is one token, suffix included (`10u8`, `1.5f32`) |
+| literals | integer, float, character, string — a literal is one token, suffix and digit separators included (`10u8`, `1.5f32`, `1_000`, `0xFE'DC`, `1.5_f32`) |
 | punctuation | `( ) { } [ ] ; , : ? . ...` |
 | operators | `+ - * / % ! ~ & \| ^ < > =` and their compound forms: `++ -- += -= *= /= %= &= \|= ^= <<= >>= == != <= >= && \|\| << >> ->` |
 | trivia | whitespace, newline, line comment, block comment |

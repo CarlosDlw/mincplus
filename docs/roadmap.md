@@ -149,10 +149,23 @@ lossless per-file token buffer.
       `const`, `return`)
 - [x] Integer literals: decimal, `0x`, `0b`, `0o`; base prefix with no digits
       flagged
+- [x] Digit separators, `_` and C23's `'`, claimed into the token and legal only
+      between two digits of the same run (`1_000`, `0xFE'DC'BA'98`, `1e1_0`);
+      `1000_`, `1__0`, `0x_FF` and `10_u8` are `lex-misplaced-separator`, one
+      token and one sentence rather than a number and a name
 - [x] Floating literals: decimal and hex floats, `e`/`p` exponents only when
-      digits follow
+      digits follow; a hex float may omit the exponent (`0x1.8`) or the integer
+      part (`0x.8p3`), and a trailing point never starts one (`5.` is `5`, `.`)
 - [x] Character and string literals with escape scanning; `''`, unknown
       escapes, and unterminated literals flagged
+- [x] The escape alphabet: the C controls and punctuation, GCC's `\e`, octal
+      (`\101`, `\o{101}`), hex (`\x41`, `\x{41}`), `\uXXXX`/`\UXXXXXXXX`/
+      `\u{...}`, and `\` + a line ending as a continuation (LF and CRLF are one
+      rule). Ownership is decided: an escape above a byte is the *string*
+      reader's refusal and `lex-escape-too-wide`, a code point that is not a
+      character is `lex-escape-out-of-range`, `\N{...}` is `lex-named-escape`,
+      and a character literal's width is the checker's
+      (`sema-literal-out-of-range`), so one mistake gets one sentence
 - [x] Operators and punctuation with longest match
 - [x] Comments `//` and `/* */` (non-nesting), retained as trivia
 - [x] Trivia (whitespace, LF/CRLF/CR, comments) retained as ordinary tokens,
@@ -167,7 +180,6 @@ lossless per-file token buffer.
       known suffix, so `10u8` is one token, `10z` is two and `1else` is still `1`
       and `else`; an unknown suffix adjacent to a literal is
       `parse-invalid-literal-suffix`
-- [ ] Digit separators (`1_000_000`) `[?]`
 - [ ] String prefixes (`L`, `u8`, `u`, `U`) and raw/multiline strings `[?]`
 - [x] Exhaustive short-input coverage: every 1-byte and 2-byte input, and every
       3-byte combination of the bytes that change scanning

@@ -395,13 +395,20 @@ See [Expressions](/language/expressions) and the
 - [x] Indexing: `a[i]` on an array, `p[i]` on a pointer, `s[i]` on a slice
 - [x] Slicing: `a[l..r]` / `a[l..]` / `a[..r]` / `a[..]`
 - [ ] Member access (`.` and `->`) — it needs `struct`
-- [x] Literals: integers (bases, **suffixes**), floats, chars, strings — read by
-      one shared reader, so the type checker and the preprocessor cannot
-      disagree about what `0x10`, `0755` or `10u8` means
+- [x] Literals: integers (bases, **suffixes**, digit **separators**), floats
+      (decimal and hex, with an optional exponent and an optional integer part),
+      chars, strings — read by one shared reader, so the type checker and the
+      preprocessor cannot disagree about what `0x10`, `0755`, `1_000` or `10u8`
+      means — see [Literals](/language/expressions#literals)
 - [x] Escape sequences in character and string literals: `\n` `\r` `\t` `\v`
-      `\f` `\b` `\a` `\?` `\"` `\'` `\\`, octal (`\101`), hex (`\x41`), and
-      `\uXXXX` / `\UXXXXXXXX`, with an unknown escape refused by name
-      (`lex-unknown-escape`) rather than passed through as the character
+      `\f` `\b` `\a` `\e` `\?` `\"` `\'` `\\`, octal (`\101`, `\o{101}`),
+      hex (`\x41`, `\x{41}`), `\uXXXX` / `\UXXXXXXXX` / `\u{...}`, and a
+      backslash before the end of a line (the literal continues). An unknown
+      escape is refused by name (`lex-unknown-escape`) rather than passed
+      through as the character, `\N{...}` is refused because the name table is a
+      dependency this compiler does not carry, and an escape above one byte is
+      refused by the string reader or — in a `char` — by the checker, which
+      names the fix
 - [ ] Raw and multiline strings `[?]`, and adjacent literal concatenation
       (`"a" "b"`)
 - [ ] String interpolation/formatting `[?]`

@@ -163,5 +163,181 @@ TEST(ConstevalLiteralTest, CaseIsNotPartOfASuffixesMeaning) {
   EXPECT_EQ(readFloatLiteral("1.5f").suffix.type, readFloatLiteral("1.5F").suffix.type);
 }
 
+TEST(ConstevalLiteralTest, ASeparatorIsSpellingAndNotAValue) {
+  // The separator is removed before the value is read, so it cannot change what a
+  // literal means -- and the *number* keeps it, because the number is the
+  // spelling's own text and the one consumer that hands digits to a value reader
+  // strips them itself (`literals.md`, decisions 1 and 10).
+  struct Case {
+    std::string_view with;
+    std::string_view without;
+  };
+  const Case cases[] = {
+      {"1_000", "1000"},     {"1'000", "1000"},
+      {"0xFE'DC", "0xFEDC"}, {"0b1111_0000", "0b11110000"},
+      {"0o7_5_5", "0o755"},  {"1_2_3_4u8", "1234u8"},
+  };
+  for (const Case& testCase : cases) {
+    const IntegerLiteral with =
+        parseIntegerLiteral(testCase.with, IntegerBaseRule::DecimalLeadingZero);
+    const IntegerLiteral without =
+        parseIntegerLiteral(testCase.without, IntegerBaseRule::DecimalLeadingZero);
+    ASSERT_TRUE(with.ok) << testCase.with << ": " << with.message;
+    ASSERT_TRUE(without.ok) << testCase.without << ": " << without.message;
+    EXPECT_EQ(with.value.bits, without.value.bits) << testCase.with;
+    EXPECT_EQ(with.value.isUnsigned, without.value.isUnsigned) << testCase.with;
+    EXPECT_EQ(with.suffix.type, without.suffix.type) << testCase.with;
+    // The number keeps the spelling's separators, and removing them is what gives
+    // the plain spelling's number: the two describe one value.
+    EXPECT_EQ(withoutSeparators(with.number), without.number) << testCase.with;
+  }
+}
+
+// One sentence for every way a separator can be wrong, and it is the *placement*
+// that is refused -- never a silently different number.
+TEST(ConstevalLiteralTest, AMisplacedSeparatorIsRefusedWithItsPlacement) {
+  for (const std::string_view spelling : {"1000_", "_1000", "1__0", "0x_FF", "10_u8", "1_e3"}) {
+    const IntegerLiteral parsed =
+        parseIntegerLiteral(spelling, IntegerBaseRule::DecimalLeadingZero);
+    EXPECT_FALSE(parsed.ok) << spelling;
+    EXPECT_FALSE(parsed.tooWide) << spelling;
+    EXPECT_NE(parsed.message.find("separator"), std::string::npos)
+        << spelling << ": " << parsed.message;
+  }
+  EXPECT_TRUE(parseIntegerLiteral("1_000", IntegerBaseRule::DecimalLeadingZero).ok);
+}
+
+TEST(ConstevalLiteralTest, TheSeparatorStripperIsWhatTheValueReadersGet) {
+  EXPECT_EQ(withoutSeparators("1_000"), "1000");
+  EXPECT_EQ(withoutSeparators("0xFE'DC"), "0xFEDC");
+  EXPECT_EQ(withoutSeparators("1.414_213"), "1.414213");
+  EXPECT_EQ(withoutSeparators("1e1_0"), "1e10");
+  EXPECT_EQ(withoutSeparators("123"), "123");
+  // The float split keeps the separators (they are the number's), and the reader
+  // that wants a number asks for them to go.
+  EXPECT_EQ(withoutSeparators(readFloatLiteral("1.000_5").number), "1.0005");
+  EXPECT_EQ(withoutSeparators(readFloatLiteral("0xF_Fp1_0").number), "0xFFp10");
+}
+
+// Every row of the escape table, decoded to bytes. The byte escapes are bytes,
+// the code point escapes are UTF-8, and the delimited forms are what says where a
+// run of digits ends.
+TEST(ConstevalLiteralTest, TheEscapeAlphabetDecodesToBytes) {
+  struct Case {
+    const char* spelling;
+    std::vector<std::uint8_t> bytes;
+  };
+  const Case cases[] = {
+      {"\"\\a\"", {7}},
+      {"\"\\b\"", {8}},
+      {"\"\\e\"", {27}},
+      {"\"\\f\"", {12}},
+      {"\"\\n\"", {10}},
+      {"\"\\r\"", {13}},
+      {"\"\\t\"", {9}},
+      {"\"\\v\"", {11}},
+      {"\"\\?\"", {'?'}},
+      {"\"\\'\"", {'\''}},
+      {"\"\\\\\"", {'\\'}},
+      {"\"\\0\"", {0}},
+      {"\"\\101\"", {'A'}},
+      {"\"\\377\"", {255}},
+      {"\"\\x41\"", {'A'}},
+      {"\"\\x{41}\"", {'A'}},
+      {"\"\\xFF\"", {255}},
+      {"\"\\o{101}\"", {'A'}},
+      {"\"\\o{7}\"", {7}},
+      // C's run length is kept: `\x041` is one escape whose value is `0x41`, and
+      // the delimited form is how the run is stopped instead.
+      {"\"\\x041\"", {'A'}},
+      {"\"\\x{41}B\"", {'A', 'B'}},
+      {"\"\\1012\"", {'A', '2'}},
+      {"\"\\u0041\"", {'A'}},
+      {"\"\\u{e9}\"", {0xC3, 0xA9}},
+      {"\"\\U0001F600\"", {0xF0, 0x9F, 0x98, 0x80}},
+      {"\"\\u{1F600}\"", {0xF0, 0x9F, 0x98, 0x80}},
+      {"\"\\U{1F600}\"", {0xF0, 0x9F, 0x98, 0x80}},
+  };
+  for (const Case& testCase : cases) {
+    const StringLiteral parsed = parseStringLiteral(testCase.spelling);
+    ASSERT_TRUE(parsed.ok) << testCase.spelling << ": " << parsed.message;
+    EXPECT_EQ(parsed.bytes, testCase.bytes) << testCase.spelling;
+  }
+}
+
+TEST(ConstevalLiteralTest, ABackslashBeforeALineEndingContributesNothing) {
+  // C splices it before tokens exist and Rust spells it as an escape; either way
+  // the bytes are the ones on both sides of the ending, and LF and CRLF are one
+  // rule (`literals.md`, decision 18).
+  const StringLiteral lf = parseStringLiteral("\"a\\\nb\"");
+  ASSERT_TRUE(lf.ok) << lf.message;
+  EXPECT_EQ(lf.bytes, (std::vector<std::uint8_t>{'a', 'b'}));
+  const StringLiteral crlf = parseStringLiteral("\"a\\\r\nb\"");
+  ASSERT_TRUE(crlf.ok) << crlf.message;
+  EXPECT_EQ(crlf.bytes, (std::vector<std::uint8_t>{'a', 'b'}));
+}
+
+TEST(ConstevalLiteralTest, TheEscapesThatAreRefusedSayWhy) {
+  struct Case {
+    const char* spelling;
+    const char* wanted;
+  };
+  const Case cases[] = {
+      {"\"\\q\"", "not an escape"},
+      {"\"\\x\"", "needs at least one hex digit"},
+      {"\"\\o\"", "needs at least one octal digit"},
+      {"\"\\x{}\"", "between its braces"},
+      {"\"\\x{41\"", "between its braces"},
+      {"\"\\u{}\"", "between its braces"},
+      {"\"\\u12\"", "exactly 4 hex digits"},
+      {"\"\\U1\"", "exactly 8 hex digits"},
+      {"\"\\uD800\"", "does not name a character"},
+      {"\"\\U00110000\"", "does not name a character"},
+      // A *string* refuses an escape above a byte, because it has no byte for it;
+      // a character literal hands the same value to the checker, which owns the
+      // type rule and its sentence (`literals.md`, decision 14).
+      {"\"\\x1FF\"", "wider than one byte"},
+      // `\x41B` is one escape and not `A` and `B`: the run does not stop at a byte
+      // boundary, which is exactly what the braces are for.
+      {"\"\\x41B\"", "wider than one byte"},
+      {"\"\\400\"", "wider than one byte"},
+      {"\"\\x{1F600}\"", "wider than one byte"},
+      {"\"\\N{GREEK SMALL LETTER ALPHA}\"", "name table"},
+  };
+  for (const Case& testCase : cases) {
+    const StringLiteral parsed = parseStringLiteral(testCase.spelling);
+    EXPECT_FALSE(parsed.ok) << testCase.spelling;
+    EXPECT_NE(parsed.message.find(testCase.wanted), std::string::npos)
+        << testCase.spelling << ": " << parsed.message;
+  }
+}
+
+// The unit count is what lets the checker state "a `char` is one byte" without
+// reading the spelling a second time, and the packed value is what the
+// preprocessor compares a C `#if` against (`literals.md`, decision 20).
+TEST(ConstevalLiteralTest, ACharacterLiteralCountsItsUnits) {
+  EXPECT_EQ(parseCharLiteral("'a'").units, 1u);
+  EXPECT_EQ(parseCharLiteral("'\\n'").units, 1u);
+  EXPECT_EQ(parseCharLiteral("'\\u{e9}'").units, 1u);
+  // One unit, and above a byte: the value is handed over and the *checker*
+  // refuses it, because a `char` is the language's rule and not the reader's.
+  const CharLiteral wide = parseCharLiteral("'\\u{1F600}'");
+  ASSERT_TRUE(wide.ok) << wide.message;
+  EXPECT_EQ(wide.units, 1u);
+  EXPECT_EQ(wide.value.bits, 0x1F600U);
+  // Two units, in both spellings a reader can be handed.
+  EXPECT_EQ(parseCharLiteral("'ab'").units, 2u);
+  EXPECT_EQ(parseCharLiteral("'\\xC3\\xA9'").units, 2u);
+  EXPECT_EQ(parseCharLiteral("'ab'").value.bits, 0x6162U);
+  // `'\<newline>a'` is `'a'`: a continuation is no unit at all.
+  const CharLiteral continued = parseCharLiteral("'\\\na'");
+  ASSERT_TRUE(continued.ok) << continued.message;
+  EXPECT_EQ(continued.units, 1u);
+  EXPECT_EQ(continued.value.bits, static_cast<std::uint64_t>('a'));
+  // And the alphabet is the string alphabet, so an escape that is refused in one
+  // is refused in the other.
+  EXPECT_FALSE(parseCharLiteral("'\\q'").ok);
+}
+
 } // namespace
 } // namespace minc::support

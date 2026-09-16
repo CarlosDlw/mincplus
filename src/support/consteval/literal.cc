@@ -33,107 +33,269 @@ constexpr std::uint64_t kUint64Max = ~std::uint64_t{0};
   return "'" + std::string(text) + "'";
 }
 
+// `_` is the modern spelling of a digit separator and `'` is C23's; both are
+// *spelling*, so both are removed before a value is read and the value cannot
+// depend on which one was written (`literals.md`, decision 1).
+[[nodiscard]] constexpr bool isSeparator(char c) {
+  return c == '_' || c == '\'';
+}
+
+[[nodiscard]] constexpr bool isOctalDigit(char c) {
+  return c >= '0' && c <= '7';
+}
+
+// The escape alphabet that is one byte wide, as a value: -1 when the byte after
+// a backslash is not one of them. `\e` is here because every terminal protocol
+// is written with it and GCC and Clang have accepted it in C and in C++ for
+// decades (`literals.md`, the escape table).
+[[nodiscard]] constexpr int simpleEscapeValue(char c) {
+  switch (c) {
+  case 'n':
+    return 10;
+  case 'r':
+    return 13;
+  case 't':
+    return 9;
+  case 'v':
+    return 11;
+  case 'f':
+    return 12;
+  case 'b':
+    return 8;
+  case 'a':
+    return 7;
+  case 'e':
+    return 27; // ESC
+  default:
+    return -1;
+  }
+}
+
+// A `\u`/`\U` escape names a code point UTF-8 can encode: in range, and not a
+// surrogate half. C constrains universal character names the same way, and the
+// alternative is a literal that cannot be represented at all.
+[[nodiscard]] constexpr bool isScalarValue(std::uint32_t value) {
+  return value <= 0x10FFFFU && (value < 0xD800U || value > 0xDFFFU);
+}
+
+// A run of digits of an escape, and how many there were. `maxDigits == 0` means
+// "as many as follow", which is what the braced forms and `\x` want.
+struct EscapeDigits {
+  std::uint32_t value = 0;
+  std::size_t digits = 0;
+};
+
+// `index` walks past the digits; the caller is left pointing at whatever ended
+// the run (a brace, another byte, or the end of the body).
+[[nodiscard]] EscapeDigits readEscapeDigits(std::string_view body, std::size_t& index,
+                                            unsigned base, std::size_t maxDigits) {
+  // Saturates above every limit an escape has, so a run longer than the value
+  // range cannot wrap around the test it is about to be given
+  // (`\x{FFFFFFFFFFFFFFFF}` is above one byte, and must stay there).
+  constexpr std::uint32_t kSaturated = 0x110000U;
+  EscapeDigits run;
+  while (index < body.size() && (maxDigits == 0 || run.digits < maxDigits)) {
+    const int digit = hexValue(body[index]);
+    if (digit < 0 || static_cast<unsigned>(digit) >= base) {
+      break;
+    }
+    if (run.value < kSaturated) {
+      run.value = run.value * base + static_cast<std::uint32_t>(digit);
+    }
+    ++index;
+    ++run.digits;
+  }
+  return run;
+}
+
 } // namespace
 
-std::optional<std::pair<std::uint64_t, std::size_t>> decodeCharOrEscape(std::string_view body,
-                                                                        std::size_t index) {
+std::optional<DecodedElement> decodeElement(std::string_view body, std::size_t index) {
   if (index >= body.size()) {
     return std::nullopt;
   }
-  if (body[index] != '\\') {
-    return std::make_pair(static_cast<std::uint64_t>(static_cast<unsigned char>(body[index])),
-                          index + 1);
+  DecodedElement out;
+  const unsigned char byte = static_cast<unsigned char>(body[index]);
+  if (byte != '\\') {
+    // A byte that is not a backslash is itself, and always well formed. A source
+    // byte above `0x7F` is its own code unit: `"é"` is the two bytes the file
+    // holds, and `str` is a byte string, so no decoding happens here.
+    out.value = byte;
+    out.next = index + 1;
+    out.ok = true;
+    return out;
   }
   if (index + 1 >= body.size()) {
-    return std::nullopt;
+    out.message = "the body ends in a backslash";
+    out.next = index + 1;
+    return out;
   }
   const char escape = body[index + 1];
-  switch (escape) {
-  case 'n':
-    return std::make_pair(10U, index + 2);
-  case 't':
-    return std::make_pair(9U, index + 2);
-  case 'r':
-    return std::make_pair(13U, index + 2);
-  case 'a':
-    return std::make_pair(7U, index + 2);
-  case 'b':
-    return std::make_pair(8U, index + 2);
-  case 'f':
-    return std::make_pair(12U, index + 2);
-  case 'v':
-    return std::make_pair(11U, index + 2);
-  case '0':
-  case '1':
-  case '2':
-  case '3':
-  case '4':
-  case '5':
-  case '6':
-  case '7': {
-    std::uint64_t value = 0;
-    std::size_t next = index + 1;
-    std::size_t digits = 0;
-    while (next < body.size() && digits < 3 && body[next] >= '0' && body[next] <= '7') {
-      value = value * 8U + static_cast<std::uint64_t>(body[next] - '0');
-      ++next;
-      ++digits;
+
+  // `\` immediately before a line ending: the line continues and the escape
+  // contributes nothing. `CRLF` is one ending, because the source may come from
+  // either kind of machine and the value must not depend on which
+  // (`literals.md`, decision 18).
+  if (escape == '\n' || escape == '\r') {
+    out.isContinuation = true;
+    out.next = index + 2;
+    if (escape == '\r' && out.next < body.size() && body[out.next] == '\n') {
+      ++out.next;
     }
-    return std::make_pair(value, next);
+    out.ok = true;
+    return out;
   }
+
+  if (const int simple = simpleEscapeValue(escape); simple >= 0) {
+    out.value = static_cast<std::uint32_t>(simple);
+    out.next = index + 2;
+    out.ok = true;
+    return out;
+  }
+
+  switch (escape) {
+  case '?':
+  case '\'':
+  case '"':
+  case '\\':
+    out.value = static_cast<std::uint32_t>(static_cast<unsigned char>(escape));
+    out.next = index + 2;
+    out.ok = true;
+    return out;
   case 'x':
-  case 'X': {
-    std::uint64_t value = 0;
+  case 'o': {
+    // A byte escape: one byte wide, and the two spellings differ only in the
+    // base (`literals.md`, the escape table). Both take a delimited form, which
+    // is what says where the digits end (`\x41B` is `AB`, `\x{41}B` is `A` `B`).
+    const bool hex = escape == 'x';
+    const unsigned base = hex ? 16U : 8U;
+    const std::string spelling = std::string("\\") + escape;
     std::size_t next = index + 2;
-    std::size_t digits = 0;
-    while (next < body.size()) {
-      const int digit = hexValue(body[next]);
-      if (digit < 0) {
-        break;
-      }
-      // A hex escape may not exceed one byte: consuming more digits would
-      // silently wrap, which is the one thing a reader must not do here.
-      value = value * 16U + static_cast<std::uint64_t>(digit);
+    const bool braced = next < body.size() && body[next] == '{';
+    if (braced) {
       ++next;
-      ++digits;
     }
-    if (digits == 0) {
-      return std::nullopt;
+    const EscapeDigits run = readEscapeDigits(body, next, base, /*maxDigits=*/0);
+    if (braced) {
+      if (run.digits == 0 || next >= body.size() || body[next] != '}') {
+        out.message = "`" + spelling + "{...}` needs at least one digit between its braces";
+        out.next = next;
+        return out;
+      }
+      ++next; // the closing brace
+    } else if (run.digits == 0) {
+      out.message =
+          "`" + spelling + "` needs at least one " + (hex ? "hex " : "octal ") + "digit after it";
+      out.next = next;
+      return out;
     }
-    return std::make_pair(value, next);
+    // A byte escape names a *byte*, and `\x{1F600}` is 128512 -- a value this
+    // spelling can carry but no byte can hold. The **width rule is the
+    // consumer's** and not this reader's: a `str` refuses it (it has no byte for
+    // it) and a `char` is a type that cannot hold it, which the checker states
+    // with the two spellings that do mean it (`literals.md`, decision 14).
+    // Refusing here as well would put a second sentence on one mistake, and this
+    // one could not know which fix to name.
+    out.value = run.value;
+    out.next = next;
+    out.ok = true;
+    return out;
   }
   case 'u':
   case 'U': {
-    // A universal character name names one *code point*, and a character
-    // literal's value is the code unit it packs -- so the number here is the
-    // code point itself, not its UTF-8 encoding. The lexer already checked that
-    // the digits name a scalar value.
-    const std::size_t want = escape == 'u' ? 4U : 8U;
-    std::uint64_t value = 0;
+    // A universal character name: four hex digits for `\u`, eight for `\U`, or
+    // any number between braces. It names a *code point*, and what a caller does
+    // with one is the caller's business -- a string encodes it as UTF-8, a
+    // character has to hold it in one byte (`literals.md`, decisions 13-15).
+    const std::size_t unbraced = escape == 'U' ? 8U : 4U;
     std::size_t next = index + 2;
-    std::size_t digits = 0;
-    while (digits < want && next < body.size()) {
-      const int digit = hexValue(body[next]);
-      if (digit < 0) {
-        break;
-      }
-      value = value * 16U + static_cast<std::uint64_t>(digit);
+    const bool braced = next < body.size() && body[next] == '{';
+    EscapeDigits run;
+    if (braced) {
       ++next;
-      ++digits;
+      run = readEscapeDigits(body, next, 16U, /*maxDigits=*/0);
+      if (run.digits == 0 || next >= body.size() || body[next] != '}') {
+        out.message = "`\\u{...}` needs at least one hex digit between its braces";
+        out.next = next;
+        return out;
+      }
+      ++next; // the closing brace
+    } else {
+      run = readEscapeDigits(body, next, 16U, unbraced);
+      if (run.digits != unbraced) {
+        out.message = "`\\" + std::string(1, escape) + "` needs exactly " +
+                      std::to_string(unbraced) +
+                      " hex digits; `\\u{...}` takes as many as are "
+                      "between the braces";
+        out.next = next;
+        return out;
+      }
     }
-    if (digits != want) {
-      return std::nullopt;
+    if (!isScalarValue(run.value)) {
+      out.message = "`\\" + std::string(1, escape) +
+                    "...` does not name a character: a code point is at most U+10FFFF, and a "
+                    "surrogate half is not a code point";
+      out.next = next;
+      return out;
     }
-    return std::make_pair(value, next);
+    out.value = run.value;
+    out.isCodePoint = true;
+    out.next = next;
+    out.ok = true;
+    return out;
   }
-  case '\\':
-  case '\'':
-  case '"':
-    return std::make_pair(static_cast<std::uint64_t>(static_cast<unsigned char>(escape)),
-                          index + 2);
+  case 'N': {
+    // C++23's named universal character escape. Refused *by name*, so the
+    // sentence can say what to write instead: the Unicode name table is a
+    // generated data file this compiler does not carry (`literals.md`,
+    // decision 16). The braces are skipped so the caller's index lands past the
+    // whole escape and one mistake stays one diagnostic.
+    out.message = "`\\N{...}` names a Unicode character by name, and that needs a name table this "
+                  "compiler does not carry; write the code point as `\\u{...}`";
+    std::size_t next = index + 2;
+    if (next < body.size() && body[next] == '{') {
+      ++next;
+      while (next < body.size() && body[next] != '}' && body[next] != '\n' && body[next] != '\r') {
+        ++next;
+      }
+      if (next < body.size() && body[next] == '}') {
+        ++next;
+      }
+    }
+    out.next = next;
+    return out;
+  }
   default:
-    return std::nullopt;
+    break;
   }
+
+  if (isOctalDigit(escape)) {
+    // C's own limit -- one to three digits -- and it is what keeps `"\1012"` the
+    // byte `A` followed by `2`: a fourth digit is a character, not part of the
+    // escape. As above, the *value* is what this reader owns; `\777` is 511, and
+    // whether 511 fits is the consumer's question.
+    std::size_t next = index + 1;
+    const EscapeDigits run = readEscapeDigits(body, next, 8U, /*maxDigits=*/3);
+    out.value = run.value;
+    out.next = next;
+    out.ok = true;
+    return out;
+  }
+
+  out.message = "`\\" + std::string(1, escape) + "` is not an escape this language has";
+  out.next = index + 2;
+  return out;
+}
+
+std::string withoutSeparators(std::string_view number) {
+  std::string out;
+  out.reserve(number.size());
+  for (const char c : number) {
+    if (!isSeparator(c)) {
+      out.push_back(c);
+    }
+  }
+  return out;
 }
 
 IntegerLiteral parseIntegerLiteral(std::string_view text, IntegerBaseRule baseRule) {
@@ -168,12 +330,30 @@ IntegerLiteral parseIntegerLiteral(std::string_view text, IntegerBaseRule baseRu
   std::uint64_t value = 0;
   bool overflowed = false;
   bool anyDigit = false;
+  bool separatorMisplaced = false;
+  bool lastWasSeparator = false;
   for (; index < text.size(); ++index) {
-    const int digit = hexValue(text[index]);
+    const char c = text[index];
+    if (isSeparator(c)) {
+      // A separator is claimed into the token by the scanner only when it sits
+      // inside a number; its *placement* is one sentence -- between two digits of
+      // this run and nowhere else -- and this is where the value is read, so this
+      // is where the rule is stated for the reader (`literals.md`, decision 2).
+      // `_1000` never reaches here (it is a name), while `0x_FF` and `1000_` do:
+      // they are claimed and refused, so one mistake gets one sentence instead of
+      // `0x` and a stray identifier.
+      if (!anyDigit || lastWasSeparator) {
+        separatorMisplaced = true;
+      }
+      lastWasSeparator = true;
+      continue;
+    }
+    const int digit = hexValue(c);
     if (digit < 0 || static_cast<unsigned>(digit) >= base) {
       break;
     }
     anyDigit = true;
+    lastWasSeparator = false;
     const auto digitValue = static_cast<std::uint64_t>(digit);
     // Overflow is decided *before* multiplying, against the exact room left. A
     // "did the value shrink" or `value > max / base` test rejects
@@ -186,13 +366,22 @@ IntegerLiteral parseIntegerLiteral(std::string_view text, IntegerBaseRule baseRu
     // the digits end, and stopping early would leave `...0bignumULL` half lexed.
     value = value * base + digitValue;
   }
+  if (lastWasSeparator) {
+    separatorMisplaced = true; // `1000_`, `10_u8`, `1e1_`
+  }
   if (!anyDigit) {
     result.message = "malformed integer literal " + quoted(text);
     return result;
   }
+  if (separatorMisplaced) {
+    result.message =
+        "a digit separator belongs between two digits of the same number: " + quoted(text);
+    return result;
+  }
   // The digits' own range, before the suffix is classified: the one thing a
   // caller with a type wider than the core needs, and the split belongs to the
-  // reader that just decided where the digits stop.
+  // reader that just decided where the digits stop. The separators are still in
+  // it -- this is a view of the source, and the source wrote them.
   result.number = text.substr(0, index);
 
   // The suffix, through the one table -- the same one the scanner asked to decide
@@ -244,8 +433,8 @@ FloatLiteral readFloatLiteral(std::string_view text) {
   return result;
 }
 
-IntegerLiteral parseCharLiteral(std::string_view text) {
-  IntegerLiteral result;
+CharLiteral parseCharLiteral(std::string_view text) {
+  CharLiteral result;
   // The lexer guarantees the quotes; the body may be empty or escaped, which is
   // the lexer's finding to report, not this reader's to invent.
   if (text.size() < 2) {
@@ -256,17 +445,27 @@ IntegerLiteral parseCharLiteral(std::string_view text) {
   std::uint64_t value = 0;
   std::size_t index = 0;
   while (index < body.size()) {
-    const std::optional<std::pair<std::uint64_t, std::size_t>> decoded =
-        decodeCharOrEscape(body, index);
-    if (!decoded.has_value()) {
-      result.message = "unknown escape in character literal " + quoted(text);
+    const std::optional<DecodedElement> element = decodeElement(body, index);
+    if (!element.has_value()) {
+      break;
+    }
+    if (!element->ok) {
+      result.message = "in character literal " + quoted(text) + ": " + element->message;
       return result;
     }
-    index = decoded->second;
+    index = element->next;
+    // A line continuation is no code unit at all, which is why this counts units
+    // and not bytes: `'\<newline>a'` is `'a'`.
+    if (element->isContinuation) {
+      continue;
+    }
     // Multi-character literals are implementation-defined; this is the packed
-    // value GCC produces, which is the least surprising choice and the one the
-    // preprocessor already used.
-    value = (value << 8U) | decoded->first;
+    // value GCC produces, which is what the preprocessor needs on C input. The
+    // *language's* rule -- a `char` is one byte, so one unit -- is the checker's,
+    // which is why the unit count is handed over with the value
+    // (`literals.md`, decisions 20-23).
+    value = (value << 8U) | element->value;
+    ++result.units;
   }
   result.value = ConstInt::fromSigned(static_cast<std::int64_t>(value));
   result.ok = true;
@@ -296,24 +495,6 @@ void appendUtf8(std::vector<std::uint8_t>& out, std::uint32_t code) {
   }
 }
 
-// The value of `digits` hex digits starting at `at`, or `nullopt` when one is
-// not a hex digit.
-[[nodiscard]] std::optional<std::uint32_t> readHex(std::string_view body, std::size_t at,
-                                                   std::size_t digits) {
-  if (at + digits > body.size()) {
-    return std::nullopt;
-  }
-  std::uint32_t value = 0;
-  for (std::size_t i = 0; i < digits; ++i) {
-    const int digit = hexValue(body[at + i]);
-    if (digit < 0) {
-      return std::nullopt;
-    }
-    value = value * 16U + static_cast<std::uint32_t>(digit);
-  }
-  return value;
-}
-
 } // namespace
 
 StringLiteral parseStringLiteral(std::string_view text) {
@@ -327,130 +508,33 @@ StringLiteral parseStringLiteral(std::string_view text) {
   const std::string_view body = text.substr(1, text.size() - 2);
   std::size_t index = 0;
   while (index < body.size()) {
-    const unsigned char c = static_cast<unsigned char>(body[index]);
-    if (c != '\\') {
-      result.bytes.push_back(c);
-      ++index;
+    const std::optional<DecodedElement> element = decodeElement(body, index);
+    if (!element.has_value()) {
+      break;
+    }
+    if (!element->ok) {
+      result.message = "in string literal " + quoted(text) + ": " + element->message;
+      return result;
+    }
+    index = element->next;
+    // `\` + a newline contributes nothing at all: the line continues, and the
+    // bytes of the literal are the bytes on both sides of it.
+    if (element->isContinuation) {
       continue;
     }
-    if (index + 1 >= body.size()) {
-      result.message = "a string literal ends in a backslash";
+    if (element->isCodePoint) {
+      // One code point, one UTF-8 encoding, on every target: no locale and no
+      // ABI is consulted (`literals.md`, decision 13).
+      appendUtf8(result.bytes, element->value);
+      continue;
+    }
+    if (element->value > 0xFFU) {
+      result.message = "in string literal " + quoted(text) +
+                       ": this escape is wider than one byte, and a `str` is bytes; write the "
+                       "code point as `\\u{...}`";
       return result;
     }
-    const char escape = body[index + 1];
-    switch (escape) {
-    case 'n':
-      result.bytes.push_back(static_cast<std::uint8_t>('\n'));
-      index += 2;
-      break;
-    case 't':
-      result.bytes.push_back(static_cast<std::uint8_t>('\t'));
-      index += 2;
-      break;
-    case 'r':
-      result.bytes.push_back(static_cast<std::uint8_t>('\r'));
-      index += 2;
-      break;
-    case 'a':
-      result.bytes.push_back(static_cast<std::uint8_t>(7));
-      index += 2;
-      break;
-    case 'b':
-      result.bytes.push_back(static_cast<std::uint8_t>(8));
-      index += 2;
-      break;
-    case 'f':
-      result.bytes.push_back(static_cast<std::uint8_t>(12));
-      index += 2;
-      break;
-    case 'v':
-      result.bytes.push_back(static_cast<std::uint8_t>(11));
-      index += 2;
-      break;
-    case '?':
-      result.bytes.push_back(static_cast<std::uint8_t>('?'));
-      index += 2;
-      break;
-    case '\\':
-    case '\'':
-    case '"':
-      result.bytes.push_back(static_cast<std::uint8_t>(escape));
-      index += 2;
-      break;
-    case '0':
-    case '1':
-    case '2':
-    case '3':
-    case '4':
-    case '5':
-    case '6':
-    case '7': {
-      std::uint32_t value = 0;
-      std::size_t digits = 0;
-      std::size_t next = index + 1;
-      while (next < body.size() && digits < 3 && body[next] >= '0' && body[next] <= '7') {
-        value = value * 8U + static_cast<std::uint32_t>(body[next] - '0');
-        ++next;
-        ++digits;
-      }
-      if (value > 0xFFU) {
-        result.message = "an octal escape in " + quoted(text) + " does not fit in one byte";
-        return result;
-      }
-      result.bytes.push_back(static_cast<std::uint8_t>(value));
-      index = next;
-      break;
-    }
-    case 'x': {
-      std::uint64_t value = 0;
-      std::size_t next = index + 2;
-      std::size_t digits = 0;
-      while (next < body.size()) {
-        const int digit = hexValue(body[next]);
-        if (digit < 0) {
-          break;
-        }
-        value = value * 16U + static_cast<std::uint64_t>(digit);
-        ++next;
-        ++digits;
-      }
-      if (digits == 0) {
-        result.message = "`\\x` in " + quoted(text) + " has no digits";
-        return result;
-      }
-      if (value > 0xFFU) {
-        result.message = "a `\\x` escape in " + quoted(text) + " is wider than one byte; use `\\u`";
-        return result;
-      }
-      result.bytes.push_back(static_cast<std::uint8_t>(value));
-      index = next;
-      break;
-    }
-    case 'u':
-    case 'U': {
-      const std::size_t digits = escape == 'u' ? 4U : 8U;
-      const std::optional<std::uint32_t> value = readHex(body, index + 2, digits);
-      if (!value.has_value()) {
-        result.message = "a Unicode escape in " + quoted(text) + " does not have " +
-                         std::to_string(digits) + " hex digits";
-        return result;
-      }
-      // The lexer already checked that the digits name a scalar value, so this
-      // cannot fail on a well-formed tree; it is here because a reader that
-      // silently accepted a surrogate would be encoding a code point that does
-      // not exist.
-      if (*value > 0x10FFFFU || (*value >= 0xD800U && *value <= 0xDFFFU)) {
-        result.message = "a Unicode escape in " + quoted(text) + " is not a character";
-        return result;
-      }
-      appendUtf8(result.bytes, *value);
-      index += 2 + digits;
-      break;
-    }
-    default:
-      result.message = "unknown escape `\\" + std::string(1, escape) + "` in " + quoted(text);
-      return result;
-    }
+    result.bytes.push_back(static_cast<std::uint8_t>(element->value));
   }
   result.ok = true;
   return result;

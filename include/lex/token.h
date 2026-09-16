@@ -25,22 +25,30 @@ namespace minc::lex {
 // alphabet is part of the lexical grammar; a number that does not fit in i32
 // is *not* flagged, because that needs the type system.
 //
-// The 1-byte base type is load-bearing, not a size micro-optimization: a ninth
-// flag would be a shift that does not fit in eight bits, and the enumerator
-// value would no longer be representable in the underlying type, so the build
-// fails instead of silently truncating the flag to nothing.
+// The base type is load-bearing in the other direction, and it is the reason
+// this was 8 bits until the literal alphabet outgrew it: an enumerator whose
+// shift does not fit the underlying type is a value that cannot be represented,
+// so the build fails instead of silently truncating a flag to nothing. The
+// widening from 8 to 16 happened once, when the digit separators and the escape
+// family together took the count past eight -- a decision, made here, rather
+// than a shift that quietly meant `None`. A seventeenth flag is where the next
+// one is forced.
 //
 // The enumerators are ordered to match `flagInfos()`, which is the order
 // diagnostics are reported in.
-enum class TokenFlag : std::uint8_t {
+enum class TokenFlag : std::uint16_t {
   None = 0,
   UnterminatedString = 1U << 0U,
   UnterminatedChar = 1U << 1U,
   UnterminatedBlockComment = 1U << 2U,
   UnknownEscape = 1U << 3U,      // `\q`
-  InvalidEscapeValue = 1U << 4U, // `\uD800`, `\U00110000`
+  InvalidEscapeValue = 1U << 4U, // `\uD800`, `\u{110000}`
   EmptyCharLiteral = 1U << 5U,   // `''`
-  MissingDigits = 1U << 6U,      // `0x`, `\u`, `1e+`
+  MissingDigits = 1U << 6U,      // `0x`, `0b`
+  MisplacedSeparator = 1U << 7U, // `1000_`, `1__0`, `0x_FF`, `10_u8`
+  EscapeDigits = 1U << 8U,       // `\x`, `\u12`, `\x{}`, `\x{41`
+  EscapeTooWide = 1U << 9U,      // `"\x1FF"`, `"\400"`, `'\u{1F600}'`
+  NamedEscape = 1U << 10U,       // `\N{GREEK SMALL LETTER ALPHA}`
 };
 
 using TokenFlags = std::uint16_t;

@@ -36,6 +36,30 @@
 #include "support/consteval/literal.h"
 
 namespace minc::ir {
+namespace {
+
+// The spelling of a float as `llvm::APFloat`'s reader needs to see it. Two
+// translations, both *exact*, and both because the language and that reader
+// disagree about which spellings exist rather than about what they mean
+// (`literals.md`):
+//
+//   * the grouping separators go, because the reader stops at the first byte it
+//     does not know and would silently read `1.000_000` as `1` -- a wrong value
+//     instead of a refusal;
+//   * a hexadecimal float with no exponent gets `p0`, because this language lets
+//     the exponent be absent (decision 6) and `APFloat` does not. `p0` is
+//     `x 2^0`: the significand and the exponent are untouched, so the rounding
+//     the reader performs is the rounding of the number as written.
+[[nodiscard]] std::string floatForAPFloat(std::string_view number) {
+  std::string out = support::withoutSeparators(number);
+  const bool hexadecimal = out.size() > 2 && out[0] == '0' && (out[1] == 'x' || out[1] == 'X');
+  if (hexadecimal && out.find_first_of("pP") == std::string::npos) {
+    out += "p0";
+  }
+  return out;
+}
+
+} // namespace
 
 bool Lowering::signednessOf(const sema::TypeStore& types, sema::TypeId type) {
   if (!types.known(type)) {
@@ -719,9 +743,12 @@ std::optional<llvm::APFloat> Lowering::floatValue(ast::AstId literal) {
   // the literal (`1.5f32` is one token, `casts.md`), and `APFloat`'s reader is
   // handed a number. The split is `support`'s -- the same table the scanner and
   // the checker ask -- so no stage cuts a suffix off a spelling twice.
+  // What the reader takes, prepared in one place: the separators removed and the
+  // exponent the language may omit spelled out (`floatForAPFloat`).
+  const std::string number = floatForAPFloat(support::readFloatLiteral(spelling(token)).number);
   llvm::APFloat value(*semantics);
-  llvm::Expected<llvm::APFloat::opStatus> parsedResult = value.convertFromString(
-      support::readFloatLiteral(spelling(token)).number, llvm::APFloat::rmNearestTiesToEven);
+  llvm::Expected<llvm::APFloat::opStatus> parsedResult =
+      value.convertFromString(number, llvm::APFloat::rmNearestTiesToEven);
   if (!parsedResult) {
     // The lexer already validated the *shape* of a float literal, so a string
     // this reader cannot parse is a disagreement between two readers.
@@ -801,9 +828,14 @@ std::optional<llvm::APInt> Lowering::wideInteger(ast::AstId literal) {
   // stop: a suffix is part of the token (`0xFFusize` is one literal) and it is
   // not a digit. Reading them here rather than cutting the suffix off a second
   // time is what keeps this stage and the scanner agreeing about the split.
-  std::string_view text =
+  // The grouping separators are removed rather than passed on, for the same reason
+  // the float path removes them: `llvm::APInt`'s string constructor stops at the
+  // first byte it does not know, so `0xFF'FF` would silently become `0xFF` -- a
+  // wrong value instead of a refusal (`literals.md`, decision 10).
+  const std::string number = support::withoutSeparators(
       support::parseIntegerLiteral(spelling(token), support::IntegerBaseRule::DecimalLeadingZero)
-          .number;
+          .number);
+  std::string_view text = number;
   unsigned radix = 10;
   std::size_t offset = 0;
   if (text.size() > 2 && text[0] == '0') {

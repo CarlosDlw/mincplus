@@ -82,14 +82,17 @@ struct FloatLiteral {
 [[nodiscard]] FloatLiteral readFloatLiteral(std::string_view text);
 
 // The value of an integer literal's spelling. An empty spelling is refused
-// rather than read as zero.
+// rather than read as zero, and a digit separator anywhere other than between
+// two digits is refused with the sentence that says where it may sit.
 [[nodiscard]] IntegerLiteral parseIntegerLiteral(std::string_view text, IntegerBaseRule baseRule);
 
-// A character literal's spelling **including its quotes**, as the lexer
-// produced it. One or more characters, escapes decoded, packed most-significant
-// first -- the value GCC produces for a multi-character constant, which is the
-// least surprising rule available.
-[[nodiscard]] IntegerLiteral parseCharLiteral(std::string_view text);
+// A numeric part with its grouping separators removed (`1_000` -> `1000`,
+// `0xFE'DC` -> `0xFEDC`), ready for a value reader that knows digits and nothing
+// else -- `llvm::APFloat`'s, and `llvm::APInt`'s for a literal wider than the
+// 64-bit core. Both of those stop at the first byte they do not know, so a
+// separator left in would be a *wrong value* rather than a refusal; the result is
+// owned because it is handed straight to a reader that takes a string.
+[[nodiscard]] std::string withoutSeparators(std::string_view number);
 
 // A string literal's spelling **including its quotes**, decoded to bytes.
 //
@@ -111,11 +114,59 @@ struct StringLiteral {
 
 [[nodiscard]] StringLiteral parseStringLiteral(std::string_view text);
 
-// The code unit at `index` and the index past it. A character that is not a
-// backslash is itself; a backslash introduces `\n`, `\t`, `\r`, `\a`, `\b`,
-// `\f`, `\v`, `\\`, `\'`, `\"`, up to three octal digits, or `\x` with one or
-// more hex digits. `nullopt` for an unknown or truncated escape.
-[[nodiscard]] std::optional<std::pair<std::uint64_t, std::size_t>>
-decodeCharOrEscape(std::string_view body, std::size_t index);
+// A character literal's spelling decoded: the value it packs to, how many code
+// units were in it, and whether the body was well formed.
+//
+// The **unit count** is what lets the checker state the language's rule: a
+// `char` is one byte, so `'ab'` and `'\xC3\xA9'` are two units and `'a'` is one,
+// and a rule that only knew the packed value could not tell `'ab'` from a
+// single unit the type cannot hold (`'\u{1F600}'`). The value is packed
+// most-significant-first, so the units come back out of it in the order they
+// were written -- which is what a diagnostic needs to talk about them.
+struct CharLiteral {
+  ConstInt value;
+  std::size_t units = 0;
+  bool ok = false;
+  std::string message;
+};
+
+// The character literal's spelling **including its quotes**, as the lexer
+// produced it: one or more units, escapes decoded and packed most-significant
+// first -- the value GCC produces for a multi-character constant, which is what
+// the *preprocessor* needs on C input. The language's own rule (one byte, and
+// therefore one unit) is the checker's, so a reader here never has to decide
+// what `'ab'` means to a `let` (`literals.md`, decision 20).
+[[nodiscard]] CharLiteral parseCharLiteral(std::string_view text);
+
+// One element of a character or string literal's body.
+//
+// A string and a character share this reader because they share the alphabet:
+// what differs between them is what they do with a code point (a string encodes
+// it as UTF-8 bytes, a character has to hold it in one byte), and that difference
+// belongs to the caller.
+struct DecodedElement {
+  // The value the escape spells: a byte for the byte escapes (`\x`, `\o`, the
+  // octal run) and for the punctuation ones, a code point for `\u`/`\U`, and 0
+  // for a line continuation, which is no element at all. Whether a value *fits* is
+  // deliberately not this reader's answer: a `str` is bytes and a `char` is one
+  // byte, so the width rule belongs to the caller that knows which one it is
+  // (`literals.md`, decision 14).
+  std::uint32_t value = 0;
+  // `\u`/`\U`: `value` is a code point and not a byte, so a string encodes it.
+  bool isCodePoint = false;
+  // `\` immediately before a line ending: it contributes nothing.
+  bool isContinuation = false;
+  // Index past everything this element consumed.
+  std::size_t next = 0;
+  // The element is an escape this alphabet has. A byte that is not a backslash is
+  // always well formed; `message` names what was wrong otherwise, and an unknown
+  // or truncated escape is `ok == false` with the index untouched.
+  bool ok = false;
+  std::string message;
+};
+
+// Decodes one element of a literal's body (the text between the quotes, escapes
+// included). `nullopt` only when `index` is past the end.
+[[nodiscard]] std::optional<DecodedElement> decodeElement(std::string_view body, std::size_t index);
 
 } // namespace minc::support

@@ -256,12 +256,19 @@ std::size_t suffixLengthAt(std::string_view text, std::size_t at, bool literalIs
 }
 
 std::string_view numericPartOfFloat(std::string_view text) {
-  const auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
-  const auto isHex = [](char c) {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+  // The grouping separators belong to the *number*, so they are part of what this
+  // split consumes: `1_000.5` is one number, and a split that stopped at the
+  // `_` would hand the rest to the suffix table and classify `_000.5` as an
+  // unknown suffix. Their placement is the reader's rule (`literal.cc`); here
+  // they are claimed so the boundary is the scanner's boundary.
+  const auto isSeparator = [](char c) { return c == '_' || c == '\''; };
+  const auto isDigit = [isSeparator](char c) { return (c >= '0' && c <= '9') || isSeparator(c); };
+  const auto isHex = [isSeparator](char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') ||
+           isSeparator(c);
   };
-  const auto isBinary = [](char c) { return c == '0' || c == '1'; };
-  const auto isOctal = [](char c) { return c >= '0' && c <= '7'; };
+  const auto isBinary = [isSeparator](char c) { return c == '0' || c == '1' || isSeparator(c); };
+  const auto isOctal = [isSeparator](char c) { return (c >= '0' && c <= '7') || isSeparator(c); };
 
   unsigned base = 10;
   std::size_t i = 0;

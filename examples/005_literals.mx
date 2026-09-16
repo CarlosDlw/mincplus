@@ -1,7 +1,8 @@
 // Literal forms and the two comment styles.
 //
 // Octal is spelled `0o`, and a leading zero without a prefix stays decimal:
-// `.mx` does not inherit C's implicit octal.
+// `.mx` does not inherit C's implicit octal. `_` and `'` group digits and are
+// removed before the value is read, so they never change what a number means.
 
 fn i32 integers()
 {
@@ -18,36 +19,85 @@ fn i32 integers()
   let binary: i32 = 0b10101010;
   let octal: i32 = 0o755;
 
-  return decimal + zero + leadingZeroIsDecimal + upperHex + lowerHex + binary + octal;
+  // How many digits were written is not the value: a separator needs a digit on
+  // both sides (`1000_` and `0x_FF` are refused), and both spellings are one
+  // number.
+  let grouped: i32 = 1_000'000;
+  let groupedHex: i32 = 0xBE'EF;
+  let groupedBinary: i32 = 0b1010_1010;
+  let groupedOctal: i32 = 0o7_5_5;
+
+  return decimal + zero + leadingZeroIsDecimal + upperHex + lowerHex + binary + octal + grouped +
+         groupedHex + groupedBinary + groupedOctal;
 }
 
 fn f64 floats()
 {
   let fraction: f64 = 3.14159;
   let half: f64 = 0.5;
+  // A fraction may start at the point, and an exponent needs no integer part on
+  // its left: `.5` is `0.5` and `1e9` is a billion.
+  let leadingPoint: f64 = .5;
   let exponent: f64 = 1e9;
   let signedExponent: f64 = 1e+10;
   let negativeExponent: f64 = 2.5e-3;
-  let hexFloat: f64 = 0x1.8p3;
 
-  return fraction + half + exponent + signedExponent + negativeExponent + hexFloat;
+  // Hexadecimal floats: the point separates hex digits, `p` is the power of two,
+  // and both parts are optional -- `0x.8p3` is `0.5 * 8` and `0x1.8` is `1.5`.
+  let hexFloat: f64 = 0x1.8p3;
+  let hexNoExponent: f64 = 0x1.8;
+  let hexNoIntegerPart: f64 = 0x.8p3;
+
+  // Separators group digits here too, on both sides of a point or an exponent.
+  let grouped: f64 = 1_000.5;
+  let groupedExponent: f64 = 1.5e1_0;
+  let groupedHex: f64 = 0xF_Fp1_0;
+
+  return fraction + half + leadingPoint + exponent + signedExponent + negativeExponent + hexFloat +
+         hexNoExponent + hexNoIntegerPart + grouped + groupedExponent + groupedHex;
 }
 
 fn str text()
 {
+  // A `char` is one byte, so every escape here fits one: the control characters,
+  // the punctuation C spells with a backslash, and the numeric forms.
   let newline: char = '\n';
   let tab: char = '\t';
   let carriageReturn: char = '\r';
   let backslash: char = '\\';
   let singleQuote: char = '\'';
   let doubleQuote: char = '\"';
+  let escape: char = '\e'; // 0x1B, what a terminal protocol is written with
+  let question: char = '\?';
+  let bell: char = '\a';
+  let backspace: char = '\b';
+  let formFeed: char = '\f';
+  let verticalTab: char = '\v';
+  let nul: char = '\0';
+  let octalEscape: char = '\101';
   let hexEscape: char = '\x41';
+  let delimitedHex: char = '\x{41}';
+  let delimitedOctal: char = '\o{101}';
   let unicodeEscape: char = '\u00e9';
+  let delimitedCodePoint: char = '\u{ff}';
 
   let empty: str = "";
   let plain: str = "hello, world";
   let escaped: str = "tab:\there, quote:\"here, backslash:\\here";
   let utf8: str = "olá, mundo";
+
+  // The braces say where a run of digits ends, which is what makes `A` and `B`
+  // two bytes here: without them, `\x41B` would be one escape above a byte.
+  let delimited: str = "\x{41}B\e[0m";
+
+  // A code point is one character and its bytes are its UTF-8 encoding, on every
+  // target: `\u{e9}` is two bytes and `\u{1F600}` is four.
+  let codePoints: str = "\u{e9} = \u{1F600}";
+
+  // A backslash before the end of a line continues the literal, and contributes
+  // nothing at all: the value is the bytes on both sides of the ending.
+  let continued: str = "one long \
+line";
 
   return utf8;
 }

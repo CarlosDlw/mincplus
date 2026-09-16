@@ -395,7 +395,11 @@ private:
       failToken(token, "malformed character literal in #if expression");
       return ConstInt{};
     }
-    const support::IntegerLiteral parsed = support::parseCharLiteral(text);
+    // The value, and the *units* are deliberately not consulted: this is C input,
+    // where `'ab'` is the packed value GCC produces, and the language's rule that
+    // a `char` is one byte belongs to the checker
+    // (`literals.md`, decision 20).
+    const support::CharLiteral parsed = support::parseCharLiteral(text);
     if (!parsed.ok) {
       failToken(token, parsed.message);
       return ConstInt{};

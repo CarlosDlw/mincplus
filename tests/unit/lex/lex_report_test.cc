@@ -44,9 +44,10 @@ TEST(LexReportTest, EveryFlagOnATokenIsReported) {
   support::DiagBag bag;
   report("\"\\x", bag);
   ASSERT_EQ(bag.size(), 2u);
-  // Reported in table order, so the result is deterministic.
+  // Reported in table order, so the result is deterministic: `\x` with no digits
+  // is `lex-escape-digits`, and the quote that never came is the other flag.
   EXPECT_EQ(bag.all()[0].code, "lex-unterminated-string");
-  EXPECT_EQ(bag.all()[1].code, "lex-missing-digits");
+  EXPECT_EQ(bag.all()[1].code, "lex-escape-digits");
 }
 
 TEST(LexReportTest, FlagInfosCoverEveryFlagExactlyOnce) {
@@ -106,6 +107,14 @@ TEST(LexReportTest, EveryFlagIsReachableFromSomeInput) {
       {"escape past the last scalar", "\"\\U00110000\"", "lex-escape-out-of-range"},
       {"empty char literal", "''", "lex-empty-char"},
       {"hex with no digits", "0x", "lex-missing-digits"},
+      {"separator with no digit on one side", "let x = 1000_;\n", "lex-misplaced-separator"},
+      {"separator touching a suffix", "let x = 10_u8;\n", "lex-misplaced-separator"},
+      {"escape with no digits", "\"\\x\"", "lex-escape-digits"},
+      {"short universal escape", "\"\\u12\"", "lex-escape-digits"},
+      {"hex escape above a byte", "\"\\x1FF\"", "lex-escape-too-wide"},
+      {"octal escape above a byte", "\"\\400\"", "lex-escape-too-wide"},
+      {"delimited escape above a byte", "\"\\x{1F600}\"", "lex-escape-too-wide"},
+      {"named escape", "\"\\N{GREEK SMALL LETTER ALPHA}\"", "lex-named-escape"},
       {"byte outside the alphabet", "`", "lex-invalid-character"},
   };
 

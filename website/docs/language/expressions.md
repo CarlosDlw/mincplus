@@ -266,20 +266,49 @@ see [Types](/language/types).
 
 ## Literals
 
+### Numbers
+
 ```minc
-1234567      // decimal
-010          // decimal: a leading zero has no special meaning in `.mx`
-0xBEEF       // hexadecimal, either case
-0b10101010   // binary
-0o755        // octal, spelled `0o`
+1234567        // decimal
+010            // decimal: a leading zero has no special meaning in `.mx`
+0xBEEF 0xbeef  // hexadecimal, either case
+0b1010_1010    // binary
+0o755          // octal, spelled `0o`
 
-3.14159      // f64
-1e9 1e+10 2.5e-3     // exponents
-0x1.8p3      // hexadecimal float
-
-'x'  '\n'  '\x41'  '\u00e9'    // char
-"hello"  "olá, mundo"          // str
+3.14159        // f64
+.5 1e9 1e+10 2.5e-3    // a fraction may start at the point
+0x1.8p3 0x1.8 0x.8p3   // hexadecimal floats
 ```
+
+| spelling | is |
+| --- | --- |
+| `1234567` | decimal |
+| `1_000'000` | the same number: `_` and `'` group digits |
+| `0xBEEF` | hexadecimal, either case for the digits and the `x` |
+| `0b1010_1010` | binary |
+| `0o755` | octal — **the only octal spelling**; `0755` is decimal 755 |
+| `1.5` `.5` `1e9` `2.5e-3` | decimal float, `f64` |
+| `0x1.8p3` `0x1.8` `0x.8p3` | hexadecimal float; the point separates hex digits and `p` is the power of two |
+| `10u8` `12f` `1.5f32` `1.5L` | typed by its [suffix](#10u8--the-literal-suffix) |
+
+**Digit separators** (`_`, and C's `'`) may sit between two digits and nowhere
+else — `1_000`, `0xFE'DC'BA'98`, `0b1111_0000`, `1.414'213'562`, `1e1_0`. They are
+removed before the value is read, so they cannot change what a number means. A
+separator that touches anything else is refused as a *placement* mistake, and the
+whole run stays one token:
+
+```console
+$ printf 'fn i32 main() { let x: i32 = 1__0; return 0; }\n' | mincc check -
+<stdin>:1:30: error[lex-misplaced-separator]: a digit separator belongs between two digits
+  fn i32 main() { let x: i32 = 1__0; return 0; }
+                               ^^^^
+```
+
+`010` is ten and `5.` is `5` followed by `.`: a leading zero is never octal, and a
+trailing point never makes a float. Both rules exist so that a spelling has one
+reading today and keeps it when the language grows — a leading-zero rule makes
+`010` a silent eight, and a trailing-point rule would change meaning the day a
+member access exists.
 
 An integer literal is `i32` when nothing asks for another type; a float literal
 is `f64`. The type the surrounding context asks for decides otherwise, and a
@@ -289,6 +318,61 @@ and then nothing downstream decides it.
 
 The integer readers are shared between the type checker and the preprocessor, so
 `0x10` means the same value in a `#if` as it does in an expression.
+
+### Characters, strings and escapes
+
+A `str` is a **byte string**: NUL-terminated, C-compatible, and not required to be
+valid UTF-8. A `char` is one byte. That is what decides the escape table — a byte
+escape (`\x`, `\o`) names a byte, and a code-point escape (`\u`) names a
+character whose bytes are its UTF-8 encoding.
+
+| escape | means |
+| --- | --- |
+| `\n` `\r` `\t` `\v` `\f` `\b` `\a` | the control characters |
+| `\e` | `0x1B`, ESC — what terminal protocols are written with |
+| `\?` `\"` `\'` `\\` | themselves |
+| `\nnn` | octal, **one to three** digits: `\377` is 255, and `\1012` is `A` and `2` |
+| `\o{n...}` | octal, delimited |
+| `\xn...` | hex, **as many digits as follow**: `\x041` is `A`, `\x41B` is one escape too wide for a byte |
+| `\x{n...}` | hex, delimited — the way to say where a run ends: `\x{41}B` is `A` and `B` |
+| `\unnnn` `\Unnnnnnnn` | a code point, four or eight hex digits |
+| `\u{n...}` `\U{n...}` | the same, delimited |
+| `\` + end of line | nothing: the literal continues on the next line |
+| anything else | refused, by name |
+
+```minc
+let esc: char = '\e';
+let bytes: str = "\x{41}B\e[0m";      // `A`, `B`, ESC, `[`, `0`, `m`
+let points: str = "\u{e9} = \u{1F600}";  // é = 😀, as UTF-8
+let long: str = "one long \
+line";                                  // "one long line"
+```
+
+A code point is one character and its *bytes* are its UTF-8 encoding on every
+target: no locale and no ABI is consulted, so `"\u{e9}"` is `C3 A9` everywhere.
+
+Two refusals are worth knowing, because they say what to write instead:
+
+```console
+$ printf 'fn i32 main() { let s: str = "\\x41B"; return 0; }\n' | mincc check -
+<stdin>:1:30: error[lex-escape-too-wide]: this escape is wider than one byte: a `str` is bytes, so write the code point as `\u{...}`
+  fn i32 main() { let s: str = "\x41B"; return 0; }
+                               ^^^^^^^
+$ printf "fn i32 main() { let c: char = 'ab'; return 0; }\n" | mincc check -
+<stdin>:1:31: error[sema-literal-out-of-range]: a `char` is one byte and this character literal is 2 units: write it as a string (`"ab"`), or the value as an integer (`0x6162`)
+  fn i32 main() { let c: char = 'ab'; return 0; }
+                                ^^^^
+```
+
+A `char` is **one byte**, so a character literal is one code unit that fits a
+byte: `'a'`, `'\n'`, `'\xFF'`, `'\u{e9}'` are all one `char`, while `'ab'`,
+`'\xC3\xA9'` and the two source bytes of `'é'` are two units, and `'\u{1F600}'`
+is one unit above a byte. Each is refused with the fix spelled out — write the
+string, or write the wider integer.
+
+`\N{...}` (a Unicode character *by name*) is refused by name: the name table is a
+data dependency this compiler does not carry. Raw and multi-line strings are not
+implemented — a long literal is written with the line continuation above.
 
 ## Evaluation order
 
