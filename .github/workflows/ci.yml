@@ -43,7 +43,7 @@ jobs:
       # means a run always starts from the most recent cache for its platform;
       # only the process-cache is reused, never the configure step.
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/ccache
@@ -111,7 +111,7 @@ jobs:
           cmake --version | head -1
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-windows-${{ github.sha }}
@@ -142,7 +142,7 @@ jobs:
       # A separate cache from the `ci` job: the sanitizer build compiles with
       # different flags, so its objects cannot be shared with the plain one.
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-sanitize-${{ github.sha }}
