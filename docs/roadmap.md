@@ -410,6 +410,16 @@ which also records the reversal.
       that converts to every other one. `sema` publishes one
       `AccessObligation` per dereference (`Object` or `Foreign` provenance) for
       the lowering to materialise rather than re-derive
+- [x] Slices **decided**: the record is
+      [`architectures/slices.md`](architectures/slices.md), and it answers the
+      question `arrays.md` decision 17 left open (a slice does *not* need
+      `struct` first — arrays already landed the aggregate-value machinery; what
+      waits for `cinterop` is the promise, not the mechanism). A slice is
+      `{ptr, len}`, a **view** with no capacity and no literal, taken with `..`
+      from an array, a slice or a pointer, its own index `0`, its length as a
+      `usize` word asked for as `len(x)`, and refused at an `extern` boundary the
+      way an array is. The six landing steps are in the record; the two
+      spellings (`[]T`, `..`) already parse and are refused with a sentence
 - [ ] The rest of the memory model: int ↔ ptr as named operations (`expose` /
       `with_exposed_provenance`), casts, `restrict`, `volatile`/`unaligned`
       accesses, the `slice<T>` / `&T` / `&mut T` layer, and the checked-build

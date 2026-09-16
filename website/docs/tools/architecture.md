@@ -53,6 +53,7 @@ In the repository:
 | `docs/architectures/codegen.md` | the backend: objects, debug info, the link |
 | `docs/architectures/cli.md` | the command line as data |
 | `docs/architectures/builtins.md` | how a builtin is added, and what is not a builtin |
+| `docs/architectures/slices.md` | the view (`{ptr, len}`), and the six rules that keep it from being C's decay |
 | `docs/architectures/extern.md` | `extern`, variadics, the C ABI boundary |
 
 If you are reading the compiler to change it, `docs/architecture.md` first, then

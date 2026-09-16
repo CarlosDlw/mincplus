@@ -288,7 +288,7 @@ diagnostic or a scan, never a convention.
 
 | Question | State |
 | --- | --- |
-| `[]T` slices, `..` slicing, `{ptr, len}` | reserved spelling, refused with a sentence; the representation is an aggregate, so it lands after `struct` and the `cinterop` ABI layer |
+| `[]T` slices, `..` slicing, `{ptr, len}` | **decided, in [`slices.md`](slices.md)** — the spelling is reserved and refused with a sentence until it lands. Decision 17 below says it waits for `struct`; the record that answered it found that it does not: what `struct` stood in for is the aggregate-value machinery, which landed *here*, and what still waits for `cinterop` is the promise at the ABI boundary rather than the mechanism |
 | `sizeof` / `alignof` / `len` | the natural companion, and one item: the array's size is a constant so it joins the ICE, and `len(a)` is the count with a name — without it a loop bound is a literal that can go stale, which is the `ARRAY_SIZE` macro C wrote because its language could not. The same reader that folds a count for a type folds one in a constant expression (`builtins.md`) |
 | A count that is a constant expression or a named constant (`[N]T` with `const N = 4;`) | the seam is the count reader: today a literal, because a type position has no typed tree to fold. It is the same machinery `sizeof` needs, so it is not a separate design |
 | Const generics, `[N]T` generic over `N` | not in scope: it needs functions over types, which is a much larger record. Rust's RFC 2000 is the reference for how much larger |
