@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "ast/ast.h"
+#include "builtins/builtin.h"
 #include "parse/syntax_kind.h"
 #include "resolve/def_index.h"
 #include "resolve/map.h"
@@ -277,6 +278,34 @@ private:
   [[nodiscard]] std::string mixingAdvice(TypeId from) const;
 
   // --- expressions -----------------------------------------------------------
+
+  // --- builtins --------------------------------------------------------------
+  //
+  // A builtin call is a call, and everything about it that a reader sees -- the
+  // wrong-count sentence, the argument conversion, the caret on the argument --
+  // is the machinery a user function's call uses. What differs is the *order*,
+  // and the row takes the place of a callee's type: a family's parameter list is
+  // decided by the arguments, so they are checked first and the parameter types
+  // fall out of them (`src/sema/builtins.cc`).
+
+  // The row this callee names, or null when the callee is not a builtin. Called
+  // before the callee is typed: a builtin has no function type until its
+  // arguments have been seen, and typing it first would report "not a function"
+  // about a name that is one.
+  [[nodiscard]] const builtins::BuiltinInfo* builtinCallee(ast::AstId node) const;
+  // One row's `BuiltinType`, resolved against the store -- which is what makes
+  // `usize` mean the *target's* width, and what keeps a row from holding an id
+  // that is local to one compilation (`builtins/builtin.h`).
+  [[nodiscard]] TypeId builtinType(builtins::BuiltinType type) const;
+  // One argument of an `any-int` parameter: typed by itself, with the default a
+  // literal takes when nothing decides it, and refused when it is not an integer.
+  [[nodiscard]] TypeId checkIntegerArgument(ast::AstId node);
+  [[nodiscard]] TypeId checkBuiltinCall(ast::AstId expr, ExprInfo& info,
+                                        const builtins::BuiltinInfo& row);
+  // The sentence for a wrong argument count, shared with a user function's call
+  // so the two cannot drift into saying the same thing differently.
+  [[nodiscard]] static std::string argumentCountText(std::size_t expected, std::size_t given,
+                                                     bool variadic);
 
   // The one entry point for an expression. It computes the node's type, adapts a
   // deferred literal to the context, writes both the type and the facts into the

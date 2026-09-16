@@ -184,6 +184,22 @@ public:
 
   // --- queries ---------------------------------------------------------------
 
+  // The codes `resolve` refused a *name* with. Here rather than only in the
+  // resolve fixture because some rules are the resolver's and a test still has to
+  // run the whole pipeline to say what the checker did with the result: a
+  // redeclaration of a builtin stops a stage before the checker is reached, and
+  // the assertion that matters is that nothing downstream said anything.
+  [[nodiscard]] std::vector<std::string> resolveErrorCodes() const {
+    std::vector<std::string> out;
+    for (const resolve::ResolveError& error : resolved_.errors) {
+      out.emplace_back(resolve::toString(error.code));
+    }
+    return out;
+  }
+  [[nodiscard]] bool hasResolveError(std::string_view code) const {
+    return contains(resolveErrorCodes(), code);
+  }
+
   // The type of the `Name` node of the first binding spelled `name`, as text.
   // An empty string when there is no such binding.
   [[nodiscard]] std::string bindingType(std::string_view name) const {

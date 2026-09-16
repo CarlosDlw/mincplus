@@ -15,11 +15,12 @@ namespace {
 // compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' code tables.
-constexpr std::array<ResolveErrorCodeInfo, 7> kResolveErrorCodeInfos{{
+constexpr std::array<ResolveErrorCodeInfo, 8> kResolveErrorCodeInfos{{
     {ResolveErrorCode::UnknownName, "resolve-unknown-name", false},
     {ResolveErrorCode::Redeclaration, "resolve-redeclaration", false},
     {ResolveErrorCode::UnusedEntity, "resolve-unused-entity", true},
     {ResolveErrorCode::ShadowedName, "resolve-shadowed-name", true},
+    {ResolveErrorCode::ReservedIdentifier, "resolve-reserved-identifier", false},
     {ResolveErrorCode::LimitDefs, "resolve-limit-defs", false},
     {ResolveErrorCode::LimitScopes, "resolve-limit-scopes", false},
     {ResolveErrorCode::LimitRefs, "resolve-limit-refs", false},

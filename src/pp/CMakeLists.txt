@@ -20,7 +20,7 @@ minc_add_library(minc_pp
     stringify.cc
     include_resolver.cc
     pp_error.cc
-  DEPS minc_lex minc_fs minc_session minc_consteval
+  DEPS minc_lex minc_builtins minc_fs minc_session minc_consteval
 )
 
 # The adapter that lets the parser read the preprocessed stream. Separate target

@@ -541,6 +541,12 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       // mistake: a list that is one element short of the type.
       {"fn i32 main() { let a = [1, 2, 3]; return 0; }\n", false},
       {"fn i32 main() { let b = [3]i32{1, 2}; return 0; }\n", false},
+      // The two builtin codes. The third thing this stage can say about a builtin
+      // -- a wrong count, a wrong argument -- is not in this list because it is
+      // the two codes a *function* call already produces, and that is the point
+      // of the shared machinery rather than a gap in the table.
+      {"fn i32 main() { let f = clz; return 0; }\n", false},
+      {"fn i32 main() { let x: u8 = 1; let r = bswap(x); return 0; }\n", false},
   };
 
   for (const Case& one : cases) {

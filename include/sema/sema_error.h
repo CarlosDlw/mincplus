@@ -158,6 +158,16 @@ enum class SemaErrorCode : std::uint8_t {
   // dynamic initialization, so the value of a file-scope object has to be known
   // before the program exists (`globals.md`, decision 2), and this is the
   // sentence for the expression that stopped being one.
+  // A builtin used where a *value* is wanted: stored, passed, taken the address
+  // of. A row need not have an address at all -- one whose lowering is an
+  // instruction has no symbol behind it -- so the name denotes the operation and
+  // never a function value, and this is the refusal that keeps that honest.
+  BuiltinNotAValue,
+  // A builtin called on an integer width the operation does not exist for. It is
+  // a diagnostic and not a verifier error one stage later: `llvm.bswap` is
+  // *invalid* -- not undefined -- for an odd number of bytes, so a `bswap` of a
+  // `u8` would be a program the checker let pass and a module LLVM refuses.
+  BuiltinWidth,
   GlobalNotConstant,
   // The file-scope bindings of this unit need each other's values in a cycle
   // (`const a = b; const b = a;`). Each has a value only if the other does, and

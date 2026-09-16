@@ -30,6 +30,17 @@ enum class ResolveErrorCode : std::uint8_t {
   UnusedEntity,
   // A declaration hides another that is still in scope (warning; `-Wshadow`).
   ShadowedName,
+  // A declaration takes a name the compiler keeps for itself: anything beginning
+  // with `__builtin_` (`builtins/builtin.h`). An error and not a warning, and
+  // refused where the name is *taken* rather than where it is used -- here, in
+  // the one stage that sees every declaration, so a parameter, a local, a
+  // function and a file-scope binding are all covered by one rule in one place.
+  //
+  // Refusing it is stronger than C, where taking the prefix is undefined
+  // behavior no compiler diagnoses, and it is what makes a reserved builtin name
+  // impossible to shadow, borrow or capture -- the guarantee Zig pays a token
+  // class and a grammar production for.
+  ReservedIdentifier,
   // Budgets. Each is always on, checked before the insertion, with a test.
   LimitDefs,
   LimitScopes,

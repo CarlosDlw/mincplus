@@ -29,6 +29,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "builtins/builtin.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/IR/BasicBlock.h"
@@ -307,6 +308,23 @@ private:
   [[nodiscard]] Value lowerConditional(ast::AstId expr);
   [[nodiscard]] Value lowerAssign(ast::AstId expr);
   [[nodiscard]] Value lowerCall(ast::AstId expr);
+  // --- builtins ---------------------------------------------------------------
+  //
+  // A builtin is not a function this compiler wrote and not a symbol it links:
+  // it is an operation whose lowering is a *row* (`builtins/builtin.h`), and the
+  // three functions below are the whole of this stage's knowledge about it. The
+  // row is read by id and never by spelling, and `ir` is the one place a name
+  // becomes an `llvm::Intrinsic::ID`.
+  [[nodiscard]] const builtins::BuiltinInfo* builtinCallee(ast::AstId callee) const;
+  [[nodiscard]] Value lowerBuiltinCall(ast::AstId expr);
+  // The count reduced modulo the width, then the funnel shift: the language's
+  // answer, because the raw intrinsic's is poison for a count that large.
+  [[nodiscard]] Value lowerRotate(const builtins::BuiltinInfo& row, ast::AstId expr,
+                                  std::span<const ast::AstId> args,
+                                  std::span<llvm::Value*> arguments, llvm::Function* intrinsic);
+  // One argument of a builtin call, with the recorded conversion applied.
+  [[nodiscard]] llvm::Value* lowerBuiltinArgument(ast::AstId call, ast::AstId argument,
+                                                  sema::TypeId type);
   // `*p` and `p[i]` seen as expressions: a place is produced and then loaded,
   // because in this grammar those nodes are *values* everywhere except in the
   // place positions an assignment or an `&` gives them.

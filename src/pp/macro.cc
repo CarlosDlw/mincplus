@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include "builtins/builtin.h"
 #include "support/limits.h"
 
 namespace minc::pp {
@@ -71,6 +72,20 @@ MacroTable::Change MacroTable::define(MacroInfo info) {
     change.error = PPError{{}, "macro definition has no name", PPErrorCode::MissingMacroName};
     return change;
   }
+  // A macro is one of the two ways a name can be taken away from the compiler
+  // (the other is a declaration, and `resolve` refuses that one), and it is the
+  // *earlier* way: `#define __builtin_trap ...` would change what the call means
+  // before any stage could have an opinion about it. Refused here, and the macro
+  // is not stored -- so the name still means the row, and the reader gets one
+  // sentence about the line they wrote.
+  if (builtins::isReservedPrefix(symbols_->lookup(info.name))) {
+    change.error = PPError{info.defineName.span(),
+                           "'" + std::string(symbols_->lookup(info.name)) +
+                               "' is a name the compiler keeps for itself",
+                           PPErrorCode::ReservedIdentifier};
+    return change;
+  }
+
   if (info.params.size() + (info.variadic ? 1U : 0U) > support::kMaxMacroParameters) {
     change.error =
         PPError{info.defineName.span(),

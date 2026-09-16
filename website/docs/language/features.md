@@ -377,6 +377,35 @@ See [Expressions](/language/expressions) and the
 - [ ] Escape sequences, raw and multiline strings `[?]`
 - [ ] String interpolation/formatting `[?]`
 
+## Builtins
+
+See [Builtins](/language/builtins), and `mincc builtins` for the compiler's own
+list. A builtin is an operation the language cannot express as a function; a
+library symbol is a declaration, not a builtin.
+
+- [x] **Two spellings, two owners**: the bit operations are ordinary names bound
+      in the file scope (`clz`, `ctz`, `popcount`, `bswap`, `rotl`, `rotr`) — a
+      local shadows one, a file-scope declaration of it is a redeclaration — while
+      anything beginning with `__builtin_` cannot be declared or `#define`d at all
+      (`resolve-reserved-identifier`, `pp-reserved-identifier`)
+- [x] **Defined answers where the instruction is undefined**: `clz(0)`/`ctz(0)` are
+      the width, a rotate's count is taken modulo the width, and the test suite
+      proves both by running them
+- [x] **A family is one row**: the width comes from the argument, with no
+      conversion, so one row serves `i8` through `i128` and `isize`/`usize` at the
+      target's own width
+- [x] `__builtin_trap()`, typed `!` — the primitive a runtime's `assert` is built
+      on, and what makes a body ending in it keep its return type
+- [x] **A width the operation does not exist for is refused at the call site**:
+      `bswap` of a `u8`, which LLVM's verifier would otherwise reject as a module
+- [x] The table is the *only* place a builtin is known by spelling: the checker, the
+      lowering, `mincc builtins` and the reference page all read the same rows, and
+      a source scan keeps a second copy from appearing
+- [ ] `sizeof`, `alignof`, `static_assert` — front-end operators: they take a type,
+      so they are grammar rather than rows
+- [ ] The checked-arithmetic family (`__builtin_{add,sub,mul}_overflow`)
+- [ ] `offsetof`, which needs `struct`
+
 ## Memory and lifetime
 
 - [ ] Manual allocation interoperating with C (`malloc` / `free`)

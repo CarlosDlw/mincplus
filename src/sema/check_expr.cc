@@ -289,10 +289,25 @@ TypeId Checker::checkPath(ast::AstId expr, ExprInfo& info) {
     return kTypeError;
   }
   const resolve::Def* declaration = defFor(*def);
-  const TypeId type = typeOfDef(*def);
   if (declaration == nullptr) {
     return kTypeError;
   }
+  // A builtin is an *operation* and not a value: `clz` in a place that wants a
+  // value -- stored, passed, compared -- is refused here rather than being given
+  // a function type it does not have. Only a call position is a use, and that
+  // position is taken by `checkCall` before this function ever sees the name, so
+  // reaching this point with a row means the program asked for the operation
+  // itself. A row need not have an address at all: one lowered to an instruction
+  // has no symbol behind it, which is why this is not a pointer to a function.
+  if (declaration->builtin != builtins::BuiltinId::None) {
+    const builtins::BuiltinInfo* row = builtins::lookup(declaration->builtin);
+    const std::string name = row != nullptr ? std::string(row->spelling) : nameOf(expr);
+    error(expr, SemaErrorCode::BuiltinNotAValue,
+          "`" + name + "` is an operation, not a value: it can only be called");
+    return kTypeError;
+  }
+  const TypeId type = typeOfDef(*def);
+
   const bool isFunction = types_.get(type).kind == TypeKind::Function;
   // A predefined name is a *value*: `true`, `false` and `null` denote no storage,
   // so `&null` is not an address and `null = p` is not a store. Asking the def
@@ -1434,6 +1449,15 @@ TypeId Checker::checkCall(ast::AstId expr, ExprInfo& info) {
   }
   (void)info;
   const ast::AstId callee = operands.front();
+
+  // A builtin before anything else, because its callee has no type *yet*: what
+  // `clz` is depends on the argument that has not been checked. Everything from
+  // here on is a function call, and the row's checker reuses this file's
+  // argument machinery so a builtin's diagnostics read exactly like a function's.
+  if (const builtins::BuiltinInfo* row = builtinCallee(callee)) {
+    return checkBuiltinCall(expr, info, *row);
+  }
+
   const TypeId calleeType = checkExpr(callee, kInvalidType);
 
   std::vector<ast::AstId> args;
@@ -1466,16 +1490,8 @@ TypeId Checker::checkCall(ast::AstId expr, ExprInfo& info) {
   const bool variadic = types_.isVariadic(calleeType);
   const bool countOk = variadic ? args.size() >= params.size() : args.size() == params.size();
   if (!countOk) {
-    std::string message = "this function takes ";
-    if (variadic) {
-      // "at least", because the sentence is about a *minimum* here: telling the
-      // reader the count is wrong when they passed too few is the whole point.
-      message += "at least " + std::to_string(params.size()) + " argument(s)";
-    } else {
-      message += params.empty() ? "no arguments" : std::to_string(params.size()) + " argument(s)";
-    }
-    message += ", but " + std::to_string(args.size()) + " were given";
-    error(expr, SemaErrorCode::ArgumentCount, std::move(message));
+    error(expr, SemaErrorCode::ArgumentCount,
+          argumentCountText(params.size(), args.size(), variadic));
     // The arguments are still checked: a wrong count must not hide a wrong
     // argument. The conversions of the ones that have a parameter are recorded
     // even so; the extra ones have nowhere to land and are typed for their own

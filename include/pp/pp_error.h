@@ -41,7 +41,18 @@ enum class PPErrorCode : std::uint8_t {
   ConditionalNestingExceeded, // past `support::kMaxConditionalNesting`
 
   // Macros.
-  MacroRedefined,             // same name, a different replacement list
+  MacroRedefined, // same name, a different replacement list
+  // A `#define` of a name the compiler keeps for itself: anything beginning with
+  // the builtin prefix (`builtins/builtin.h`). The other half of the rule `resolve`
+  // enforces on a declaration, and it has to be here rather than there because a
+  // macro takes the name *before* any stage sees a declaration: by the time the
+  // checker had an opinion, `__builtin_trap` would already mean whatever the
+  // replacement list said.
+  //
+  // `#undef` needs no rule of its own, and that is a consequence and not an
+  // oversight: nothing reserved can be *defined*, so there is nothing for it to
+  // take away. A rule there would be a sentence with no failing program behind it.
+  ReservedIdentifier,
   MacroParameterLimit,        // past `support::kMaxMacroParameters`
   MissingMacroArguments,      // invoked with fewer arguments than parameters
   TooManyMacroArguments,      // invoked with more arguments than parameters

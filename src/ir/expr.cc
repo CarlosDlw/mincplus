@@ -1080,6 +1080,14 @@ Value Lowering::lowerCall(ast::AstId expr) {
     return {};
   }
   const ast::AstId callee = operands.front();
+  // A builtin before the callee is lowered, because a builtin callee is not a
+  // value and has no symbol to lower to: the row *is* the call. Everything the
+  // call machinery below does -- argument conversions, a by-value aggregate's
+  // copy, an `sret` destination -- is about calling a function this compiler did
+  // not write, and none of it applies to an instruction.
+  if (builtinCallee(callee) != nullptr) {
+    return lowerBuiltinCall(expr);
+  }
   const Value calleeValue = lowerExpr(callee);
   if (calleeValue.v == nullptr) {
     return {};

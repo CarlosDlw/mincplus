@@ -170,6 +170,21 @@ void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function&
 }
 
 [[nodiscard]] bool guardedDivision(const llvm::BinaryOperator& division) {
+  const llvm::Value* divisor = division.getOperand(1);
+  // A constant divisor is proven by being constant, and this is asked **before**
+  // the block is looked at. Two reasons, and the second is a bug this rule used
+  // to have: `x / 3` folds `icmp eq 3, 0` to `false`, so the comparison the
+  // source's guard wrote is not in the module any more -- and a constant divisor
+  // needs no predecessor to be safe, while an operation in the *entry block* has
+  // none to find. The rotate lowering is where that showed up: `urem %count, 32`
+  // is proven by its own operand and sits at the top of the function, and the
+  // scan called it unguarded.
+  //
+  // A constant zero divisor is not a missing guard either: it traps on every
+  // execution, which is the language's *defined* answer for the operation.
+  if (llvm::isa<llvm::ConstantInt>(divisor)) {
+    return true;
+  }
   const llvm::BasicBlock* block = division.getParent();
   if (block == nullptr) {
     return false;
@@ -184,16 +199,6 @@ void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function&
   const auto* branch = llvm::dyn_cast<llvm::BranchInst>(predecessor->getTerminator());
   if (branch == nullptr || !branch->isConditional()) {
     return false;
-  }
-  const llvm::Value* divisor = division.getOperand(1);
-  if (llvm::isa<llvm::ConstantInt>(divisor)) {
-    // A constant divisor is already proven, and asking for the test again would
-    // fail for the wrong reason: `x / 3` folds `icmp eq 3, 0` to `false`, so the
-    // comparison the source's guard wrote is not in the module any more. The
-    // conditional predecessor is the part that still says this went through
-    // `checkedDiv`; a constant divisor of zero is a program that traps on every
-    // execution, which is the *defined* answer and not a missing guard.
-    return true;
   }
   return testsValue(branch->getCondition(), divisor, /*depth=*/0);
 }

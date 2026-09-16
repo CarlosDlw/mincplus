@@ -1,0 +1,67 @@
+// Copyright (c) 2026 minc+ contributors.
+// SPDX-License-Identifier: MIT
+// The names the language binds, in the file scope, like `true`.
+//
+// Two classes, and the difference is a rule about the *name* rather than about
+// the operation:
+//
+//   - `clz`, `ctz`, `popcount`, `bswap`, `rotl`, `rotr` are ordinary names. The
+//     language defines every one of them completely -- `clz(0)` is the width, and
+//     a rotate's count is taken modulo the width -- so there is no input whose
+//     answer is undefined and nothing to warn about. A local declaration shadows
+//     one; the file scope's own declaration of it is a redeclaration.
+//
+//   - `__builtin_trap` is the compiler's. It cannot be declared or `#define`d, and
+//     it is not promised: it is the primitive a runtime's `assert` is written on.
+//
+// The width is the *argument's* width, and no conversion happens: `clz` of a `u8`
+// is a `u8` operation with the same eight-bit answer, which is why one row covers
+// every integer type the language has.
+
+// A function that never comes back, written the way `assert` and `panic` will be
+// written on top of it. The return type is ordinary -- `!` converts to every type
+// -- and the body is `!` because the call is: no `return 0;` after it, and none
+// missing either.
+fn i32 abort_unless(b: bool) {
+  if b {
+    return 0;
+  }
+  __builtin_trap();
+}
+
+// The bit operations on a 32-bit value, and then on an 8-bit one: the same rows,
+// two widths.
+fn u32 mix(x: u32, n: u32) {
+  let leading: u32 = clz(x);
+  let trailing: u32 = ctz(x);
+  let ones: u32 = popcount(x);
+  let swapped: u32 = bswap(x);
+  let left: u32 = rotl(x, n);
+  let right: u32 = rotr(x, n);
+  return leading + trailing + ones + swapped + left + right;
+}
+
+fn u8 narrow(x: u8) {
+  // `clz(0)` is 8 here, not undefined: the language's answer, and the reason the
+  // row passes `is_zero_poison = false` to the intrinsic.
+  return clz(x) + ctz(x) + popcount(x);
+}
+
+// `bswap` exists for a whole number of bytes, at least two: `bswap` of a `u8` is
+// refused at the call site, because LLVM's verifier rejects the *module* for it
+// rather than the program.
+fn u16 bytes(x: u16) {
+  return bswap(x);
+}
+
+fn i32 main() {
+  let a: u32 = 0x0000000F;
+  let b: u32 = mix(a, 4);
+  let c: u8 = narrow(3);
+  let d: u16 = bytes(0x0102);
+  let sum: u32 = b + d;
+  if sum == 0 {
+    return abort_unless(false);
+  }
+  return abort_unless(c != 0);
+}

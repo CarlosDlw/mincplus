@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "builtins/builtin_id.h"
 #include "resolve/predefined.h"
 #include "support/intern/sym_id.h"
 #include "support/span/file_id.h"
@@ -166,11 +167,33 @@ struct Def {
   // The bool this replaces could answer "is it predefined" and nothing else,
   // which is the question none of them actually asks.
   Predefined predefined = Predefined::None;
+  // Which builtin this declaration is, or `kInvalid` for an ordinary one
+  // (`builtins/builtin.h`). The rows are the language's own names too, bound in
+  // the file scope before anything is read, and this field is why no stage has to
+  // know one by spelling: `sema` types the call from the row and `ir` lowers it,
+  // both by reading *this*, so the text `__builtin_trap` appears in the tree
+  // exactly once -- in the table.
+  //
+  // Deliberately not a `DefKind` of its own: a builtin *is* a function to every
+  // stage that looks at the kind, and what differs about it -- the row -- is what
+  // this field answers. A new kind would make every switch over `DefKind` ask a
+  // second question it does not have an answer for.
+  builtins::BuiltinId builtin = builtins::BuiltinId::None;
 
   [[nodiscard]] constexpr bool isFunction() const {
     return kind == DefKind::Function;
   }
 };
+
+// True for a declaration the *language* made, in the file scope, before the unit
+// was read: one of the predefined names (`true`) or one of the builtin rows
+// (`clz`). Neither has a declaration node or a written location, which is why
+// both are parked at offset zero -- and why every position-keyed answer has to
+// skip them, or a real declaration at the start of a unit would find one
+// (`def_index.h`).
+[[nodiscard]] constexpr bool isLanguageDef(const Def& def) {
+  return isPredefined(def.predefined) || def.builtin != builtins::BuiltinId::None;
+}
 
 // The `DefId` of the declaration at `index` in a `DefMap`.
 //

@@ -82,6 +82,7 @@ minc_add_executable(minc_unit_tests
     syntax/store_test.cc
     ast/lower_test.cc
     ast/validate_test.cc
+    builtins/table_test.cc
     resolve/scope_test.cc
     resolve/errors_test.cc
     resolve/store_test.cc
@@ -97,15 +98,18 @@ minc_add_executable(minc_unit_tests
     sema/never_test.cc
     sema/flow_test.cc
     sema/store_test.cc
+    sema/builtins_test.cc
     sema/array_test.cc
   sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
+    ir/builtins_test.cc
     ir/global_test.cc
     ir/debug_test.cc
     ir/invariants_test.cc
     ir/llvm_isolation_test.cc
     driver/cli_test.cc
+    driver/builtins_command_test.cc
     driver/command_spec_test.cc
     driver/response_file_test.cc
     driver/help_render_test.cc
@@ -119,6 +123,7 @@ minc_add_executable(minc_unit_tests
     driver/build_command_test.cc
   DEPS
     minc_support
+    minc_builtins
     minc_lex
     minc_lex_report
     minc_parse
@@ -141,6 +146,17 @@ minc_add_executable(minc_unit_tests
 # The parse and syntax suites share `parse/parse_fixture.h`, so the test tree
 # itself is an include root.
 target_include_directories(minc_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+minc_target_llvm(minc_unit_tests PRIVATE)
+
+# LLVM's headers, for the tests whose *subject* is LLVM's own view of the module:
+# `ir/builtins_test.cc` compares a builtin declaration's attributes against
+# `Intrinsic::getAttributes`, which is the test that keeps the table from going
+# stale when LLVM changes its mind about an intrinsic. The libraries are already
+# on this link line -- `minc_ir` links them -- and the include directories are
+# `SYSTEM`, so no warning from LLVM's headers can fail this project's build. The
+# isolation rule is enforced over `src/` and `include/` by
+# `ir/llvm_isolation_test.cc`, and deliberately not over the tests: a test that
+# may not ask LLVM what it thinks cannot check what the compiler emitted.
 
 include(GoogleTest)
 # PRE_TEST discovery keeps the build step free of test-binary execution, which

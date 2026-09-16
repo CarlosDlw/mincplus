@@ -26,7 +26,7 @@
 namespace minc::driver {
 
 // Subcommands the driver understands. Anything else is a usage error.
-enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp, Resolve, Ir };
+enum class Command : std::uint8_t { Build, Run, Check, Lex, Parse, Pp, Resolve, Ir, Builtins };
 
 // One option's identity, as the parser's `switch` sees it. Adding an option
 // means adding an enumerator and a row; a test proves every enumerator has a row

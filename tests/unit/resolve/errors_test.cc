@@ -111,6 +111,66 @@ TEST(ErrorsTest, EveryDeclarationOfOneFunctionSharesOneIdentity) {
   EXPECT_EQ(map.defs[indexes[1]].refCount, 0u);
 }
 
+TEST(ErrorsTest, TheCompilerKeepsTheBuiltinPrefix) {
+  ResolveFixture f;
+  f.source("fn i32 main() { let __builtin_mine: i32 = 1; return 0; }\n");
+  ASSERT_TRUE(f.build());
+
+  EXPECT_TRUE(f.hasResolveError("resolve-reserved-identifier"));
+  // One mistake, one diagnostic: the declaration is still recorded, so using it
+  // is not a second error about the same line.
+  EXPECT_EQ(f.resolveErrorCodes().size(), 1u);
+  EXPECT_NE(f.resolved().errors.front().message.find("the compiler keeps for itself"),
+            std::string::npos);
+
+  // The rule is the prefix *with* its separator, and it does not swallow a name
+  // that merely starts with the letters.
+  ResolveFixture near;
+  near.source("fn i32 main() { let __builtinx: i32 = 1; return __builtinx; }\n");
+  ASSERT_TRUE(near.build());
+  EXPECT_EQ(near.resolveErrorCodes().size(), 0u);
+}
+
+TEST(ErrorsTest, ABuiltinNameCannotBeDeclaredAtFileScope) {
+  // The table binds `clz` in the file scope, and a repeated *function*
+  // declaration is legal -- so without the rule this would be absorbed into the
+  // row's chain and the call would quietly keep answering with the builtin while
+  // the reader's own body sat under the same symbol.
+  ResolveFixture f;
+  f.source("fn i32 clz(a: i32) { return a; }\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+
+  EXPECT_TRUE(f.hasResolveError("resolve-redeclaration"));
+  EXPECT_NE(f.resolved().errors.front().message.find("is a builtin"), std::string::npos);
+}
+
+TEST(ErrorsTest, AReservedNameIsOneErrorAndNotTwo) {
+  // The name is reserved *and* taken by a row, so two rules can both fire on one
+  // line. The reserved sentence is the one that explains it -- the name is the
+  // compiler's, which is why it cannot be declared -- so it is the only one
+  // reported. What this pins is the count: a reader who wrote one wrong line
+  // gets one diagnostic, whatever number of rules agree that it is wrong.
+  ResolveFixture f;
+  f.source("fn void __builtin_trap() { }\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+
+  EXPECT_TRUE(f.hasResolveError("resolve-reserved-identifier"));
+  EXPECT_FALSE(f.hasResolveError("resolve-redeclaration"));
+  EXPECT_EQ(f.resolveErrorCodes().size(), 1u);
+}
+
+TEST(ErrorsTest, APreludeNameCanBeShadowedInAnInnerScope) {
+  // The other half of the rule, and the reason the prelude class exists: the
+  // file scope belongs to the language, an inner scope belongs to the program.
+  ResolveFixture f;
+  f.source("fn i32 main() { let clz: i32 = 1; return clz; }\n");
+  f.warnShadow();
+  ASSERT_TRUE(f.build());
+
+  EXPECT_EQ(f.resolveErrorCodes().size(), 0u);
+  EXPECT_TRUE(f.hasResolveWarning("resolve-shadowed-name"));
+}
+
 TEST(ErrorsTest, ADeclarationWithNoDefinitionResolves) {
   // The declaration is the whole program's knowledge of the symbol: nothing in a
   // resolution depends on a body existing, and one that never arrives is the
@@ -251,6 +311,13 @@ TEST(ErrorsTest, EveryCodeIsReachable) {
     ResolveFixture f;
     f.source("fn i32 main() { let idle = 1; return 0; }\n");
     f.warnUnused().warnShadow();
+    ASSERT_TRUE(f.build());
+    collect(f);
+  }
+  {
+    // A name the compiler keeps for itself, taken by a program.
+    ResolveFixture f;
+    f.source("fn i32 main() { let __builtin_mine = 1; return 0; }\n");
     ASSERT_TRUE(f.build());
     collect(f);
   }

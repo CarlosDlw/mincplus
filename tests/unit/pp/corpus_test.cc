@@ -132,6 +132,13 @@ PPOutcome conditionalNesting() {
   }
   return PPFixture().source(text).run();
 }
+// A macro taking a name the compiler keeps. `#undef` of the same name is *not*
+// here, deliberately: nothing reserved can be defined, so there is nothing for an
+// `#undef` to take away, and a rule with no failing program behind it is a rule
+// nobody can keep honest.
+PPOutcome reservedIdentifier() {
+  return PPFixture().source("#define __builtin_trap 1\n").run();
+}
 PPOutcome macroRedefined() {
   return PPFixture().source("#define A 1\n#define A 2\n").run();
 }
@@ -250,6 +257,7 @@ constexpr CodeTrigger kTriggers[] = {
     {"pp-unexpected-conditional", "#endif alone", &unexpectedConditional},
     {"pp-else-after-else", "two #else", &elseAfterElse},
     {"pp-conditional-nesting", "300 nested #if", &conditionalNesting},
+    {"pp-reserved-identifier", "a #define of a reserved name", &reservedIdentifier},
     {"pp-macro-redefined", "different replacement list", &macroRedefined},
     {"pp-macro-parameter-limit", "300 parameters", &macroParameterLimit},
     {"pp-missing-macro-arguments", "one argument for two parameters", &missingMacroArguments},

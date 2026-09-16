@@ -21,7 +21,8 @@ minc_add_library(minc_driver
     stage_report.cc
     ir_command.cc
     build_command.cc
-  DEPS minc_support minc_lex minc_lex_report minc_syntax minc_parse_report minc_pp
+    builtins_command.cc
+  DEPS minc_support minc_builtins minc_lex minc_lex_report minc_syntax minc_parse_report minc_pp
        minc_pp_report minc_pp_parse minc_ast minc_resolve minc_resolve_report
        minc_sema minc_sema_report minc_ir minc_ir_report minc_backend
        minc_backend_report minc_fs

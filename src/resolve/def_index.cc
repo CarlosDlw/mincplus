@@ -17,9 +17,10 @@ DefIndex::DefIndex(const DefMap& map) : map_(map) {
   // The declarations, in the other direction: from a declaration's name node to
   // the def the resolver created for it.
   //
-  // A predefined name is skipped rather than parked at offset 0, where a real
-  // declaration at the start of the unit would land. It has no declaration node
-  // to look up in the first place -- that is what *predefined* means.
+  // A name the language bound -- a predefined one or a builtin row -- is skipped
+  // rather than parked at offset 0, where a real declaration at the start of the
+  // unit would land. It has no declaration node to look up in the first place:
+  // that is what "the language bound it" means.
   //
   // The answer is the def's **identity** and not its own slot: a name declared
   // twice -- `extern fn i32 f();` above `fn i32 f() { }` -- is one function, so
@@ -29,7 +30,7 @@ DefIndex::DefIndex(const DefMap& map) : map_(map) {
   defsByOffset_.reserve(map_.defs.size());
   for (std::size_t i = 0; i < map_.defs.size(); ++i) {
     const Def& def = map_.defs[i];
-    if (isPredefined(def.predefined)) {
+    if (isLanguageDef(def)) {
       continue;
     }
     const DefId site = defIdOf(def, static_cast<std::uint32_t>(i));
@@ -70,7 +71,7 @@ std::optional<DefId> DefIndex::defAtUnitOffset(support::Span unit) const {
 std::optional<DefId> DefIndex::defInsideWritten(support::Span written) const {
   for (std::size_t i = 0; i < map_.defs.size(); ++i) {
     const Def& def = map_.defs[i];
-    if (isPredefined(def.predefined) || def.nameSpan.file != written.file) {
+    if (isLanguageDef(def) || def.nameSpan.file != written.file) {
       continue;
     }
     // Containment and not equality: the node is one the preprocessor or the

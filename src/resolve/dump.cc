@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 #include "resolve/dump.h"
 
+#include "builtins/builtin.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -72,6 +74,13 @@ std::string dumpDefMap(const DefMap& map, const ast::LoweredFile& file,
         // behaves unexpectedly, and "predefined" alone would leave the reader to
         // guess whether it is a value or the null pointer.
         out += "  [predefined " + std::string(toString(def.predefined)) + "]";
+      } else if (def.builtin != builtins::BuiltinId::None) {
+        // A prelude name or a reserved one, and *which*: the same rule as above,
+        // and the one field that tells the reader this declaration has no
+        // source at all.
+        const builtins::BuiltinInfo* row = builtins::lookup(def.builtin);
+        out += "  [builtin " + (row != nullptr ? std::string(row->spelling) : std::string("?")) +
+               ", " + std::string(row != nullptr ? toString(row->spellingClass) : "?") + "]";
       } else {
         out += "  " + locationOf(sources, def.nameSpan);
       }

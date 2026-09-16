@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "driver/build_command.h"
+#include "driver/builtins_command.h"
 #include "driver/check_command.h"
 #include "driver/cli.h"
 #include "driver/error_report.h"
@@ -81,6 +82,8 @@ int main(int argc, char** argv) {
     return minc::driver::runBuild(opts);
   case minc::driver::Command::Run:
     return minc::driver::runRun(opts);
+  case minc::driver::Command::Builtins:
+    return minc::driver::runBuiltins(opts);
   }
 
   // Unreachable: the switch above is total over `Command`, and `-Wswitch` keeps it

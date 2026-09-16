@@ -447,6 +447,104 @@ TEST(BuildCommandTest, LinkingProducesAnExecutableAndRunReturnsItsStatus) {
   EXPECT_EQ(executed.code, 42) << executed.err;
 }
 
+// --- builtins, as answers -----------------------------------------------------
+//
+// The only tests in the suite where a builtin's *answer* is checked against the
+// machine rather than against the module it emitted. They live here because the
+// harness that compiles, links and runs is here, and they are worth having for
+// the two rows whose answer is a *language* decision and not a hardware one:
+// `clz(0)` is the width (LLVM's raw intrinsic would be poison), and a rotate's
+// count is taken modulo the width (LLVM's raw intrinsic would be poison there
+// too). A module that compiled and a machine that answers differently is exactly
+// the failure a checker-only test cannot see.
+[[nodiscard]] Outcome runProgram(ScratchDir& scratch, const std::string& name,
+                                 const std::string& source) {
+  const std::string path = scratch.write(name, source);
+  BuildRequest request = requestFor(path);
+  request.run = true;
+  return run(request, /*execute=*/true);
+}
+
+// A program whose exit status is the value of `expression`, so the assertion is
+// one number the machine produced. Exit statuses are a byte, which is why every
+// value below is small.
+[[nodiscard]] std::string returning(const std::string& expression) {
+  return "fn i32 main() { return " + expression + "; }\n";
+}
+
+TEST(BuildCommandTest, TheBitOperationsAnswerWhatTheLanguageSays) {
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  const Outcome leading = runProgram(scratch, "clz.mx", returning("clz(1)"));
+  if (leading.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(leading.code, 31) << leading.err;
+
+  const Outcome count = runProgram(scratch, "pop.mx", returning("popcount(255)"));
+  EXPECT_EQ(count.code, 8) << count.err;
+
+  const Outcome bytes =
+      runProgram(scratch, "bswap.mx", "fn i32 main() { let x: u32 = 1; return bswap(x) >> 24; }\n");
+  EXPECT_EQ(bytes.code, 1) << bytes.err;
+}
+
+TEST(BuildCommandTest, ZeroIsTheWidthAndNotUndefined) {
+  // The promise, on the machine: LLVM's `ctlz(0)` is poison unless the flag says
+  // otherwise, and this language defines it as the width. A compiler that passed
+  // the raw intrinsic would be a program whose answer depends on what the
+  // optimizer did that day.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  const Outcome leading = runProgram(scratch, "clz0.mx", returning("clz(0)"));
+  if (leading.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(leading.code, 32) << leading.err;
+
+  const Outcome trailing = runProgram(scratch, "ctz0.mx", returning("ctz(0)"));
+  EXPECT_EQ(trailing.code, 32) << trailing.err;
+}
+
+TEST(BuildCommandTest, ARotateCountIsTakenModuloTheWidth) {
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  // A full turn and a bit: `1` rotated left by 32 is `1` (the count reduces to
+  // zero) and by 33 is `2`. Without the modulo, LLVM's funnel shift is poison for
+  // both, and the answer would be whatever the backend decided.
+  const Outcome full = runProgram(scratch, "rotl32.mx", returning("rotl(1, 32)"));
+  if (full.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(full.code, 1) << full.err;
+
+  const Outcome over = runProgram(scratch, "rotl33.mx", returning("rotl(1, 33)"));
+  EXPECT_EQ(over.code, 2) << over.err;
+
+  const Outcome right = runProgram(scratch, "rotr.mx", returning("rotr(2, 33)"));
+  EXPECT_EQ(right.code, 1) << right.err;
+}
+
+TEST(BuildCommandTest, ATrapStopsTheProgramWhereItStands) {
+  // `__builtin_trap` is the primitive `assert` is built on: not a return, not an
+  // exit status the program chose. The assertion is that nothing after it runs and
+  // that the status is not the one the program would have returned.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  const Outcome executed =
+      runProgram(scratch, "trap.mx",
+                 "fn i32 fail() { __builtin_trap(); }\nfn i32 main() { return fail(); }\n");
+  if (executed.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_NE(executed.code, 0) << executed.err;
+  EXPECT_NE(executed.err.find("terminated abnormally"), std::string::npos) << executed.err;
+}
+
 TEST(BuildCommandTest, RunWithDebugInformationStillReturnsTheProgramsStatus) {
   // `-g` composes with `run`: it is a normal binary with debug information in it,
   // and the exit status still belongs to the program.

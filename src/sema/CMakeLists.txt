@@ -21,11 +21,12 @@ minc_add_library(minc_sema
     access.cc
     check_stmt.cc
     check_expr.cc
+    builtins.cc
     check_flow.cc
     global.cc
     sema_error.cc
     dump.cc
-  DEPS minc_ast minc_resolve minc_intern minc_span minc_text minc_consteval
+  DEPS minc_ast minc_builtins minc_resolve minc_intern minc_span minc_text minc_consteval
 )
 
 # Typing errors -> diagnostics. A separate target for the same reason as every

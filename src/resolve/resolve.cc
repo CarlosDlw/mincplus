@@ -19,6 +19,7 @@
 
 #include "ast/ast.h"
 #include "ast/node.h"
+#include "builtins/builtin.h"
 #include "parse/syntax_kind.h"
 #include "resolve/def.h"
 #include "resolve/map.h"
@@ -112,6 +113,29 @@ private:
     return std::string(symbols_.lookup(name));
   }
 
+  // A program may not take a name the compiler keeps (`__builtin_...`,
+  // `builtins/builtin.h`). One rule, called from the three places a *program*
+  // declares something -- an item, a parameter, a local -- and deliberately not
+  // from the two that bind the language's own rows, which is the whole reason it
+  // is a function here instead of a condition at each call site: a choke point
+  // that also covers the compiler's own bindings would refuse the table.
+  //
+  // The declaration is still *inserted* after this is reported. Refusing to
+  // insert would turn one mistake into two -- an unknown name at every use of it
+  // -- and the reader would meet the second one first. This is an error, so the
+  // compilation stops before any stage can act on the name, and nothing needs to
+  // pretend the declaration is usable.
+  void reportReservedName(support::Span nameSpan, support::SymId name) {
+    if (name == support::kInvalidSym || !builtins::isReservedPrefix(nameOf(name))) {
+      return;
+    }
+    errors_.push_back(ResolveError{nameSpan,
+                                   "'" + nameOf(name) + "' is a name the compiler keeps for itself",
+                                   ResolveErrorCode::ReservedIdentifier,
+                                   {},
+                                   {}});
+  }
+
   [[nodiscard]] DefId insertDef(ScopeId scopeId, Namespace ns, support::SymId name,
                                 support::Span span, support::Span nameSpan,
                                 support::Span nameUnitSpan, DefKind kind, Linkage linkage,
@@ -145,6 +169,38 @@ private:
     const auto existing = scope.byName[nsIndex].find(name);
     if (existing != scope.byName[nsIndex].end()) {
       const DefId canonical = existing->second;
+      // A name the *table* binds is not redeclarable, and the function case is
+      // why this has to be said: a repeated function declaration is legal, so a
+      // user `fn clz(...)` would otherwise be absorbed into the row's chain --
+      // the call would keep answering with the builtin while a body was defined
+      // under the same symbol, which is a program meaning two things at once.
+      // Refused as a redeclaration, so the reader gets one sentence about the
+      // name they wrote rather than a wrong answer about the name they meant.
+      //
+      // An ordinary name is untouched by this: the predefined values are not
+      // functions, so they already take the redeclaration path below.
+      if (map_.defs[canonical.index].builtin != builtins::BuiltinId::None) {
+        // A *reserved* spelling has already been answered by
+        // `reportReservedName`, and its sentence is the better one: the name is
+        // the compiler's, which is why it cannot be declared -- where this one
+        // only says the name is taken. One mistake, one diagnostic, so the
+        // reserved class reports here and nothing else does.
+        const builtins::BuiltinInfo* const row =
+            builtins::lookup(map_.defs[canonical.index].builtin);
+        if (row == nullptr || !row->isReserved()) {
+          errors_.push_back(
+              ResolveError{nameSpan,
+                           "'" + nameOf(name) + "' is a builtin, so it cannot be declared again",
+                           ResolveErrorCode::Redeclaration,
+                           {},
+                           {}});
+        }
+        map_.defs.push_back(def);
+        map_.defs[id.index].canonical = canonical;
+        map_.defs[id.index].nextRedundant = canonical;
+        map_.defs[id.index].hasProblem = true;
+        return kInvalidDef;
+      }
       if (kind == DefKind::Function && map_.defs[canonical.index].kind == DefKind::Function) {
         // C lets a function be declared many times and a header be included
         // twice, so a repeated function declaration extends the chain instead of
@@ -205,6 +261,7 @@ private:
     const Node& root = file_.at(file_.root());
     map_.fileScope = createScope(ScopeKind::File, kInvalidScopeId, root.unit, ast::kInvalidAst);
     installPredefined();
+    installBuiltins();
 
     const std::vector<ast::Item>& items = file_.items().items;
     map_.itemDefs.assign(items.size(), kInvalidDef);
@@ -234,6 +291,7 @@ private:
       // belongs to the module system (`globals.md`, decision 5) -- it filters
       // lookup and does not rewrite this field.
       const Linkage linkage = item.isStatic ? Linkage::Internal : Linkage::External;
+      reportReservedName(item.nameSpan, item.name);
       map_.itemDefs[i] = insertDef(map_.fileScope, Namespace::Ordinary, item.name, item.span,
                                    item.nameSpan, nameUnit, *kind, linkage, node.inError);
     }
@@ -264,6 +322,37 @@ private:
                                  nowhere, DefKind::Constant, Linkage::None, /*inError=*/false);
       if (id.valid() && id.index < map_.defs.size()) {
         map_.defs[id.index].predefined = row.name;
+      }
+    }
+  }
+
+  // The builtins, bound exactly like the names above and for the same reason: a
+  // call has to resolve to *something*, and resolving a builtin through the same
+  // scope as every other name is what makes `clz(1)` a call whose errors read
+  // like a function's, and what makes a program that writes its own `clz` call
+  // its own. No name matching happens anywhere (`-fno-builtin` exists because GCC
+  // does it the other way), so there is nothing here to switch off.
+  //
+  // Both spelling classes are bound, and the difference between them is not
+  // visible *here* -- it is a rule about who may take the name: the preprocessor
+  // refuses a `#define` of the prefix and `sema` refuses a declaration of it, so
+  // the reserved rows cannot be shadowed while the prelude ones can.
+  void installBuiltins() {
+    const support::Span nowhere(file_.file(), 0, 0);
+    for (const builtins::BuiltinInfo& row : builtins::all()) {
+      const support::SymId name = symbols_.intern(row.spelling);
+      if (name == support::kInvalidSym) {
+        continue; // the interner is full; nothing can be added anyway
+      }
+      // `Linkage::None` and not `External`: the latter is what a *declaration* in
+      // the unit asks the linker for, and a builtin asks it for nothing. The two
+      // prelude classes then behave identically under redeclaration, which is
+      // what keeps `let clz = 1;` shadowing it exactly as `let true = 1;` shadows
+      // `true`.
+      const DefId id = insertDef(map_.fileScope, Namespace::Ordinary, name, nowhere, nowhere,
+                                 nowhere, DefKind::Function, Linkage::None, /*inError=*/false);
+      if (id.valid() && id.index < map_.defs.size()) {
+        map_.defs[id.index].builtin = row.id;
       }
     }
   }
@@ -351,6 +440,7 @@ private:
       if (name.name == support::kInvalidSym) {
         continue; // the parser already reported the missing name
       }
+      reportReservedName(name.origin, name.name);
       (void)insertDef(functionScope, Namespace::Ordinary, name.name, param.origin, name.origin,
                       name.unit, DefKind::Parameter, Linkage::None, param.inError || name.inError);
     }
@@ -459,6 +549,7 @@ private:
       return; // the parser reported the missing name
     }
     const DefKind kind = self.kind == NodeKind::ConstStmt ? DefKind::Constant : DefKind::Variable;
+    reportReservedName(name.origin, name.name);
     (void)insertDef(scope, Namespace::Ordinary, name.name, self.origin, name.origin, name.unit,
                     kind, Linkage::None, self.inError);
   }
@@ -526,7 +617,7 @@ private:
 
   void reportUnused() {
     for (const Def& def : map_.defs) {
-      if (def.inError || def.hasProblem || isPredefined(def.predefined) || def.refCount != 0 ||
+      if (def.inError || def.hasProblem || isLanguageDef(def) || def.refCount != 0 ||
           def.name == support::kInvalidSym) {
         continue;
       }

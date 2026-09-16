@@ -656,6 +656,39 @@ come first.
       ([`architectures/extern.md`](architectures/extern.md))
 - [ ] Reading variadic arguments (`va_start`/`va_arg`, or the builtin that would
       replace them), which is what a variadic *definition* needs; and bitfields `[?]`
+**Shipped**: the **builtin system** — one `constexpr` table in its own module
+(`include/builtins`, depending on nothing at all) where a row is the identity, the
+spelling, the *class* of the spelling, a closed signature (families resolved per
+target), an effect, the lowering as data, a status and a sentence. Five stages read
+it — `resolve` binds the names, `sema` types the call, `ir` lowers it, `mincc
+builtins` prints it and the reference page is generated from it — and no stage may
+match a builtin by its spelling, which a source scan enforces
+([`architectures/builtins.md`](architectures/builtins.md)). The two classes are the
+part that makes the surface safe: `clz`/`ctz`/`popcount`/`bswap`/`rotl`/`rotr` are
+ordinary names the language binds in the file scope (`true`'s treatment: shadowable
+in a block, not redeclarable there) while `__builtin_*` cannot be declared or
+`#define`d at all.
+
+- [x] The table, the identity and the totality tests: one row per id, a sentence per
+      row, a hole that has an argument to fill it, a source scan over `src/` and
+      `include/`
+- [x] The reserved namespace, in both places a name can be taken: a declaration
+      (`resolve-reserved-identifier`) and a `#define` (`pp-reserved-identifier`)
+- [x] Binding, typing and lowering, with a builtin's wrong count and wrong argument
+      producing the same codes and the same sentences a function's call does
+- [x] The bit operations on every integer width — including `isize`/`usize` at the
+      target's width — with the answers the language defines (`clz(0)` is the width;
+      a rotate's count is modulo the width), proven by running programs
+- [x] `__builtin_trap()`, typed `!`, so a body that ends in it keeps its return type
+- [x] The differential test: every intrinsic row's declaration attributes are compared
+      against `Intrinsic::getAttributes`, and every row's effect against LLVM's own
+      memory property — the test that fails the day LLVM changes its mind
+- [ ] The families that are not rows: `sizeof`, `alignof`, `static_assert` (grammar —
+      they take a type), `__builtin_{add,sub,mul}_overflow` (out-parameters), and
+      `offsetof` behind `struct`
+- [ ] The target/feature availability field, which arrives with the first row that
+      needs one (the shape is decided in the record; inventing the field before a row
+      can set it would be a field no test can pin)
 - [x] Calling into C: a declaration resolved against real libc, for the scalar
       and pointer types the language has today (`extern fn i32 puts(s: str);`,
       and `examples/010_extern.mx` runs)

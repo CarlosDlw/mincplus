@@ -7,6 +7,7 @@
 // name or a description that appears above it.
 #include "driver/command_spec.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string_view>
@@ -246,6 +247,7 @@ constexpr std::array<std::string_view, 1> kParseUsage{"mincc parse [options] <fi
 constexpr std::array<std::string_view, 1> kPpUsage{"mincc pp [options] <files...>"};
 constexpr std::array<std::string_view, 1> kResolveUsage{"mincc resolve [options] <files...>"};
 constexpr std::array<std::string_view, 1> kIrUsage{"mincc ir [options] <files...>"};
+constexpr std::array<std::string_view, 1> kBuiltinsUsage{"mincc builtins"};
 
 constexpr std::array<std::string_view, 3> kBuildExamples{
     "$ mincc build -o prog main.mx", "$ mincc build -O2 --emit obj main.mx",
@@ -264,6 +266,10 @@ constexpr std::array<std::string_view, 2> kResolveExamples{"$ mincc resolve main
                                                            "$ mincc resolve --unresolved main.mx"};
 constexpr std::array<std::string_view, 2> kIrExamples{
     "$ mincc ir main.mx", "$ mincc ir -g --target aarch64-unknown-linux-gnu main.mx"};
+constexpr std::array<std::string_view, 1> kBuiltinsExamples{"$ mincc builtins"};
+// Nothing but the global page's options: this command reads no file and has no
+// mode of its own, which is the whole of its interface.
+constexpr std::array<OptionGroup, 1> kBuiltinsGroups{kGlobalGroup};
 
 constexpr std::array<std::string_view, 2> kSeeCheckAndBuild{"check", "build"};
 constexpr std::array<std::string_view, 2> kSeeRunAndCheck{"run", "check"};
@@ -272,6 +278,7 @@ constexpr std::array<std::string_view, 2> kSeeParseAndResolve{"parse", "resolve"
 constexpr std::array<std::string_view, 2> kSeePpAndLex{"pp", "lex"};
 constexpr std::array<std::string_view, 2> kSeeCheckAndParse{"check", "parse"};
 constexpr std::array<std::string_view, 2> kSeeIrAndBuild{"ir", "build"};
+constexpr std::array<std::string_view, 2> kSeeBuiltinsAndCheck{"builtins", "check"};
 constexpr std::array<std::string_view, 1> kSeeBuild{"build"};
 
 constexpr std::array<OptionGroup, 5> kBuildGroups{kEmitGroup, kLinkGroup, kInputGroup,
@@ -288,7 +295,7 @@ constexpr std::array<OptionGroup, 4> kResolveGroups{kResolveGroup, kInputGroup, 
 constexpr std::array<OptionGroup, 4> kIrGroups{kModuleDebugGroup, kInputGroup, kWarningGroup,
                                                kGlobalGroup};
 
-constexpr std::array<CommandSpec, 8> kCommands{{
+constexpr std::array<CommandSpec, 9> kCommands{{
     {.command = Command::Build,
      .name = "build",
      .summary = "compile and link an executable",
@@ -399,6 +406,24 @@ constexpr std::array<CommandSpec, 8> kCommands{{
      .groups = kIrGroups,
      .examples = kIrExamples,
      .seeAlso = kSeeCheckAndBuild,
+     .implemented = true},
+    {.command = Command::Builtins,
+     .name = "builtins",
+     .summary = "list the names the language binds",
+     .brief = "builtins",
+     .usage = kBuiltinsUsage,
+     .description = "The compiler's own table of builtins: the names it binds in the file "
+                    "scope, what each one's signature and status are, and what it lowers to. "
+                    "No file is read, and the list is the *data* the checker and the lowering "
+                    "read -- so a page that describes one of these cannot describe something "
+                    "the compiler does not have.\n\n"
+                    "`prelude` names (`clz`, `rotl`, ...) are ordinary names the language "
+                    "binds: a local declaration shadows one, and a file-scope declaration of "
+                    "it is a redeclaration. `__builtin_*` is the compiler's own and cannot be "
+                    "declared or `#define`d at all.",
+     .groups = kBuiltinsGroups,
+     .examples = kBuiltinsExamples,
+     .seeAlso = kSeeBuiltinsAndCheck,
      .implemented = true},
 }};
 
@@ -596,7 +621,17 @@ std::span<const std::string_view> allOptionNames() {
 
 std::span<const std::string_view> optionNamesOf(Command command) {
   static const std::vector<std::vector<std::string_view>> table = [] {
-    std::vector<std::vector<std::string_view>> built{static_cast<std::size_t>(Command::Ir) + 1};
+    // The bound is **derived** from the table and not written down. It used to be
+    // `Command::Ir + 1`, which is a second copy of "how many commands are there"
+    // -- and the day a ninth command was added, this function wrote past the end
+    // of the table for it, so the *nearest option* suggestion for that command's
+    // arguments answered with whatever was in the next allocation. A bound that a
+    // new enumerator cannot widen is a bound that will be wrong.
+    std::size_t count = 0;
+    for (const CommandSpec& spec : kCommands) {
+      count = std::max(count, static_cast<std::size_t>(spec.command) + 1);
+    }
+    std::vector<std::vector<std::string_view>> built{count};
     for (const CommandSpec& spec : kCommands) {
       std::vector<std::string_view>& names = built[static_cast<std::size_t>(spec.command)];
       for (const OptionGroup& group : spec.groups) {
