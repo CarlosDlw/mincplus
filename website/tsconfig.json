@@ -1,11 +1,32 @@
 // This file is not used by "docusaurus start/build" commands.
 // It is here to improve your IDE experience (type-checking, autocompletion...),
 // and can also run the package.json "typecheck" script manually.
+//
+// It does **not** `extends` `@docusaurus/tsconfig`, and that is the one
+// deliberate difference from a stock Docusaurus site. The reason is a removed
+// option: that shared config sets `baseUrl`, TypeScript 7 *removed* `baseUrl`
+// (error TS5102, a removal rather than a deprecation -- `ignoreDeprecations` does
+// not reach it either), and a child config cannot unset what it inherits. The
+// latest `@docusaurus/tsconfig` (3.10.2, the version this site was on) still sets
+// it, so the choice was to carry what the shared config supplied or to stay on
+// TypeScript 6. It was therefore uninstalled, and the options below are its,
+// verbatim, minus `baseUrl` and its `"@site/*": ["./*"]` mapping -- no file here
+// imports through `@site`, so the mapping was a name for nothing.
+//
+// When Docusaurus ships a `tsconfig.json` without `baseUrl`: reinstall it
+// (`npm i -D @docusaurus/tsconfig`) and replace everything below with
+// `"extends": "@docusaurus/tsconfig"` plus the `strict` this site adds.
 {
-  "extends": "@docusaurus/tsconfig",
   "compilerOptions": {
-    "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "allowJs": true,
+    "esModuleInterop": true,
+    "jsx": "preserve",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "noEmit": true,
+    "skipLibCheck": true,
     "strict": true
   },
   "exclude": [".docusaurus", "build"]
