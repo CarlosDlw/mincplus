@@ -376,6 +376,14 @@ std::string Checker::suggestTypeName(std::string_view word) const {
     if (candidate == word) {
       continue;
     }
+    // A name the *target* refuses is not a suggestion: answering a typo with a
+    // spelling that then fails is the worst possible answer to one, and it is
+    // exactly the failure the suggestion table's own test is named for. `f80` is
+    // the one entry this can exclude (`typespec.h`), which is to say the rule
+    // lives there and not here.
+    if (!typeNameOnTarget(candidate, types_.target())) {
+      continue;
+    }
     const std::size_t diff = candidate.size() > word.size() ? candidate.size() - word.size()
                                                             : word.size() - candidate.size();
     if (diff > support::kMaxSuggestionDistance) {

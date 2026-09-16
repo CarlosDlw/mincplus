@@ -138,6 +138,16 @@ std::span<const std::string_view> typeNames() {
   return names;
 }
 
+bool typeNameOnTarget(std::string_view name, const TargetInfo& target) {
+  const Primitive* primitive = findPrimitive(name);
+  // Every word that is not a primitive is a type on every target: the C
+  // specifiers are read by rule, and `isize`/`usize` and the `size_t` family take
+  // their width *from* the target rather than being refused by it. The one entry
+  // the target decides is the format (`f80`), and the C spellings that reach it
+  // (`long double`) are the portable answer and not the word being asked about.
+  return primitive == nullptr || primitive->bits != 80 || target.hasFloat80();
+}
+
 TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
                         std::optional<std::uint64_t> inferredCount) {
   // `!` first, because it is the one accepted spelling that is not a run of

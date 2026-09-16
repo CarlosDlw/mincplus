@@ -657,14 +657,42 @@ TEST(TypeSpecTest, AnEmptyRunIsRefusedRatherThanGuessed) {
 }
 
 TEST(TypeSpecTest, EveryNameInTheSuggestionTableIsATypeOnItsOwn) {
-  // The table is what a "did you mean ...?" searches. Every word in it has to be
-  // a word the reader understands on its own, or the compiler would suggest a
-  // spelling that then fails -- the worst possible answer to a typo.
-  TypeStore types;
-  for (const std::string_view name : typeNames()) {
-    const TypeSpecResult result = readTypeSpec(words({name}), types);
-    EXPECT_TRUE(result.ok) << name << ": " << result.message;
+  // The table is what a "did you mean ...?" searches. Every word it offers has to
+  // be a word the reader accepts on the target the program is being compiled for,
+  // or the compiler would answer a typo with a spelling that then fails -- the
+  // worst possible answer to one.
+  //
+  // Which is why the loop runs over **two** targets and not over the host: `f80`
+  // names the x87 format, so it is a type where there is x87 and a refusal where
+  // there is not (`sema.md` decision 26), and a host-dependent loop would be a
+  // test that says a different thing on a Mac than on a PC. `typeNameOnTarget` is
+  // the same question the suggestion search asks before offering a name.
+  constexpr std::string_view kTargets[] = {kTripleLinuxAmd64, kTripleLinuxAarch64};
+  for (const std::string_view triple : kTargets) {
+    const std::optional<TargetInfo> target = targetFromName(triple);
+    ASSERT_TRUE(target.has_value()) << triple;
+    TypeStore types(*target);
+    for (const std::string_view name : typeNames()) {
+      const TypeSpecResult result = readTypeSpec(words({name}), types);
+      EXPECT_EQ(result.ok, typeNameOnTarget(name, *target))
+          << triple << " " << name << ": " << result.message;
+      // ... and the answer is never "a suggestion nobody can use": every word the
+      // table offers is a word this reader accepts on this target.
+      if (!result.ok) {
+        EXPECT_NE(result.message.find("is the x87 80-bit format"), std::string::npos)
+            << result.message;
+      }
+    }
   }
+  // The one word whose answer is the target's, stated so that the loop above is
+  // not two comparisons of a table against itself: it is a type on the machine
+  // with x87 and refused, by name, on the one without.
+  TypeStore amd64(*targetFromName(kTripleLinuxAmd64));
+  TypeStore aarch64(*targetFromName(kTripleLinuxAarch64));
+  EXPECT_TRUE(readTypeSpec(words({"f80"}), amd64).ok);
+  EXPECT_FALSE(readTypeSpec(words({"f80"}), aarch64).ok);
+  EXPECT_TRUE(typeNameOnTarget("f80", amd64.target()));
+  EXPECT_FALSE(typeNameOnTarget("f80", aarch64.target()));
   bool sawUint = false;
   for (const std::string_view name : typeNames()) {
     sawUint = sawUint || name == "uint";

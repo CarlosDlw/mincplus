@@ -676,12 +676,15 @@ sweep below, and the triple matrix.
 - [x] Optimization pipelines for `-O0`..`-O3`, `-Os` and `-Oz` — the **new**
       pass manager for the middle end, and LLVM's **legacy** one for codegen,
       which is LLVM's own split and not an accident to fix
-- [x] **Position-independent code on ELF and Mach-O, from a per-triple table** —
-      measured, not assumed: this host's `cc` defaults to `-pie`, and the
-      default relocation model links into `DT_TEXTREL` (a warning here, an
-      error on other linkers and architectures). `Static` on COFF, `PIC_`
-      everywhere else, and a platform the table does not name is a refusal
-      rather than a default
+- [x] **Position-independent code on every platform, from a per-triple table** —
+      measured, not assumed, and measured twice: this host's `cc` defaults to
+      `-pie` (the default relocation model links into `DT_TEXTREL`, a warning
+      here and an error on other linkers and architectures), and on COFF the
+      small code model's 32-bit absolute address of a `.data` object is refused
+      by `ld` — "relocation truncated to fit: IMAGE_REL_AMD64_ADDR32" — with the
+      form appearing only above `-O0`, so no local gate could see it. `PIC_`
+      everywhere, and a platform the table does not name is a refusal rather
+      than a default
 - [x] The relocation model, code model and CPU/features stated per triple, never
       inherited from the host or from an LLVM default: the CPU and the feature
       set are empty strings and not `"native"`, so an object never depends on

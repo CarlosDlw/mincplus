@@ -453,15 +453,29 @@ TEST(BuildCommandTest, LinkingProducesAnExecutableAndRunReturnsItsStatus) {
 // is *wrong* and the checker was right to accept it -- the index is a value, and
 // the compiler cannot see that it is out of range -- which is exactly the situation
 // `checks.md` is about: the checker cannot prove it, so the build guards it.
+// The program the checked-build tests use, and its shape is the whole point: the
+// subscript steps **past the view's length and inside the array it views**. The
+// index is a parameter, so the checker has no value to refuse and accepts it; the
+// guard traps, because the view is two long and three is not; and the unchecked
+// program reads a *real* element of a real object, which is what makes its exit
+// status the same number on every machine. Reading past the object instead would
+// be undefined behaviour -- the value would be whatever the stack happened to
+// hold, and a test that asserts "not 1" against a garbage byte fails on the
+// machine that happens to hold a 1 (which is how this one first failed, on
+// macOS).
+// The element the unchecked program reads: past `v`'s length, inside `t`, and
+// deliberately not 1 -- the driver's own failure code.
+constexpr int kOutOfViewElement = 12;
+
 constexpr std::string_view kOutOfBoundsProgram = "fn i32 at(v: []i32, i: i32)\n"
                                                  "{\n"
                                                  "  return v[i];\n"
                                                  "}\n"
                                                  "fn i32 main()\n"
                                                  "{\n"
-                                                 "  let t: [2]i32 = [7, 8];\n"
-                                                 "  let v: []i32 = t[..];\n"
-                                                 "  return at(v, 5);\n"
+                                                 "  let t: [4]i32 = [7, 8, 9, 12];\n"
+                                                 "  let v: []i32 = t[0..2];\n"
+                                                 "  return at(v, 3);\n"
                                                  "}\n";
 
 TEST(BuildCommandTest, TheCheckedBuildStopsAProgramTheCheckerCannotRefuse) {
@@ -483,14 +497,17 @@ TEST(BuildCommandTest, TheCheckedBuildStopsAProgramTheCheckerCannotRefuse) {
   EXPECT_EQ(trapped.code, exitCode(ExitCode::Failure)) << trapped.err;
   EXPECT_NE(trapped.err.find("terminated abnormally"), std::string::npos) << trapped.err;
 
-  // The same program, built without the guards: the access reads whatever is one
-  // element past the array and the program *exits with that value*, which is the
-  // difference the flag buys and the reason it exists.
+  // The same program, built without the guards: the access reads the element past
+  // the view -- a real one, because the array it views is longer -- and the
+  // program *exits with that value*, which is the difference the flag buys and
+  // the reason it exists. The number is asserted exactly and not as "not 1":
+  // the element is `12` on every machine and in both builds, so the test says
+  // what it means (`kOutOfBoundsProgram` above).
   BuildRequest unchecked = requestFor(source);
   unchecked.checks = false;
   unchecked.run = true;
   const Outcome unguarded = run(unchecked, /*execute=*/true);
-  EXPECT_NE(unguarded.code, exitCode(ExitCode::Failure))
+  EXPECT_EQ(unguarded.code, kOutOfViewElement)
       << "an unchecked build must not be killed by a guard it never emitted: " << unguarded.err;
 }
 
@@ -517,7 +534,43 @@ TEST(BuildCommandTest, TheGuardsSurviveOptimisation) {
   release.checks = false;
   release.run = true;
   const Outcome unchecked = run(release, /*execute=*/true);
-  EXPECT_NE(unchecked.code, exitCode(ExitCode::Failure)) << unchecked.err;
+  EXPECT_EQ(unchecked.code, kOutOfViewElement) << unchecked.err;
+}
+
+TEST(BuildCommandTest, APeListingIsPositionIndependent) {
+  // The measured failure, and the reason this test reads a *listing* rather than
+  // a module: with LLVM's `Static` relocation model the guard's message was
+  // addressed absolutely, so the object could not be linked -- `ld` refuses a
+  // 32-bit absolute address of a `.data` object with "relocation truncated to
+  // fit: IMAGE_REL_AMD64_ADDR32", because a PE image is based at `0x140000000`.
+  // What made it a Windows-only, `-O2`-only failure is that the *form* depends on
+  // the optimiser: `-O0` emitted `movabsq`, a 64-bit relocation, which links.
+  // The listing is where the addressing is visible, and the target is a foreign
+  // one because the question is about COFF and not about this machine.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+  const std::string source = scratch.write("oob3.mx", kOutOfBoundsProgram);
+  const std::string listing = scratch.file("oob3.s");
+
+  const std::optional<sema::TargetInfo> target = sema::targetFromName(sema::kTripleWindowsAmd64);
+  ASSERT_TRUE(target.has_value());
+  BuildRequest request = requestFor(source);
+  request.target = *target;
+  request.kind = OutputKind::Assembly;
+  request.output = listing;
+  request.level = backend::OptLevel::O2;
+  request.checks = true;
+  const Outcome outcome = run(request, /*execute=*/false);
+  ASSERT_EQ(outcome.code, 0) << outcome.err;
+
+  const std::string text = readFile(listing);
+  // Every reference to the guard's own message goes through the instruction
+  // pointer -- `leaq .Lcheck.site(%rip), %rcx` -- which is the only form this
+  // platform's linker can resolve, and (as `target.cc` records) what `clang`
+  // emits for the target under every `-fPIC` setting.
+  EXPECT_NE(text.find("(%rip)"), std::string::npos) << text.substr(0, 400);
+  EXPECT_EQ(text.find("$.Lcheck.site"), std::string::npos)
+      << "the guard's message is addressed absolutely, which PE cannot link";
 }
 
 // --- builtins, as answers -----------------------------------------------------

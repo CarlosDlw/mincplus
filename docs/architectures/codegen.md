@@ -266,15 +266,46 @@ a linker changes its mind. It is the canonical "works here, broken on the user's
 machine" bug, and the only defence that does not depend on the host is to not
 produce the object that triggers it.
 
-**Decision: emit position-independent code for ELF and Mach-O, always, and state
-the relocation model per triple rather than inheriting LLVM's default.** PIC
-links into a PIE, into a non-PIE, and into a shared library; a static object
-links into exactly one of those and needs the driver to be told which. The cost
-is a GOT indirection for the address of a global, and this language's globals
-are string literals. COFF's default relocation model is what Windows expects, so
-the triple's table says `Static` there and `PIC_` elsewhere — one table, read in
-one place, so the answer cannot depend on which `TargetMachine` overload was
-called.
+**Decision: emit position-independent code on every platform, and state the
+relocation model per triple rather than inheriting LLVM's default.** PIC links
+into a PIE, into a non-PIE, and into a shared library; a static object links into
+exactly one of those and needs the driver to be told which. The cost on ELF is a
+GOT indirection for the address of a global, and this language's globals are
+string literals. One table, read in one place, so the answer cannot depend on
+which `TargetMachine` overload was called.
+
+### COFF: the same answer, for a sharper reason
+
+The Windows row of the table said `Static` for a while, on the assumption that
+COFF's default is what the platform expects. It is not, and the way it failed is
+worth keeping, because it is the *second* time this section has earned its place
+by measurement:
+
+```
+D:/a/_temp/.../unit0.o:(.text+0x25): relocation truncated to fit: IMAGE_REL_AMD64_ADDR32 against `.data'
+collect2.exe: error: ld returned 1 exit status
+```
+
+`Static` is the small code model's assumption that an address fits in 32 bits,
+and under it LLVM addresses a global absolutely. A PE image is based at
+`0x140000000`, so a 32-bit absolute address of a `.data` object is not
+representable and `ld` refuses the object. What made this a CI-only mystery is
+that the *form* depends on the optimiser: the module's own guard message was
+`movabsq $.Lcheck.site, %rcx` at `-O0` (a 64-bit relocation, which links
+perfectly) and `movl $.Lcheck.site, %ecx` at `-O2` (a 32-bit one, which does
+not). An object that links on the machine it was developed on and not on the
+machine that has never seen it is the failure mode this whole section exists to
+prevent — and it was invisible to every local gate, because no local gate emits a
+PE object.
+
+`PIC_` on COFF costs nothing that matters: it is RIP-relative addressing of a
+local symbol (`leaq .Lcheck.site(%rip), %rcx`), not the GOT indirection this
+section originally assumed. COFF has no `GOT`; a *local* symbol is reached
+through the instruction pointer directly, and an imported data symbol gets the
+`.refptr` thunk the platform itself uses for the job. It is also what `clang`
+emits for the target under `-fPIC`, `-fno-PIC` and neither — three spellings, one
+object — which is the simplest available statement of "this is the platform's
+answer".
 
 The corollary is a rule about the *linker*: because we always hand the driver PIC
 objects, we never have to pass it `-no-pie`, which is a flag that macOS does not
@@ -621,8 +652,9 @@ absorbs almost all of it, which is the argument for driving one.
 
 - Linker driver: `clang` (which finds and drives `link.exe` from the Visual
   Studio installation) or `lld-link`. There is no `cc`.
-- Relocation: the platform's default (`Static`), which is what the triple's
-  table says.
+- Relocation: `PIC_`, the same row the other two platforms read, and not "the
+  platform's default" — see § *COFF: the same answer, for a sharper reason* for
+  why the default is not linkable at `-O2`.
 - Entry point: `main` resolves through the CRT, as on the others, because the
   driver supplies the entry shim.
 - Debug info: **CodeView**, from the same metadata, chosen by the triple. The
@@ -735,7 +767,7 @@ rather than assuming).
 | 3 | **The unit of codegen is one module, one `TargetMachine`, one thread** | A `TargetMachine` carries mutable emission state; sharing one across an editor's concurrent units is a race, and the rule is already `ir`'s rule for `LLVMContext` |
 | 4 | **Optimise with the new PM, emit with the legacy one** | `addPassesToEmitFile` takes a `legacy::PassManagerBase&`; this is LLVM's own split and Clang's, and it is written down so a reader does not "fix" it |
 | 5 | **`addPassesToEmitFile`'s inverted boolean and `DisableVerify=true` are wrapped once** | It returns true on *failure*, and it does *not* verify by default — two inversions, stated in one place instead of remembered in two |
-| 6 | **Position-independent code for ELF and Mach-O, from a per-triple table** | Measured: this host's `cc` defaults to PIE and a static object links into `DT_TEXTREL` (a warning here, an error on other linkers and architectures). PIC links into a PIE, a non-PIE and a shared library, so we never pass `-no-pie` — a flag macOS does not have |
+| 6 | **Position-independent code on every platform, from a per-triple table** | Measured twice. ELF: this host's `cc` defaults to PIE and a static object links into `DT_TEXTREL` (a warning here, an error on other linkers and architectures). COFF: the small code model's 32-bit absolute address of a `.data` object is refused by `ld` (`relocation truncated to fit: IMAGE_REL_AMD64_ADDR32`), and the form only appears above `-O0`, so nothing local could see it. PIC links into a PIE, a non-PIE and a shared library, so we never pass `-no-pie` — a flag macOS does not have |
 | 7 | **`build` drives a linker driver (`clang` → `cc` → `gcc`), never a linker** | Startup objects, `libc`, the dynamic linker, the SDK, the MSVC import libraries: platform knowledge that a C driver already has right, and reimplementing it is a second implementation with more ways to be wrong |
 | 8 | **The child is spawned from an `argv` array, never a shell string** | No quoting to get wrong (including Windows paths with spaces), no injection, and the user's paths are passed as data because they are data |
 | 9 | **Temporary objects live in a `createUniqueFile` directory owned by an RAII object** | `O_CREAT\|O_EXCL` makes the create atomic; a predictable name in `/tmp` is a symlink race, and cleanup on the error paths is the half that is usually forgotten |

@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -360,13 +361,23 @@ constexpr ArithmeticType kArithmetic[] = {
     {sema::kTypeF64, "f64"},   {sema::kTypeF80, "f80"},
 };
 
+// The enumeration runs against a **stated** target and not the host, because
+// `f80` is a format and not a width (`sema.md` decision 26): on a machine without
+// x87 the parameter `p_f80: f80` is refused by the type reader, and this test
+// would then be measuring the CI machine instead of the coercion record. The row
+// is one with x87, so every arithmetic type the language names has a spelling.
+[[nodiscard]] sema::TargetInfo enumerationTarget() {
+  const std::optional<sema::TargetInfo> target = sema::targetFromName(sema::kTripleLinuxAmd64);
+  return target.value_or(sema::defaultTarget());
+}
+
 TEST(CoerceTest, TheRecordCoversEveryPermittedPair) {
   // The enumerated form of the rule, and the reason the doc calls the record a
   // *table* rather than a shortcut: for every ordered pair of arithmetic types
   // the language permits, a program that performs that conversion must produce
   // that entry. Sampling would pass on a record that is missing the pairs nobody
   // writes today.
-  sema::TypeStore table;
+  sema::TypeStore table(enumerationTarget());
   std::set<Pair> expected;
   for (const ArithmeticType& from : kArithmetic) {
     for (const ArithmeticType& to : kArithmetic) {
@@ -404,7 +415,7 @@ TEST(CoerceTest, TheRecordCoversEveryPermittedPair) {
   }
   source += "  return 0;\n}\n";
 
-  SemaFixture f;
+  SemaFixture f("test.mx", enumerationTarget());
   f.source(source);
   ASSERT_TRUE(f.build());
   ASSERT_EQ(f.errorCount(), 0u);

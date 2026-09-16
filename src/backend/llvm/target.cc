@@ -55,23 +55,39 @@ void initializeTargets() {
 }
 
 std::optional<llvm::Reloc::Model> relocationModelFor(const sema::TargetInfo& target) {
+  // **Position-independent on every platform this compiler states**, and the two
+  // halves of that were each measured rather than reasoned about.
+  //
+  // On ELF and Mach-O: every ordinary host either defaults to PIE or links PIC
+  // objects happily, and PIC links into a PIE, a non-PIE *and* a shared library.
+  // A static object links into exactly one of those and needs the driver to be
+  // told which -- and the object that says "static" is the one that produces
+  // `DT_TEXTREL` on a distribution whose `cc` defaults to `-pie`, which is all of
+  // them.
+  //
+  // On COFF, which used to be the exception: with `Static` -- the small code
+  // model's assumption that an address fits in 32 bits -- LLVM addressed a global
+  // absolutely, and a PE image is based at `0x140000000`, so an object whose
+  // reference is 32 bits wide cannot be linked at all. It failed on a Windows CI
+  // job and nowhere else, because the *form* depends on the optimiser: `-O0`
+  // emitted `movabsq $.Lcheck.site, %rcx` (a 64-bit relocation, which links) and
+  // `-O2` emitted `movl $.Lcheck.site, %ecx` (a 32-bit one, which does not), so
+  // `ld` answered "relocation truncated to fit: IMAGE_REL_AMD64_ADDR32 against
+  // `.data`". An object that links on the machine it was written on and not on
+  // the machine that has never seen it is the failure this table exists to
+  // prevent.
+  //
+  // What `PIC_` costs here is not a GOT indirection: COFF has no `GOT`. It is
+  // RIP-relative addressing of a local symbol (`leaq .Lcheck.site(%rip), %rcx`),
+  // and the `.refptr` thunk the platform itself uses for an imported data symbol.
+  // It is also what `clang` emits for this target under `-fPIC`, `-fno-PIC` and
+  // neither -- three spellings, one object.
   switch (target.triple.os) {
   case sema::OsFamily::linux:
   case sema::OsFamily::freebsd:
   case sema::OsFamily::darwin:
-    // **Position-independent, always.** Every ordinary ELF and Mach-O host either
-    // defaults to PIE or links PIC objects happily, and PIC links into a PIE, a
-    // non-PIE *and* a shared library. A static object links into exactly one of
-    // those and needs the driver to be told which -- and the object that says
-    // "static" is the one that produces `DT_TEXTREL` on a distribution whose
-    // `cc` defaults to `-pie`, which is all of them.
-    return llvm::Reloc::PIC_;
   case sema::OsFamily::windows:
-    // COFF's default, and what `clang` uses there: the dynamic base is a linker
-    // setting on this platform, not a code-generation one, and asking for `PIC_`
-    // would produce GOT-relative addressing the platform's linker does not
-    // expect.
-    return llvm::Reloc::Static;
+    return llvm::Reloc::PIC_;
   }
   return std::nullopt;
 }

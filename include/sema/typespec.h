@@ -119,4 +119,12 @@ struct TypePart {
 // Names only, not the valid *combinations*: a suggestion is about one word.
 [[nodiscard]] std::span<const std::string_view> typeNames();
 
+// Whether this one word in the table is a type **on this target**. The table is
+// the reader's vocabulary and the target decides one entry of it: `f80` names the
+// x87 format, so it is a type where there is x87 and a refusal where there is not
+// (`sema.md` decision 26). A caller that offers a name back to a reader -- the
+// suggestion search, whose whole promise is that the spelling it proposes then
+// works -- asks here rather than repeating the rule.
+[[nodiscard]] bool typeNameOnTarget(std::string_view name, const TargetInfo& target);
+
 } // namespace minc::sema
