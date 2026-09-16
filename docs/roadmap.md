@@ -707,6 +707,18 @@ sweep below, and the triple matrix.
       the record is what a contributor needs installed; linking `lld` in as a
       library to drop the C-toolchain dependency is recorded as a real option
       and expressly not taken
+- [x] A type whose **existence is the machine's**, refused where the machine has
+      none: `f80` is x87's format, so AArch64 and RISC-V have no such type, and
+      the refusal belongs to the **checker** (`sema-malformed-type`, naming the
+      triple and saying `f64` or `long double`) because a program the checker
+      accepts is a program the rest of the pipeline must compile. It did not: with
+      the macOS CI failing on two `f80` tests it turned out `mincc check --target
+      aarch64-unknown-linux-gnu` accepted `let x: f80` and `mincc build` refused
+      it. `TargetInfo::hasFloat80` is now the one question the type reader and the
+      lowering both ask, `long double` is the example's portable spelling, and the
+      corpus sweeps (`examples` in the sema and IR suites) state the reference
+      target instead of the host, so "every example checks and lowers" is a claim
+      about the language and not about the CI runner
 - [ ] A triple matrix that is exercised and not assumed: cross-compiling from
       any host in the design targets to the others. Two directions are proven
       today -- `--target aarch64-unknown-linux-gnu --emit obj` from this host

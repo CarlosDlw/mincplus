@@ -360,6 +360,25 @@ TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& 
       case TypeKind::Str:
         return ok(kTypeStr);
       case TypeKind::Float:
+        // `f80` is a **format** and not a width: it is x87's, and a target whose
+        // machines have no x87 -- AArch64, RISC-V -- has no such type. Refused
+        // here, at the spelling, and not in the lowering: what this stage accepts
+        // is a promise that the program compiles (`mincc check --target
+        // aarch64-unknown-linux-gnu` used to accept `let x: f80` and `mincc build`
+        // refused it, which is the gap this sentence closes). `long double` is the
+        // portable spelling and resolves to whatever extended format the target
+        // states; on the targets that have x87 the two are the same type.
+        //
+        // No `unknownWord`, deliberately: `f80` is a word this reader knows, and
+        // the suggestion path would answer a reader who wrote a type the target
+        // has no ABI for with "did you mean `i8`?". The sentence above is the
+        // whole fix, and the diagnostic is `MalformedType` -- a well-formed run the
+        // target cannot be given.
+        if (primitive->bits == 80 && !target.hasFloat80()) {
+          return fail("`f80` is the x87 80-bit format, which `" + std::string(target.name()) +
+                      "` has no ABI for; use `f64`, or `long double` for this target's "
+                      "extended format");
+        }
         return ok(types.floatOf(primitive->bits));
       default:
         break;

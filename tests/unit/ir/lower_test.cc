@@ -21,6 +21,7 @@
 
 #include "ir/ir.h"
 #include "ir/ir_fixture.h"
+#include "sema/sema_error.h"
 #include "sema/target.h"
 #include "tests/examples_dir.h"
 
@@ -230,25 +231,33 @@ TEST(IrLowerTest, OneGlobalPerDistinctString) {
   EXPECT_EQ(globals, 1U) << text;
 }
 
-TEST(IrLowerTest, ATypeTheTargetHasNoShapeForIsRefusedAndNotCrashed) {
-  // `f80` is the x87 format. A target whose ABI has no x87 `long double` has no
-  // LLVM type for it, so the mapper refuses -- and the refusal has to reach the
-  // caller as a diagnostic, not as a null `alloca`. That was the crash: the
-  // binding's slot was built from the mapper's null and the process died where
-  // the reader was owed a message. Now the unit is refused, the module is not
-  // built, and the message names the type and the target.
+TEST(IrLowerTest, AFloat80OnAMachineWithoutX87IsRefusedBeforeTheMapperSeesIt) {
+  // `f80` is the x87 format, so a machine with no x87 has no such *type*, and the
+  // place that has to say so is the **checker** (`sema.md`, decision 26): a
+  // program this stage refuses after the checker accepted it is a program the
+  // pipeline promised would compile. It used to be exactly that -- this test's
+  // old shape, with `check --target aarch64-unknown-linux-gnu` exiting 0 and the
+  // lowering refusing afterwards.
+  //
+  // The lowering keeps its own guard, and this test is the seam around it: the
+  // mapper's answer for an unmappable type must never become a null `alloca`, and
+  // the unit must come out refused rather than built. Reaching that guard is a bug
+  // now (`types.cc` says so), which is why the assertion here is the *checker's*
+  // sentence and the absence of a module.
   const std::optional<sema::TargetInfo> aarch64 = sema::targetFromName(sema::kTripleLinuxAarch64);
   ASSERT_TRUE(aarch64.has_value());
   test::IrFixture fixture("test.mx", *aarch64);
   fixture.source("fn i32 main()\n{\n  let x: f80 = 0.0;\n  return 0;\n}\n");
   ASSERT_TRUE(fixture.build());
 
+  // One refusal, one message, and it names the triple and the spelling to use.
+  ASSERT_EQ(fixture.typed().errors.size(), 1U);
+  EXPECT_EQ(sema::toString(fixture.typed().errors[0].code), "sema-malformed-type");
+  EXPECT_NE(fixture.typed().errors[0].message.find(sema::kTripleLinuxAarch64), std::string::npos)
+      << fixture.typed().errors[0].message;
+  // And no module for a tree whose meaning nobody decided.
   EXPECT_TRUE(fixture.result().failed());
   EXPECT_FALSE(fixture.moduleBuilt());
-  EXPECT_TRUE(fixture.hasError("ir-unsupported-type"));
-  // One refusal, one message: a mapper asked twice for the same unmappable type
-  // used to record the diagnostic twice.
-  EXPECT_EQ(fixture.diagnostics().size(), 1U);
 }
 
 TEST(IrLowerTest, APoisonedUnitIsRefusedAndProducesNoModule) {
@@ -432,10 +441,10 @@ TEST(IrLowerTest, EveryExampleLowers) {
   ASSERT_FALSE(files.empty()) << "examples/ is missing files";
 
   // A *stated* target, not the host. The corpus is a statement about the
-  // language, and one of its files uses `f80` -- the x87 extended format, which a
-  // target without x87 has no LLVM type for and the lowering therefore refuses by
-  // name. Running the sweep against whatever machine executes it would make "every
-  // example lowers" a claim about the CI runner rather than about the corpus.
+  // language, and part of what the language has depends on the machine it is for
+  // (`f80` is x87's format, and `long double` resolves per target). Running the
+  // sweep against whatever machine executes it would make "every example lowers" a
+  // claim about the CI runner rather than about the corpus.
   const std::optional<sema::TargetInfo> reference = sema::targetFromName(sema::kTripleLinuxAmd64);
   ASSERT_TRUE(reference.has_value());
 

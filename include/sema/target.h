@@ -161,6 +161,41 @@ struct TargetInfo {
   // (`f80:128`), 32 on i386 (`f80:32`).
   std::uint16_t float80AlignBits = 128;
 
+  // Whether the target has the **x87 80-bit format**, which is what the `f80`
+  // spelling names.
+  //
+  // An *architecture* fact and not an ABI one, which is why it is not a stored
+  // field and not a comparison of `longDoubleBits`: the format is x86's arithmetic
+  // (`st(0)` and LLVM's `x86_fp80`), so x86_64 and i386 have it and AArch64 and
+  // RISC-V do not -- while `longDoubleBits` answers a different question, what the
+  // OS and the environment make of the *spelling* `long double` (a plain `double`
+  // under MSVC on a machine that still has x87, IEEE binary128 on AArch64 Linux).
+  // Reading the two as one question refused `f80` on `x86_64-pc-windows-msvc`,
+  // where LLVM's own layout carries `f80:128` and the type is perfectly
+  // representable.
+  //
+  // Three readers ask it: the type-specifier reader, which is where a target with
+  // no such format refuses the *word* (the checker's acceptance is a promise that
+  // the program compiles -- `mincc check --target aarch64-unknown-linux-gnu` used
+  // to accept `let x: f80` and the lowering refused it); the lowering, which maps
+  // the format to `x86_fp80` and would otherwise have to guess a size and an
+  // alignment; and the layout suite, which checks both against LLVM's data layout
+  // for the triple. The switch is total, so a new architecture is a build error
+  // here rather than a silent `false`.
+  [[nodiscard]] bool hasFloat80() const {
+    switch (triple.arch) {
+    case Arch::x86_64:
+    case Arch::i386:
+      return true;
+    case Arch::aarch64:
+    case Arch::riscv64:
+      return false;
+    }
+    // Not reachable while every enumerator is above; it is here because a
+    // `switch` is not an expression and the alternative is a warning.
+    return false;
+  }
+
   // What `codegen` hands to LLVM, and what a diagnostic prints for the target.
   [[nodiscard]] const std::string& name() const {
     return triple.text;

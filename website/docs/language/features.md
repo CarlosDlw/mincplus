@@ -92,10 +92,14 @@ first-class types; the examples use the primitive names. See
 - [ ] Generics / parametric types `[?]`
 
 `f80` is the x87 80-bit extended format. It is in the set because that is what
-C's `long double` is on System V AMD64, and it is the one type whose support is
-per target: a target without x87 has no LLVM type for it, so the IR refuses it by
-name (`ir-unsupported-type`, naming the type and the triple) instead of
-substituting a narrower one.
+C's `long double` is on System V AMD64, and it is the one type whose existence is
+a property of the **machine**: it is x86's arithmetic, so `x86_64` and `i386`
+have it and AArch64 and RISC-V do not. `mincc check` is where that is decided —
+the type-specifier reader refuses the word with `sema-malformed-type`, naming the
+triple and the spelling to use instead — because a program the checker accepts is
+a program the rest of the pipeline must compile. `long double` is the portable
+spelling, and on a target without x87 it is the format that target does state
+(IEEE binary128 on AArch64 Linux, a `double` under MSVC).
 
 ### C-compatible type names
 
@@ -123,7 +127,7 @@ Mapping on the current interop target (System V AMD64, LP64):
 | `long`, `long long` | `i64` | both 64-bit on LP64 |
 | `unsigned int`, `unsigned long` | `u32`, `u64` | |
 | `float`, `double` | `f32`, `f64` | |
-| `long double` | `f80` | x87 extended, 80-bit |
+| `long double` | the target's extended float | `f80` on x86, IEEE binary128 on AArch64 Linux, `f64` under MSVC |
 | `size_t` / `ssize_t`, `ptrdiff_t` | `usize` / `isize` | pointer-sized |
 | `__int128` / `unsigned __int128` | `i128` / `u128` | compiler extension in C |
 

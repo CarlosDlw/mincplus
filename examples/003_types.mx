@@ -20,7 +20,14 @@ fn i32 primitiveNames()
 
   let singlePrecision: f32 = 0.0;
   let doublePrecision: f64 = 0.0;
-  let extendedPrecision: f80 = 0.0;
+  // The extended float. `f80` names x87's format, which is x86's: on a machine
+  // with no x87 the checker refuses the word and says so, because a type the
+  // compiler cannot size is a type it must not hand out. `long double` is the
+  // portable spelling -- it resolves to whatever extended format the target
+  // states, which is `f80` on x86, IEEE binary128 on AArch64 Linux, and a plain
+  // `f64` under MSVC -- so this example is the same program everywhere and still
+  // declares the widest float the machine has.
+  let extendedPrecision: long double = 0.0;
 
   let flag: bool = true;
   let letter: char = 'x';

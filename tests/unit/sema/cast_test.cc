@@ -455,7 +455,6 @@ TEST(CastTest, ASuffixedLiteralHasTheTypeItsSuffixNames) {
            "  let b = 300;\n"
            "  let c = 12f32;\n"
            "  let d = 1.5;\n"
-           "  let e = 1.5L;\n"
            "  return 0;\n"
            "}\n");
   ASSERT_TRUE(f.build());
@@ -467,9 +466,36 @@ TEST(CastTest, ASuffixedLiteralHasTheTypeItsSuffixNames) {
   EXPECT_EQ(f.bindingType("b"), "i32");
   EXPECT_EQ(f.bindingType("c"), "f32");
   EXPECT_EQ(f.bindingType("d"), "f64");
-  // `L` is the *target's* `long double`, which is why the reader and not the type
-  // table answers it.
-  EXPECT_EQ(f.bindingType("e"), "f80");
+}
+
+TEST(CastTest, TheLongDoubleSuffixIsTheTargetsLongDouble) {
+  // `1.5L` is the *target's* `long double`, which is why the suffix reader asks
+  // the target and not a type table: x86 has x87's `f80`, AArch64 has no `f80` at
+  // all (its `long double` is IEEE binary128, a format the language has no
+  // spelling for yet) and MSVC's is a plain `f64`. Both targets are asked rather
+  // than the host, which is the difference between a test of the rule and a test
+  // of the machine that happens to run it: this assertion used to name `f80`
+  // alone, which passed on an x86_64 host and failed on macOS.
+  const std::optional<TargetInfo> x87 = targetFromName(kTripleLinuxAmd64);
+  ASSERT_TRUE(x87.has_value());
+  test::SemaFixture onX87{std::string("x87.mx"), *x87};
+  ASSERT_TRUE(onX87.source("fn i32 main() { let e = 1.5L; return 0; }\n").build());
+  ASSERT_EQ(onX87.errorCount(), 0u) << onX87.dump();
+  EXPECT_EQ(onX87.bindingType("e"), "f80");
+
+  const std::optional<TargetInfo> arm = targetFromName(kTripleLinuxAarch64);
+  ASSERT_TRUE(arm.has_value());
+  test::SemaFixture onArm{std::string("arm.mx"), *arm};
+  ASSERT_TRUE(onArm.source("fn i32 main() { let e = 1.5L; return 0; }\n").build());
+  ASSERT_EQ(onArm.errorCount(), 0u) << onArm.dump();
+  EXPECT_EQ(onArm.bindingType("e"), "f128");
+
+  const std::optional<TargetInfo> msvc = targetFromName(kTripleWindowsAmd64);
+  ASSERT_TRUE(msvc.has_value());
+  test::SemaFixture onMsvc{std::string("msvc.mx"), *msvc};
+  ASSERT_TRUE(onMsvc.source("fn i32 main() { let e = 1.5L; return 0; }\n").build());
+  ASSERT_EQ(onMsvc.errorCount(), 0u) << onMsvc.dump();
+  EXPECT_EQ(onMsvc.bindingType("e"), "f64");
 }
 
 TEST(CastTest, ASuffixedLiteralOutOfItsOwnRangeIsRefusedAtTheLiteral) {

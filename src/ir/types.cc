@@ -137,17 +137,26 @@ llvm::Type* Lowering::llvmType(sema::TypeId id) {
     case 64:
       return llvm::Type::getDoubleTy(context_);
     case 80:
-      // `x86_fp80` is the x87 type, and it is a real type only where the ABI has
-      // one. The same rule `ir.md` states for `f80`: supported where the triple
-      // says it is, refused where it says it is not -- because on an AArch64 the
-      // data layout has no 80-bit float, so every size and alignment for it
-      // would be a guess.
-      if (types_.target().longDoubleBits == 80) {
+      // `x86_fp80` is the x87 type, and it is a real type only on a machine that
+      // has x87. The rule is the *target's* answer (`TargetInfo::hasFloat80`) and
+      // not this stage's, and it is the same answer the checker read when it
+      // accepted the spelling: refused here too, because on an AArch64 the data
+      // layout has no 80-bit float, so every size and alignment for it would be a
+      // guess.
+      if (types_.target().hasFloat80()) {
         return llvm::Type::getX86_FP80Ty(context_);
       }
+      // The backstop, and the same sentence the type-specifier reader refuses the
+      // spelling with -- one fact, and a reader who reaches either place is owed
+      // the same advice. The checker is where it is decided (no spelling for an
+      // 80-bit float survives `sema` on a machine with no x87), so what this arm
+      // protects is the other direction: a tree built *without* the checker must
+      // not get an `x86_fp80` emitted for a target that cannot hold one, nor a
+      // null `alloca` out of a mapper that answered nothing.
       fatal(support::Span{}, IRDiagnosticCode::UnsupportedType,
             "`f80` is the x87 80-bit format, which `" + types_.target().name() +
-                "` has no ABI for; use `f64` or `f128`-spelled `long double`");
+                "` has no ABI for; use `f64`, or `long double` for this target's extended "
+                "format");
       return nullptr;
     case 128:
       return llvm::Type::getFP128Ty(context_);

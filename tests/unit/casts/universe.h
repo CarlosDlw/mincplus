@@ -164,6 +164,18 @@ inline constexpr std::string_view kUniverse[] = {
   return name != "void" && name != "!" && name != "<int literal>" && name != "<float literal>";
 }
 
+// Can this type be **named** on this target? `f80` is the one row whose existence
+// is a property of the machine and not of the width table: it is x87's format, so
+// AArch64 and RISC-V have no such type and the checker refuses the *spelling*
+// there (`TypeSpecTest.Float80IsRefusedWhereTheMachineHasNoX87`). The suite
+// therefore asks this before it writes a program, and the id level is untouched:
+// every store still carries the row, because the numbering is fixed and shared
+// (`sema/type.h`), which is why the matrix suites may keep asking about 26 types
+// while a generated program has one fewer on a machine with no x87.
+[[nodiscard]] inline bool nameable(const sema::TypeStore& types, std::string_view name) {
+  return name != "f80" || types.target().hasFloat80();
+}
+
 // Can this type be the **destination** of a cast a program can write? `void` has
 // nothing to convert to, and `!` is refused by the matrix and not even readable
 // after `as` -- both are pinned in `sema/cast_test.cc` over the table, and neither

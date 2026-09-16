@@ -60,11 +60,23 @@ what C means. If you want a fixed width, write `i64`. `mincc check --types`
 prints the target and the width it gives `long`.
 :::
 
-:::note[`f80`]
-`f80` is the x87 extended-precision format. It is accepted as a type name
-everywhere, and its arithmetic is the target's; on a target with no such type
-the compiler reports it rather than quietly widening to `f64`. Where the
-precision matters across platforms, `f64` is the portable choice.
+:::note[`f80` — x86 only]
+`f80` names the **x87 80-bit format**, which is x86's arithmetic: `x86_64` and
+`i386` have it, AArch64 and RISC-V do not. On a target with no x87 the checker
+refuses the word and says what to write instead, rather than widening quietly to
+`f64`:
+
+```console
+$ mincc check --target aarch64-unknown-linux-gnu main.mx
+main.mx:2:10: error[sema-malformed-type]: `f80` is the x87 80-bit format, which `aarch64-unknown-linux-gnu` has no ABI for; use `f64`, or `long double` for this target's extended format
+    let x: f80 = 1.5;
+           ^^^
+```
+
+`long double` is the **portable** spelling of "the widest float this machine
+has": it resolves to the format the target states — `f80` on x86, IEEE binary128
+on AArch64 Linux, a plain `f64` under MSVC. Where the exact precision matters
+across platforms, `f64` is the choice that means the same thing everywhere.
 :::
 
 ## `bool`

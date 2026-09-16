@@ -507,11 +507,50 @@ TEST(TypeSpecTest, ThePrimitivesAreWholeTypes) {
   TypeStore types;
   EXPECT_EQ(readTypeSpec(words({"i32"}), types).type, kTypeI32);
   EXPECT_EQ(readTypeSpec(words({"u128"}), types).type, kTypeU128);
-  EXPECT_EQ(readTypeSpec(words({"f80"}), types).type, kTypeF80);
+  // `f80` is asked of a target that has x87, and not of the host: it is a
+  // *format*, so a machine with no x87 refuses the word (`f80` on an Apple
+  // silicon host is the case that made this test host-dependent).
+  const std::optional<TargetInfo> x87 = targetFromName(kTripleLinuxAmd64);
+  ASSERT_TRUE(x87.has_value());
+  TypeStore withX87{*x87};
+  EXPECT_EQ(readTypeSpec(words({"f80"}), withX87).type, kTypeF80);
   EXPECT_EQ(readTypeSpec(words({"bool"}), types).type, kTypeBool);
   EXPECT_EQ(readTypeSpec(words({"void"}), types).type, kTypeVoid);
   EXPECT_EQ(readTypeSpec(words({"char"}), types).type, kTypeChar);
   EXPECT_EQ(readTypeSpec(words({"str"}), types).type, kTypeStr);
+}
+
+TEST(TypeSpecTest, Float80IsRefusedWhereTheMachineHasNoX87) {
+  // The one type whose existence is a property of the *machine* and not of the
+  // width table: `f80` is x87's arithmetic, so AArch64 and RISC-V have no such
+  // type at all, and the refusal is the **checker's**. Refusing it in the lowering
+  // instead -- which is what the compiler did -- let `check` accept a program that
+  // `build` could not compile, and "if the checker lets it pass, it must run" is
+  // the property every other stage is built on.
+  const std::optional<TargetInfo> arm = targetFromName(kTripleLinuxAarch64);
+  ASSERT_TRUE(arm.has_value());
+  ASSERT_FALSE(arm->hasFloat80());
+  TypeStore aarch64{*arm};
+  const TypeSpecResult refused = readTypeSpec(words({"f80"}), aarch64);
+  EXPECT_FALSE(refused.ok);
+  EXPECT_NE(refused.message.find("x87"), std::string::npos) << refused.message;
+  EXPECT_NE(refused.message.find(kTripleLinuxAarch64), std::string::npos) << refused.message;
+  // Nothing to suggest: `f80` is a word this reader knows, and "did you mean
+  // `i8`?" is not a repair anybody can use.
+  EXPECT_TRUE(refused.unknownWord.empty());
+  // The portable spelling still works, and it is the format the target *does*
+  // state: IEEE binary128 on AArch64 Linux, which is not `f80` and not `f64`.
+  EXPECT_EQ(readTypeSpec(words({"long", "double"}), aarch64).type, aarch64.floatOf(128));
+
+  // And on a machine that has it -- including the Windows ones, where `long
+  // double` is spelled but is a `double` under MSVC -- `f80` is the type it names,
+  // while `long double` stays the ABI's answer for the spelling.
+  const std::optional<TargetInfo> windows = targetFromName(kTripleWindowsAmd64);
+  ASSERT_TRUE(windows.has_value());
+  EXPECT_TRUE(windows->hasFloat80());
+  TypeStore msvc{*windows};
+  EXPECT_EQ(readTypeSpec(words({"f80"}), msvc).type, kTypeF80);
+  EXPECT_EQ(readTypeSpec(words({"long", "double"}), msvc).type, kTypeF64);
 }
 
 TEST(TypeSpecTest, APrimitiveCannotBeCombined) {

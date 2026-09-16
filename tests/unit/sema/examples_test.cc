@@ -13,6 +13,7 @@
 // against the shipped defaults.
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,6 +28,7 @@
 #include "resolve/resolve.h"
 #include "sema/sema.h"
 #include "sema/sema_error.h"
+#include "sema/target.h"
 #include "sema/type_store.h"
 #include "sema/typed_ast.h"
 #include "support/expected/fallible.h"
@@ -57,6 +59,15 @@ namespace {
 TEST(ExamplesSemaTest, EveryExampleTypeChecksWithoutErrors) {
   const std::vector<std::filesystem::path> files = exampleFiles();
   ASSERT_GE(files.size(), 5u) << "examples/ is missing files";
+
+  // A *stated* target, not the host: what the language has depends on the machine
+  // it is for (`f80` is x87's format and is refused where there is no x87, and
+  // `long double` resolves per target), so checking the corpus against whatever
+  // machine runs the test would make "every example type-checks" a claim about the
+  // CI runner rather than about the examples. The IR suite's example sweep states
+  // the same target for the same reason.
+  const std::optional<sema::TargetInfo> reference = sema::targetFromName(sema::kTripleLinuxAmd64);
+  ASSERT_TRUE(reference.has_value());
 
   for (const std::filesystem::path& path : files) {
     const std::string name = path.filename().string();
@@ -101,7 +112,7 @@ TEST(ExamplesSemaTest, EveryExampleTypeChecksWithoutErrors) {
                     << error.message;
     }
 
-    sema::TypeStore types;
+    sema::TypeStore types{*reference};
     const sema::SemaOutput checked =
         sema::checkUnit(lowered.file, resolved.map, session.symbols(), types, sema::SemaOptions{});
     for (const sema::SemaError& error : checked.errors) {

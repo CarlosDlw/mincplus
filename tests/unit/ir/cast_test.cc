@@ -247,16 +247,22 @@ TEST(IrCastTest, AConstantTheDestinationCannotHoldIsRefusedAndNoModuleIsBuilt) {
 // The expected instruction comes from the same shared table the `sema` suite
 // checks against the matrix (`casts/universe.h`), so the two suites cannot drift
 // into testing different alphabets.
+//
+// The program is written for the **host** target, because that is what the fixture
+// compiles for -- and one row of the universe is a property of the machine rather
+// than of the width table: `f80` is x87's format, so on an AArch64 host the row is
+// skipped (`casts::nameable`) rather than compiled into a program the checker is
+// right to refuse.
 TEST(IrCastTest, EveryPairTheMatrixAcceptsIsMaterialisedInTheModule) {
   sema::TypeStore types;
   std::vector<std::pair<std::string_view, std::string_view>> pairs;
   std::string source = "fn i32 main()\n{\n  return 0;\n}\n";
   for (const std::string_view from : test::casts::universe()) {
-    if (!test::casts::hasValues(from)) {
+    if (!test::casts::hasValues(from) || !test::casts::nameable(types, from)) {
       continue;
     }
     for (const std::string_view to : test::casts::universe()) {
-      if (!test::casts::canBeDestination(to)) {
+      if (!test::casts::canBeDestination(to) || !test::casts::nameable(types, to)) {
         continue;
       }
       const sema::TypeId fromId = test::casts::typeOf(types, from);

@@ -615,6 +615,10 @@ c-specifier := signed | unsigned
   is `f64`. One table, one place, and the compiler's own platform is not
   consulted — the *target's* ABI is. This is the cross-platform rule the rest of
   the project already follows for `support/fs`, applied to types.
+- **`f80` is refused where the machine has no x87** (decision 26), and that is the
+  one name in the list whose *existence* is a property of the target rather than
+  its width. `long double` is the portable spelling: it resolves to whatever
+  extended format the target states, and on x86 it resolves to the same `f80`.
 - An unknown word is `sema-unknown-type`, with a suggestion when the edit
   distance is small — the one bounded edit distance in `support/text`, shared
   with resolution rather than written twice.
@@ -634,7 +638,7 @@ Same contract as every other stage: `minc_sema` links no diagnostics, and
 | Code | Severity | Condition |
 | --- | --- | --- |
 | `sema-unknown-type` | error | an identifier run in a type position names no type |
-| `sema-malformed-type` | error | type specifiers that cannot combine |
+| `sema-malformed-type` | error | type specifiers that cannot combine, and a type the spelling names but the target does not have (`f80` with no x87) |
 | `sema-type-not-value` | error | `void` (or another non-value type) where a value is required |
 | `sema-literal-out-of-range` | error | a deferred literal does not fit the type context gives it |
 | `sema-condition-not-bool` | error | a condition, `!`, `&&` or `\|\|` operand that is not `bool` |
@@ -792,6 +796,7 @@ which is the user-facing copy.
 | 23 | May a deferred literal type survive to the next stage? | **No — decided at the seam, then swept down the tree**; the examples test asserts it over every node | A deferred type has no width and therefore no LLVM mapping, so an operand left undecided is a wrong instruction, not a missing one; and the record's two ends have to be types the IR can name |
 | 24 | What decides the operands the context reaches through an operation? | **The same context, walked down from each node with a concrete type** — `1 + 2.0` in an `f64` binding is two `f64`s | The alternative (each operator typing its operands independently) makes the operation's type and its operands' disagree, and LLVM rejects `add f64` with an `i32` operand; the *checker* would have folded a value the emitted code never computes |
 | 25 | Is a target a name in a private enum or a **triple**? | **The canonical LLVM triple** (`x86_64-unknown-linux-gnu`), with the ABI facts derived from its components by rule | A two-name enum cannot name aarch64 or a 32-bit target, and the string `codegen` needs anyway would then be a second spelling to keep in step. A triple the table does not state is **refused with a sentence**; defaulting it is how a cross build becomes silently wrong |
+| 26 | Is a type name ever refused because of the *target*, rather than for being misspelled or combined? | **Yes — `f80` where the machine has no x87**, refused by the type-specifier reader with `sema-malformed-type`, naming the triple and saying what to write (`f64`, or `long double` for this target's extended format) | `f80` is a *format* and not a width: AArch64 and RISC-V have no such type, so the choice was refusing the *word* here or refusing the *type* in the lowering — and the second breaks the property every stage is built on, that what the checker accepts is what the program compiles. It did exactly that: `mincc check --target aarch64-unknown-linux-gnu` accepted `let x: f80` and `mincc build` refused it. The words are recognized, so no suggestion is offered: "did you mean `i8`?" is advice nobody can use. The question the two answers share is one `TargetInfo` method (`hasFloat80`), so `ir`'s refusal stayed as the backstop and not as the second rule |
 
 ## Non-goals
 

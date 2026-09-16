@@ -46,9 +46,10 @@ constexpr std::string_view kTriples[] = {
 // A program that interns and *uses* a broad set of the types the language has:
 // every integer width, both of the float widths every target has, the two
 // character-ish scalars, the null-terminated string, pointers, an array of one,
-// and a slice. `f80` is asked for only where the ABI has it, because the mapper
-// refuses it elsewhere with a sentence of its own -- which is a different claim
-// and has its own test in `lower_test.cc`.
+// and a slice. `f80` is asked for only where the machines have x87, because
+// elsewhere the *checker* refuses the spelling with a sentence of its own -- which
+// is a different claim, and one `sema`'s suite pins from the other side
+// (`TypeSpecTest.Float80IsRefusedWhereTheMachineHasNoX87`).
 [[nodiscard]] std::string wideProgram(const sema::TargetInfo& target) {
   std::string source =
       "fn i64 narrow(a: i8, b: i16, c: i32, d: i64, e: i128, f: u8, g: u16, h: u32, i: u128,\n"
@@ -71,10 +72,13 @@ constexpr std::string_view kTriples[] = {
       "  let single: f32 = q;\n"
       "  return d + words[1] + view[0];\n"
       "}\n";
-  // The x87 format, where the ABI has one. Its *object* is the row that differs
-  // most between the two ABIs (twelve bytes on i386, sixteen on System V), so a
-  // test that skipped it would skip the number that was wrong.
-  if (target.longDoubleBits == 80) {
+  // The x87 format, where the machine has one -- which includes the Windows
+  // triples, where `long double` is a `double` and the *format* is still there to
+  // be named (`TargetInfo::hasFloat80`, and `longDoubleBits` is a different
+  // question). Its *object* is the row that differs most between the two ABIs
+  // (twelve bytes on i386, sixteen on System V), so a test that skipped it would
+  // skip the number that was wrong.
+  if (target.hasFloat80()) {
     source += "fn i64 x87(v: f80)\n"
               "{\n"
               "  let wides: [2]f80 = [1.0, 2.0];\n"

@@ -28,8 +28,12 @@ namespace minc::sema {
 enum class SemaErrorCode : std::uint8_t {
   // A word in a type position (or the empty run) that names no type.
   UnknownType,
-  // Type specifiers that cannot combine: `unsigned float`, `i32 int`,
-  // `long long long`.
+  // Type specifiers that cannot combine (`unsigned float`, `i32 int`, `long long
+  // long`) **and** a type the spelling names but the target does not have, which
+  // is `f80` on a machine with no x87. One code for the two because the repair is
+  // one shape -- write a type this language and this target have -- and because
+  // `UnknownType`'s machinery is for a word nobody recognizes: telling a reader
+  // who wrote `f80` that they may have meant `i8` is advice nobody can use.
   MalformedType,
   // A non-value type where a value is required (`void` as an object's type).
   TypeNotValue,

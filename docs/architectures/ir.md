@@ -407,11 +407,17 @@ a compile error here rather than a silent gap.
 Four of those rows deserve more than a table cell.
 
 **`f80` is not a portable type.** It maps to `x86_fp80`, and on a target whose
-ABI has no 80-bit float that is either an unsupported type or a target-specific
+machine has no x87 that is either an unsupported type or a target-specific
 substitution — LLVM will not paper over it. The mapping is therefore
-*triple-aware*, and the honest answer for now is that `f80` is supported where
-the triple says it is and refused where it says it is not. The lowering asks the
-target (the data layout, which arrived with the triple), not the host.
+*triple-aware*, and the answer is that `f80` is supported where the target has
+the format and refused where it does not. The lowering asks the target (the same
+`TargetInfo::hasFloat80` the checker read), not the host.
+
+Reaching the refusal *here* is now a bug in this compiler and not a statement
+about a program: the spelling is refused one stage up (`sema.md`, decision 26), so
+the sentence below is a backstop for a tree built another way rather than the
+first thing a user with an AArch64 target sees. That is the order the pipeline
+needs — the checker's acceptance is a promise that the program compiles.
 
 **A pointer is `ptr`, and the pointee is not in the type at all.** LLVM 22's
 pointers are opaque: `*i32`, `*f64` and `*void` are the *same* `llvm::Type`. That
