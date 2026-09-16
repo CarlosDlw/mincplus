@@ -221,6 +221,16 @@ typed AST view on top.
 - [ ] `switch` — when its syntax is decided
 - [ ] `struct`/`union`/`enum`, typedefs, and the full C declarator grammar
 - [ ] Initializers, `sizeof`/`alignof`, casts, and the C-compatible `fn` forms
+- [ ] **Casts designed**, in three spellings with one meaning (`as T`, `(T)x`,
+      and typed literal suffixes): the conversion matrix over every pair the
+      language has, `(T)x` made unambiguous by **reserving the type names**
+      (rather than by a typedef table in the parser), the C-style form delimited
+      by that reserved set — so a future user-defined type is `as`-only — the
+      suffixes C has plus the language's own type names (`10u8`, `12f`, `1.5L`,
+      with `long`/`long double` resolved per target), no reinterpretation in a
+      cast (the bits get a name of their own), and **float → integer as a guarded
+      trap** rather than LLVM's poison or Rust's silent saturation —
+      ([`architectures/casts.md`](architectures/casts.md))
 - [ ] Generated typed AST layer, once the node count justifies the generator
 - [ ] Reserved syntax kinds for macro calls, token trees, and attributes
 - [ ] Grammar documented next to the code it implements

@@ -784,6 +784,18 @@ warnings inside them are dropped at the report step while errors are not.
   (`*T`, `&x`, `*p`, `p[i]`, stepping, comparison, `null`, `*void`) that produces
   it.
 
+  The third record the same mechanism covers is the **cast**: the source's own
+  conversion is recorded like an implicit one — `(from, to)` on the node that
+  asked — so the lowerer materialises it through `Lowering::convert` and the
+  constant folder folds it through the same pair → instruction table. The
+  language has three spellings of it and one meaning (`x as T`, `(T)x`, and a
+  literal's suffix, `10u8`), the C one made unambiguous by *reserving the type
+  names* rather than by teaching the parser a symbol table, and the one
+  conversion with a precondition — float to integer, where LLVM's `fptosi` is
+  poison out of range — is guarded and traps, exactly as division by zero is.
+  [`architectures/casts.md`](architectures/casts.md) is that record: the matrix,
+  the suffixes, the refusals, and the plan.
+
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which
   error, and the decisions the language had to make with it. `mincc check` is
