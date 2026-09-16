@@ -254,15 +254,42 @@ struct RunOptions {
   std::vector<std::string> arguments; // everything after `--`, untouched
 };
 
+// Whether a status from `llvm::sys::ExecuteAndWait` means the child did not exit
+// on its own.
+//
+// The portable layer spells this in two ways and its header documents one of them
+// ("-1 indicates failure to execute, -2 indicates a crash during execution or
+// timeout"), so the rule is written here, where both spellings are:
+//
+//   -1   nothing ran: the program could not be executed, or could not be waited on
+//   -2   the child died from a signal (POSIX `WIFSIGNALED`) or hit a timeout
+//   <0   on Windows, **an unhandled exception**: `GetExitCodeProcess` reports an
+//        NTSTATUS code and `sys::Wait` passes it through with its sign intact, so
+//        the `ud2` that `__builtin_trap` lowers to arrives as `0xC000001D` read as
+//        a negative `int`, and an access violation as `0xC0000005`
+//   >=0  the program's own exit status
+//
+// A program's own status is never negative on either platform, and that is what
+// makes one rule possible: POSIX takes the low eight bits (`WEXITSTATUS`), and
+// LLVM's Windows mapping clears the sign bit before returning. So "negative, and
+// not the failure-to-execute value" is exactly "the child did not exit", on both
+// -- stated as arithmetic rather than as a `#if`, because this module may contain
+// no platform code (`architecture.md`, the `#if defined(_WIN32)` rule). Windows is
+// why it is a range and not an equality: a test that pinned `-2` was the one thing
+// in this project that passed on Linux, macOS and MinGW and failed on the Windows
+// runner, where `__builtin_trap` is an exception and not a signal.
+[[nodiscard]] constexpr bool abnormalTermination(int status) {
+  return status < -1;
+}
+
 struct RunResult {
   // The child's exit status, or 0 when it did not exit normally.
   int exitCode = 0;
-  // The child died from a signal (`llvm::sys::ExecuteAndWait` reports a crash or
-  // a timeout as `-2`, and deliberately does not name the signal). Named as a
-  // boolean rather than as a signal number because naming the signal is platform
-  // code -- `waitpid` on one side, `GetExitCodeProcess` on the other -- and this
-  // module may not contain any (`architecture.md`, the `#if defined(_WIN32)`
-  // rule). "Crashed" is the portable truth, and the driver reports it as such.
+  // The child did not exit on its own -- a signal, a timeout, or a Windows
+  // exception (`abnormalTermination` above). Named as a boolean rather than as a
+  // signal number because naming the signal is platform code, and no stage may
+  // contain any. "Crashed" is the portable truth, and the driver reports it as
+  // such.
   bool crashed = false;
   // The program could not be executed at all (missing file, not executable, no
   // permission). Distinct from a crash: nothing ran.

@@ -69,8 +69,9 @@ you write down what `run` is *for*.
 process.** `run` and `build` share one code path down to the linker; `run` then
 `fork`s/`exec`s the result with the arguments after `--`, inherits the three
 standard streams, and returns the child's exit status — or, for a signature
-death, a non-zero status *and* a message naming the signal (the shell's `128+n`
-convention, because that is what the user's muscle memory expects).
+death, an abnormal-termination sentence and a non-zero status. (This paragraph
+used to promise the signal's number and the shell's `128+n`; the [*`run`*](#run)
+section below has what shipped and why the number is not named.)
 
 The JIT does not disappear; it moves. [`ir.md`](ir.md) wanted it as a
 **differential oracle** — compile a program, execute it, compare the answer
@@ -91,8 +92,8 @@ the engine behind `run`).
 
 ### What this buys, concretely
 
-- **A crash is a crash.** `mincc run crash.mx` reports the signal and exits
-  non-zero; the compiler is still alive to have said so.
+- **A crash is a crash.** `mincc run crash.mx` reports that the program did not
+  exit normally and exits non-zero; the compiler is still alive to have said so.
 - **`run` cannot be more permissive than `build`.** If the link fails, `run`
   fails with the linker's message, exactly as `build` would.
 - **The exit code is the program's.** `mincc run prog.mx` exits with whatever
@@ -538,9 +539,23 @@ mincc run [options] <files...> [-- <program arguments>]
 - **`argv[0]` is the program's path**, the temporary executable, exactly as if
   it had been invoked directly.
 - **The exit status is the program's.** `run` exits with it, the way `sh -c`
-  does. A program that dies from a signal is reported with the signal's number
-  and name (`SIGSEGV`) and a non-zero status, so a harness can tell "returned
-  1" from "dumped core" — a distinction a JIT could not make.
+  does, untranslated: a program that returns `2` makes `run` exit `2`, which is
+  what lets `run` be the thing a test harness drives. A program that *did not
+  exit* is not a status, and that is the next bullet.
+- **"Did not exit" is one rule over two platforms, and it is arithmetic.**
+  `llvm::sys::ExecuteAndWait` returns `-1` for a program that could not be
+  executed, `-2` for a signal death (POSIX `WIFSIGNALED`) or a timeout, and — on
+  Windows — an **unhandled exception** as the NTSTATUS code read as a signed
+  `int`: `__builtin_trap`'s `ud2` arrives as `0xC000001D`, an access violation as
+  `0xC0000005`. No program's own status is ever negative (POSIX reports the low
+  eight bits, and LLVM's Windows mapping clears the sign bit before returning), so
+  `status < -1` is "the child died" on both, written once instead of behind an
+  `#if`. The signal's *number* is deliberately not named — that is `waitpid` on
+  one platform and `GetExitCodeProcess` on the other, and the module that may
+  contain platform code is `support/term` (`architecture.md`). Windows is why
+  this is a range and not the single value `-2`: an equality against `-2` passed
+  on Linux, macOS and MinGW and failed on the Windows runner, where a trap is an
+  exception and not a signal.
 - **The temporary executable is removed on every exit path.** The child is
   waited for before the directory is torn down, because the file is still being
   read by the kernel while the process starts.
@@ -558,7 +573,12 @@ invents a new one is a command that breaks scripts:
 | 0 | success |
 | 1 | the program, the compiler, or the toolchain failed — a diagnostic was printed |
 | 2 | the command line was wrong |
-| 128+n | the program died from signal `n` (from `run`) |
+
+A program that did not exit normally is reported as a failure of the *program*,
+with one sentence on stderr and status `1`. The shell's `128+n` is not used here,
+and the reason is the rule above: `n` is the platform's answer, the number would
+have to be fabricated from a status this stage refuses to interpret, and a
+fabricated signal number is worse than a sentence that is always true.
 
 `1` covering "a diagnostic was printed" is the existing rule and it stays: a
 caller that needs to distinguish the compiler's failure from the *program's*

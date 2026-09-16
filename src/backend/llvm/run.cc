@@ -59,11 +59,13 @@ RunResult runProgram(const RunOptions& options) {
     result.error = errorMessage.empty() ? "the program could not be executed" : errorMessage;
     return result;
   }
-  // `-2` is "a crash during execution or timeout", which is how the portable
-  // layer reports a signal death. Naming the signal would take `waitpid` on one
-  // platform and `GetExitCodeProcess` on the other, which is the platform code
-  // this module may not contain.
-  if (status == -2) {
+  // The child did not exit on its own. `-2` is the portable layer's "a crash
+  // during execution or timeout", and on Windows an unhandled exception arrives
+  // as the NTSTATUS code with its sign intact -- so this is the range and not the
+  // one value (`abnormalTermination`). Naming *which* death it was would take
+  // `waitpid` on one platform and `GetExitCodeProcess` on the other, which is the
+  // platform code this module may not contain.
+  if (abnormalTermination(status)) {
     result.crashed = true;
     return result;
   }

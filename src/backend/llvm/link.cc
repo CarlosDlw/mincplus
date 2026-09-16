@@ -181,7 +181,11 @@ LinkResult linkExecutable(const LinkRequest& request) {
             (errorMessage.empty() ? std::string{} : ": " + errorMessage));
     return result;
   }
-  if (status == -2) {
+  // A driver that did not exit on its own: `-2` is the portable layer's signal or
+  // timeout, and on Windows it is an NTSTATUS exception code
+  // (`abnormalTermination`). Without the range, a linker that died of an access
+  // violation would be reported with a negative "status" and nothing else.
+  if (abnormalTermination(status)) {
     add(result.diagnostics, CodegenDiagnosticCode::LinkFailed,
         "the linker driver `" + *driver + "` crashed");
     result.exitCode = status;

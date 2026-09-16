@@ -528,21 +528,53 @@ TEST(BuildCommandTest, ARotateCountIsTakenModuloTheWidth) {
   EXPECT_EQ(right.code, 1) << right.err;
 }
 
+TEST(BuildCommandTest, AChildThatDidNotExitIsNotAnExitStatus) {
+  // Two platforms spell "the child died" differently, and the portable layer
+  // documents one spelling. The rule is therefore pinned with the number each
+  // platform actually produces, the Windows one included: it is the value that
+  // used to be read as a program's own status, so on Linux, macOS and MinGW this
+  // project reported a trap and on the Windows runner it reported nothing while
+  // the test passed -- which is why the guard is arithmetic over the range rather
+  // than an equality against one code.
+
+  // POSIX: `WIFSIGNALED` (a trap is `SIGILL`), and the timeout path.
+  EXPECT_TRUE(backend::abnormalTermination(-2));
+  // Windows: `ud2` -- what `__builtin_trap` lowers to -- raises an
+  // illegal-instruction exception, `GetExitCodeProcess` reports `0xC000001D`, and
+  // `sys::Wait` returns it with its sign intact, so what arrives here is that code
+  // read as a signed 32-bit value.
+  EXPECT_TRUE(backend::abnormalTermination(static_cast<int>(0xC000001DU)));
+  // An access violation, reported the same way: `0xC0000005`.
+  EXPECT_TRUE(backend::abnormalTermination(static_cast<int>(0xC0000005U)));
+
+  // What is *not* a death: `-1` is "could not execute", which is `spawnFailed`
+  // and not `crashed` -- nothing ran, so nothing died -- and a program's own
+  // status is never negative on either platform.
+  EXPECT_FALSE(backend::abnormalTermination(-1));
+  EXPECT_FALSE(backend::abnormalTermination(0));
+  EXPECT_FALSE(backend::abnormalTermination(1));
+  EXPECT_FALSE(backend::abnormalTermination(255));
+}
+
 TEST(BuildCommandTest, ATrapStopsTheProgramWhereItStands) {
   // `__builtin_trap` is the primitive `assert` is built on: not a return, not an
-  // exit status the program chose. The assertion is that nothing after it runs and
-  // that the status is not the one the program would have returned.
+  // exit status the program chose. Two facts, and both are asserted: nothing after
+  // it runs, and what `run` reports is not the status the program would have
+  // returned. The `return 0;` after the call is what makes the second fact
+  // checkable -- a compiler that let the call return would exit 0 -- and the sema
+  // calling it unreachable is the warning it already is.
   ScratchDir scratch;
   ASSERT_TRUE(scratch.valid());
 
   const Outcome executed =
       runProgram(scratch, "trap.mx",
-                 "fn i32 fail() { __builtin_trap(); }\nfn i32 main() { return fail(); }\n");
+                 "fn i32 fail() { __builtin_trap(); }\nfn i32 main() { fail(); return 0; }\n");
   if (executed.skippedForNoLinker()) {
     GTEST_SKIP() << "no C linker driver on PATH";
   }
   EXPECT_NE(executed.code, 0) << executed.err;
-  EXPECT_NE(executed.err.find("terminated abnormally"), std::string::npos) << executed.err;
+  EXPECT_NE(executed.err.find("terminated abnormally"), std::string::npos)
+      << "the driver did not report the death: " << executed.err;
 }
 
 TEST(BuildCommandTest, RunWithDebugInformationStillReturnsTheProgramsStatus) {
