@@ -332,6 +332,10 @@ private:
   [[nodiscard]] TypeId checkDeref(ast::AstId expr, ExprInfo& info);
   // `a[i]`, which the language defines as `*(a + i)`.
   [[nodiscard]] TypeId checkIndex(ast::AstId expr, ExprInfo& info);
+  // `a[1..2]`, `a[1..]`, `a[..2]`, `a[..]`: the view. Three bases (array, slice,
+  // pointer), two bounds, and the one rule about both of them -- a bound is an
+  // integer index and the end is one past the last element (`slices.md`).
+  [[nodiscard]] TypeId checkSlice(ast::AstId expr, ExprInfo& info);
   // `[...]` and `T{...}`. The list form has no type of its own until its context
   // gives it one; the typed form carries its type and checks its elements against
   // it, which is where the exact length and the fill rules live.

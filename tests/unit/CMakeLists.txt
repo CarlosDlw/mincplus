@@ -100,9 +100,11 @@ minc_add_executable(minc_unit_tests
     sema/store_test.cc
     sema/builtins_test.cc
     sema/array_test.cc
+    sema/slice_test.cc
   sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
+    ir/slice_test.cc
     ir/builtins_test.cc
     ir/global_test.cc
     ir/debug_test.cc

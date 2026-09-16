@@ -74,9 +74,8 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::ConflictingLinkage},
     // The two ways an `[N]` group is malformed. The count is a literal number, so
     // a name or an expression there is the first; a group with no `]` is the
-    // second. `[]` -- nothing between the brackets -- is deliberately neither:
-    // it is the reserved spelling of a slice, which the type reader refuses with
-    // its own sentence.
+    // second. `[]` -- nothing between the brackets -- is deliberately neither: it
+    // is a slice, a complete type with no count to be malformed.
     {"array count that is not a number", "fn i32 main() { let x: [n]i32 = 1; }\n",
      ParseErrorCode::ExpectedArrayCount},
     {"array count with no closing bracket", "fn i32 main() { let x: [4 i32 = 1; }\n",
@@ -91,12 +90,6 @@ constexpr CodeCase kCases[] = {
     {"nested braces inside an initializer",
      "fn i32 main() { let a: [2][3]i16 = {{1, 2, 3}, {4, 5, 6}}; return 0; }\n",
      ParseErrorCode::BraceWithoutType},
-    // The second reserved spelling. `[]T` is parsed and refused a stage later by
-    // the type reader (its own sentence, its own code); `..` is refused here, by
-    // the parser, so the operator is never read as anything but a range.
-    {"the reserved range operator",
-     "fn i32 main() { let a: [4]i32 = [1, 2, 3, 4]; return a[1..2]; }\n",
-     ParseErrorCode::ReservedRange},
 };
 
 [[nodiscard]] std::string deepInput() {

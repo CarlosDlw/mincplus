@@ -78,6 +78,14 @@ enum class TypeKind : std::uint8_t {
   // part of the *identity*, so `[4]i32` and `[8]i32` are two types -- which is
   // the whole decision and not a detail (`arrays.md` decision 1).
   Array,
+  // `[]T`: a **view** of `count`-unknown elements of the element type -- a
+  // `{ptr, len}` descriptor, two words, aliasing storage somebody else owns
+  // (`slices.md`). The element lives in the same `pointee` field an array's does,
+  // and `count` stays 0, which is not a count this store ever holds: the two
+  // aggregate kinds differ by exactly the thing that matters, `[4]i32` and
+  // `[]i32` are different types, and which of the two a reader has is answered
+  // by the kind rather than inferred from a length.
+  Slice,
 };
 
 [[nodiscard]] std::string_view toString(TypeKind kind);

@@ -60,6 +60,7 @@ namespace {
   case ast::NodeKind::AssignExpr:
   case ast::NodeKind::CallExpr:
   case ast::NodeKind::IndexExpr:
+  case ast::NodeKind::SliceExpr:
     return true;
   default:
     return false;

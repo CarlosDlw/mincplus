@@ -261,6 +261,26 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
                                     builder_.getOrCreateArray({subrange}));
     break;
   }
+  case sema::TypeKind::Slice: {
+    // `DW_TAG_structure_type` with the descriptor's two members, `ptr` and `len`,
+    // named as `slices.md` names them. A debugger that showed only a pointer (the
+    // habit from C's `char *`) would leave a reader with no way to see the length
+    // the program is walking by, which is the one number a slice adds.
+    const std::uint64_t pointerBits = static_cast<std::uint64_t>(types.target().pointerBits);
+    // The alignment of the member is the pointer's, which in bits is the same
+    // number as its size: a descriptor is aligned like the pointer it starts with.
+    llvm::DIType* pointerMember =
+        builder_.createPointerType(debugType(types, types.elementOf(id)), pointerBits,
+                                   static_cast<std::uint32_t>(pointerBits), std::nullopt, "ptr");
+    llvm::DIType* lengthMember =
+        builder_.createBasicType("len", pointerBits, llvm::dwarf::DW_ATE_unsigned);
+    const std::uint64_t size = static_cast<std::uint64_t>(types.sizeOf(id)) * 8;
+    node = builder_.createStructType(nullptr, std::string(types.spelling(id)), nullptr, 0, size,
+                                     static_cast<std::uint32_t>(types.alignOf(id)) * 8,
+                                     llvm::DINode::FlagPublic, nullptr,
+                                     builder_.getOrCreateArray({pointerMember, lengthMember}));
+    break;
+  }
   case sema::TypeKind::IntLiteral:
   case sema::TypeKind::FloatLiteral:
     // A deferred literal cannot reach here: `run()` refuses it, because a

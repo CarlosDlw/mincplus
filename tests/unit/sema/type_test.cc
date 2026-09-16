@@ -205,6 +205,79 @@ TEST(TypeStoreTest, ArrayLayoutFollowsTheElement) {
   EXPECT_EQ(types.sizeOf(types.arrayOf(kTypeStr, 2)), 16u);
 }
 
+TEST(TypeStoreTest, ASliceIsTwoWordsWhateverItViews) {
+  // The descriptor's layout, and the three properties that decide things
+  // downstream: it is the *pointer* width twice, its alignment is the pointer's
+  // and not the element's, and the element does not change either number. A
+  // `[]u8` is eight bytes aligned to eight on a 64-bit target, which is what a
+  // future `struct` holding one will pad to -- and a `[]i32` beside it needs no
+  // padding at all.
+  const std::optional<TargetInfo> sysvTarget = targetFromName(kTripleLinuxAmd64);
+  ASSERT_TRUE(sysvTarget.has_value());
+  TypeStore types{*sysvTarget};
+  const TypeId ints = types.sliceOf(kTypeI32);
+  ASSERT_TRUE(ints.valid());
+  EXPECT_EQ(types.sizeOf(ints), 16u);
+  EXPECT_EQ(types.alignOf(ints), 8u);
+  const TypeId bytes = types.sliceOf(kTypeU8);
+  ASSERT_TRUE(bytes.valid());
+  EXPECT_EQ(types.sizeOf(bytes), 16u);
+  EXPECT_EQ(types.alignOf(bytes), 8u);
+  // The element is part of the *identity* and not of the layout: two slices of
+  // different elements are two types that happen to be the same size, which is
+  // the opposite of the array rule above and is exactly why `isSlice` is asked
+  // instead of `sizeOf`.
+  EXPECT_NE(ints, bytes);
+  EXPECT_EQ(types.spelling(ints), "[]i32");
+  EXPECT_EQ(types.spelling(bytes), "[]u8");
+  // A slice of an aggregate is still two words: the descriptor names storage, it
+  // does not contain it.
+  const TypeId rows = types.sliceOf(types.arrayOf(kTypeI32, 4));
+  ASSERT_TRUE(rows.valid());
+  EXPECT_EQ(types.sizeOf(rows), 16u);
+  EXPECT_EQ(types.spelling(rows), "[][4]i32");
+
+  // Same two words on a different 64-bit ABI -- the layout follows the *pointer
+  // width* and not the OS, which is the one thing a slice needs to agree with
+  // `isize` about.
+  const std::optional<TargetInfo> windowsTarget = targetFromName(kTripleWindowsAmd64);
+  ASSERT_TRUE(windowsTarget.has_value());
+  TypeStore windows{*windowsTarget};
+  EXPECT_EQ(windows.sizeOf(windows.sliceOf(kTypeI32)), 16u);
+
+  // A 32-bit target halves it, and the length is the index width there too -- the
+  // same integer a `getelementptr` index is made of, so nothing truncates.
+
+  const std::optional<TargetInfo> i386Target = targetFromName(kTripleLinuxI386);
+  ASSERT_TRUE(i386Target.has_value());
+  TypeStore i386{*i386Target};
+  EXPECT_EQ(i386.sizeOf(i386.sliceOf(kTypeI32)), 8u);
+  EXPECT_EQ(i386.alignOf(i386.sliceOf(kTypeI32)), 4u);
+}
+
+TEST(TypeStoreTest, ASliceIsAnObjectAndNotAnArray) {
+  // The two predicates every consumer of an aggregate asks, answered differently
+  // for the two kinds: a view *is* an object -- it can be a binding, a parameter,
+  // or the source of a copy -- and it is not an array, so an access through one
+  // has no extent in its type and `countOf` says 0 rather than inventing a
+  // number. `elementOf` is shared, because the question is the same.
+  TypeStore types;
+  const TypeId slice = types.sliceOf(kTypeI32);
+  ASSERT_TRUE(slice.valid());
+  EXPECT_TRUE(types.isSlice(slice));
+  EXPECT_FALSE(types.isArray(slice));
+  EXPECT_TRUE(types.isAggregate(slice));
+  EXPECT_TRUE(types.isObject(slice));
+  EXPECT_EQ(types.countOf(slice), 0u);
+  EXPECT_EQ(types.elementOf(slice), kTypeI32);
+  // The element rule the array shares, and the one thing that can be refused: a
+  // view has to be a view of something with a representation.
+  EXPECT_FALSE(types.sliceOf(kTypeVoid).valid());
+  EXPECT_FALSE(types.sliceOf(kTypeNever).valid());
+  // Interning: one `[]i32`, whatever asked for it.
+  EXPECT_EQ(types.sliceOf(kTypeI32), slice);
+}
+
 TEST(TypeStoreTest, SizesFollowTheTarget) {
   const std::optional<TargetInfo> sysvTarget = targetFromName(kTripleLinuxAmd64);
   ASSERT_TRUE(sysvTarget.has_value());
@@ -303,14 +376,21 @@ TEST(TypeSpecTest, EachArrayRefusalNamesWhatToWrite) {
   TypePart letters;
   letters.word = "void";
 
-  // `[]T`: the reserved slice spelling is its own sentence, and it says what to
-  // write today (`arrays.md` decision 17).
+  // `[]T`: no count at all, so this is the slice -- a view, and none of the
+  // count rules apply on the way to it. One element rule does, and it is the
+  // only one that can still refuse.
   const TypePart slice[] = {group, word};
-  const TypeSpecResult reserved = readType(slice, types);
-  EXPECT_FALSE(reserved.ok);
-  EXPECT_NE(reserved.message.find("reserved spelling of a slice"), std::string::npos)
-      << reserved.message;
-  EXPECT_NE(reserved.message.find("write `[N]T`"), std::string::npos) << reserved.message;
+  const TypeSpecResult view = readType(slice, types);
+  ASSERT_TRUE(view.ok) << view.message;
+  EXPECT_TRUE(view.type.valid());
+  EXPECT_TRUE(types.isSlice(view.type));
+  EXPECT_EQ(types.spelling(view.type), "[]i32");
+
+  const TypePart suffix[] = {group, letters};
+  const TypeSpecResult ofVoidSlice = readType(suffix, types);
+  EXPECT_FALSE(ofVoidSlice.ok);
+  EXPECT_NE(ofVoidSlice.message.find("cannot be a slice element"), std::string::npos)
+      << ofVoidSlice.message;
 
   // `[0]T`: written, and impossible. Distinct from `[]` above -- which is why the
   // part carries `hasCount` and not just a number.

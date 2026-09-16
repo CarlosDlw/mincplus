@@ -547,6 +547,15 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       // of the shared machinery rather than a gap in the table.
       {"fn i32 main() { let f = clz; return 0; }\n", false},
       {"fn i32 main() { let x: u8 = 1; let r = bswap(x); return 0; }\n", false},
+      // The three slice codes, one input each. A view's base, a pointer's missing
+      // half, and two bounds in the wrong order -- each is a rule no other
+      // construct has, which is why each is its own sentence (`slices.md`).
+      {"fn i32 main() { let x: i32 = 1; let s: []i32 = x[..]; return 0; }\n", false},
+      {"fn i32 main() { let a: [4]i32 = [1, 2, 3, 4]; let p: *i32 = &a[0];\n"
+       "  let s: []i32 = p[..2]; return 0; }\n",
+       false},
+      {"fn i32 main() { let a: [4]i32 = [1, 2, 3, 4]; let s: []i32 = a[3..1]; return 0; }\n",
+       false},
   };
 
   for (const Case& one : cases) {

@@ -194,6 +194,21 @@ TypeId TypeStore::arrayOf(TypeId element, std::uint64_t count) {
   return intern(type);
 }
 
+TypeId TypeStore::sliceOf(TypeId element) {
+  // The one rule the array shares, asked for the same reason: an element has to
+  // have storage. A slice of a deferred literal is a view of a width nobody has
+  // decided, and a slice of `void` is a view of nothing.
+  if (!isObject(element)) {
+    return kInvalidType;
+  }
+  Type type;
+  type.kind = TypeKind::Slice;
+  type.pointee = element;
+  // `count` stays 0: the count of a slice is not in the type, and 0 is not a
+  // count the store ever gives a type that has one.
+  return intern(type);
+}
+
 TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params, bool variadic) {
   Type type;
   type.kind = TypeKind::Function;
@@ -307,15 +322,25 @@ bool TypeStore::isPointer(TypeId id) const {
 bool TypeStore::isArray(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Array;
 }
+bool TypeStore::isSlice(TypeId id) const {
+  return known(id) && get(id).kind == TypeKind::Slice;
+}
 bool TypeStore::isAggregate(TypeId id) const {
-  return isArray(id);
+  // Two kinds and not one, because `isArray` is asked wherever the *storage* is
+  // the subject (`sizeof` of the object, an element count, a copy) and a view is
+  // not storage. What they share is that a load, a store or a copy moves them as
+  // one object (`slices.md`).
+  return isArray(id) || isSlice(id);
 }
 bool TypeStore::isObject(TypeId id) const {
   if (!known(id)) {
     return false;
   }
   const TypeKind kind = get(id).kind;
-  if (kind == TypeKind::Array) {
+  if (kind == TypeKind::Array || kind == TypeKind::Slice) {
+    // A view is an object in the only sense this predicate asks: it has a
+    // representation, so it can be a binding, a parameter, an element of an
+    // array, or the source of a copy. What it cannot be is `isArray`.
     return true;
   }
   // `isScalar` minus the deferred literals: they are scalar-*shaped* and have no
@@ -323,7 +348,7 @@ bool TypeStore::isObject(TypeId id) const {
   return isScalar(id) && !isDeferred(id);
 }
 TypeId TypeStore::elementOf(TypeId id) const {
-  if (!isArray(id)) {
+  if (!isArray(id) && !isSlice(id)) {
     return kInvalidType;
   }
   return get(id).pointee;
@@ -399,6 +424,11 @@ std::string TypeStore::spelling(TypeId id) const {
     // language had. The number is the folded value, so `[0x10]i32` prints as
     // `[16]i32` -- one type, one name (`arrays.md` decision 19).
     return "[" + std::to_string(type.count) + "]" + spelling(type.pointee);
+  case TypeKind::Slice:
+    // `[]T`, with nothing between the brackets: the canonical spelling of the
+    // view is what `slices.md` reserved and what a reader types back. There is no
+    // length to print, which is the whole difference from the line above.
+    return "[]" + spelling(type.pointee);
   case TypeKind::Function: {
     std::string text = "fn " + spelling(type.returnType) + "(";
     const std::span<const TypeId> params = paramsOf(id);
@@ -446,6 +476,12 @@ std::size_t TypeStore::sizeOf(TypeId id) const {
     // refused a product that would not fit, so this multiply is the same number
     // the store already computed.
     return static_cast<std::size_t>(type.count) * sizeOf(type.pointee);
+  case TypeKind::Slice:
+    // Two words and no data: the descriptor is a pointer and a length, and
+    // `sizeof(s)` answers for the *view* (`slices.md` decision 5). The multiply
+    // cannot overflow: the pointer width is 16, 32 or 64 bits, so the product is
+    // at most 16 bytes.
+    return static_cast<std::size_t>(target_.pointerBits / 8U) * 2U;
   case TypeKind::Error:
   case TypeKind::Void:
   case TypeKind::Never:
@@ -478,6 +514,11 @@ std::size_t TypeStore::alignOf(TypeId id) const {
     // `i8`, and aligning it like a machine word would make every `[3]i8` field of
     // a future `struct` three bytes of padding wider than the C one.
     return alignOf(type.pointee);
+  case TypeKind::Slice:
+    // The descriptor is a pointer and a length, so it is aligned like a pointer
+    // -- not like its element. `[]u8` is eight-byte aligned on a 64-bit target,
+    // and a `struct` that holds one gets the padding a C compiler would give it.
+    return target_.pointerBits / 8U;
   default:
     return 0;
   }

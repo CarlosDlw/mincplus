@@ -555,6 +555,15 @@ Checker::IceValue Checker::notConstant(ast::AstId expr) const {
   case ast::NodeKind::IndexExpr:
     out.reason = "an indexed access reads memory, and nothing has run yet at file scope";
     return out;
+  case ast::NodeKind::SliceExpr:
+    // A view is an address and a length, and the length is the one number in it
+    // that does not come from a symbol. "An address is not a value this language
+    // writes at file scope" is the existing rule for `&x` (below), and a slice is
+    // the same rule with a second word beside it -- so the sentence names the
+    // form the reader can actually write instead (`slices.md`).
+    out.reason = "a view is not a value this language writes at file scope: its address is a place "
+                 "nothing has built yet. Name the object and take the view inside a function";
+    return out;
   case ast::NodeKind::AssignExpr:
     out.reason = "an assignment is not a value an object can be created with";
     return out;

@@ -44,15 +44,30 @@ TEST(ArrayTest, TheCountIsAValueAndNotASpelling) {
   EXPECT_EQ(f.bindingType("d"), "[20]i32");
 }
 
+TEST(ArrayTest, ASliceIsATypeAndNotAnArray) {
+  // `[]T` used to be a reserved spelling carrying a sentence that told the
+  // reader to write `[N]T`. It is the slice now: two spellings, two types, and
+  // neither is the other. The property this pins is the one `slices.md` rests
+  // on -- a view and an array of length one are different types even though
+  // both name `i32`.
+  SemaFixture f;
+  f.source("fn i32 main() { let a: []i32; let b: [1]i32; return 0; }\n");
+  ASSERT_TRUE(f.build());
+  EXPECT_EQ(f.errorCount(), 0u) << f.firstError().message;
+  EXPECT_EQ(f.bindingType("a"), "[]i32");
+  EXPECT_EQ(f.bindingType("b"), "[1]i32");
+}
+
 TEST(ArrayTest, EveryArrayRefusalHasItsSentence) {
   struct Case {
     std::string_view source;
     std::string_view fragment;
   };
   const Case cases[] = {
-      // `[]T` is the reserved slice spelling, and the sentence says what to write
-      // today.
-      {"fn i32 main() { let a: []i32; return 0; }\n", "reserved spelling of a slice"},
+      // `[]void`: a view of no object is not a view. Nothing here tells the
+      // reader to write `[N]T` any more -- the count is simply absent, which is
+      // the slice, and what is refused is the element.
+      {"fn i32 main() { let a: []void; return 0; }\n", "cannot be a slice element"},
       // A count of zero is written and impossible: it is not the slice above.
       {"fn i32 main() { let a: [0]i32; return 0; }\n", "count of an array type is at least 1"},
       // An element that cannot be stored.

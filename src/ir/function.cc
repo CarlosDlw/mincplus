@@ -90,7 +90,7 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   // An aggregate return puts its destination *first* in the argument list, so
   // every parameter's index moves by one (`arrays.md` decision 13). The shift is
   // computed once, here, rather than being remembered at each `getArg` below.
-  if (types_.isAggregate(info.returnType) && function->arg_size() > 0) {
+  if (byReference(info.returnType) && function->arg_size() > 0) {
     sretPointer_ = function->getArg(0);
   }
   std::size_t index = 0;
@@ -117,7 +117,7 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
         // parameter the reader wrote and not on the function's first line.
         const ast::AstId paramAt = paramName.valid() ? paramName : param;
         llvm::Argument* argument = function->getArg(static_cast<unsigned>(sretOffset() + index));
-        if (types_.isAggregate(paramType)) {
+        if (byReference(paramType)) {
           // An aggregate arrives as a pointer to the caller's copy, and that
           // pointer **is** the parameter's storage: no second copy, and `&a`
           // names the object the callee owns for the call rather than a spill of
@@ -147,7 +147,7 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   // the module is still well formed for a tree that got here some other way.
   llvm::BasicBlock* last = builder_.GetInsertBlock();
   if (last != nullptr && last->getTerminator() == nullptr) {
-    if (types_.isVoid(info.returnType) || types_.isAggregate(info.returnType)) {
+    if (types_.isVoid(info.returnType) || byReference(info.returnType)) {
       // An aggregate return falls off the end the same way a `void` one does: the
       // destination is the caller's storage and it was written by the `return`s,
       // and a function with no `return` at all is already refused. `sema` is what

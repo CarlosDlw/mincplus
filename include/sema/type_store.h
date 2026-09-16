@@ -85,6 +85,15 @@ public:
   // `arraySize` is the arithmetic on its own, so a caller that wants to say
   // *why* it is refusing can ask before it builds.
   [[nodiscard]] TypeId arrayOf(TypeId element, std::uint64_t count);
+  // `[]element`. Interned like everything else, so `[]i32` is one id whatever
+  // spelled it, and `[]i32` is *not* `[]u8`.
+  //
+  // One refusal, and it is the array's first one: the element must be an object
+  // (`isObject`), because a slice of `void` or of a deferred literal is a view of
+  // something with no representation. Nothing else can be refused -- there is no
+  // count to check and no product that could overflow -- which is exactly why the
+  // *view* needs no arithmetic and the array does.
+  [[nodiscard]] TypeId sliceOf(TypeId element);
   // The parameters are copied into the store; the caller's span need not
   // outlive the call.
   // `variadic` is required rather than defaulted: every caller is a signature,
@@ -144,9 +153,13 @@ public:
   // A pointer to anything, `*void` included.
   [[nodiscard]] bool isPointer(TypeId id) const;
   [[nodiscard]] bool isArray(TypeId id) const;
-  // An aggregate: `[N]T` today, a `struct` when that lands. The types a load, a
-  // store or a copy moves as one *object* rather than as one value, which is the
-  // distinction the lowering needs and the reason this is not `isScalar`.
+  // `[]T`: a view, so it is an aggregate *and* it is not an object that owns its
+  // elements. The distinction from `isArray` is the one every consumer of a view
+  // asks about: an array is the storage, a slice names storage.
+  [[nodiscard]] bool isSlice(TypeId id) const;
+  // An aggregate: `[N]T` and `[]T` today, a `struct` when that lands. The types a
+  // load, a store or a copy moves as one *object* rather than as one value, which
+  // is the distinction the lowering needs and the reason this is not `isScalar`.
   [[nodiscard]] bool isAggregate(TypeId id) const;
   // A type with an object representation: an integer, a float, a `bool`, a
   // `char`, a `str`, a pointer, or an aggregate. What can be a binding, a
@@ -158,10 +171,15 @@ public:
   // is scalar-shaped and has no width, so `[3]<integer literal>` is not an
   // object and there is no array of one.
   [[nodiscard]] bool isObject(TypeId id) const;
-  // The element of an array, or `kInvalidType` for anything else.
+  // The element of an array or of a slice, or `kInvalidType` for anything else.
+  // One answer for both because the question is the same -- what is an element of
+  // this -- and the two kinds differ in whether the length is known, not in what
+  // they are made of.
   [[nodiscard]] TypeId elementOf(TypeId id) const;
-  // The count of an array, or 0 for anything else. 0 is not a count the store
-  // ever holds, so a caller can test it without asking the kind first.
+  // The count of an array, or 0 for anything else -- a slice included, because a
+  // slice has no count to give and the descriptor's length is a *value*, not a
+  // type. 0 is not a count the store ever holds, so a caller can test it without
+  // asking the kind first.
   [[nodiscard]] std::uint64_t countOf(TypeId id) const;
   // `*void`: the type that converts to and from any other pointer type, and the
   // one that may not be dereferenced or stepped (`memory.md`, *Access*).

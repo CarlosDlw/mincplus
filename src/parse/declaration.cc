@@ -247,13 +247,24 @@ void Parser::parseParam() {
       ++tokens;
       continue;
     }
-    // `[N]`, all three tokens or the bracket alone.
+    // `[N]`, `[]`, or the bracket alone.
     if (parser.nth(tokens) == lex::TokenKind::LBracket) {
       const lex::TokenKind counted = parser.nth(tokens + 1);
       if ((counted == lex::TokenKind::IntegerLiteral ||
            (counted == lex::TokenKind::Identifier && parser.text(tokens + 1) == kInferredCount)) &&
           parser.nth(tokens + 2) == lex::TokenKind::RBracket) {
         tokens += 3;
+        continue;
+      }
+      // `[]T`, the slice: **two** tokens, and a complete type like the counted
+      // group above. The run is what a `Type` node holds, so a run that stopped
+      // at the `[` would put the `]` outside it -- and in a *declaration* that is
+      // not a cosmetic difference: the name is the last identifier of the run, so
+      // `fn []i32 f()` would split `]` as the name and report a function called
+      // `]`. One token pair here is the whole fix, and it is the same statement
+      // the type reader makes one stage down: `[]` is a type.
+      if (counted == lex::TokenKind::RBracket) {
+        tokens += 2;
         continue;
       }
       ++tokens;
@@ -337,7 +348,7 @@ void Parser::parseArrayCount() {
   if (count) {
     bump();
   } else if (!at(lex::TokenKind::RBracket)) {
-    // Not a count, and not the reserved `[]` either. The count is a literal
+    // Not a count, and not the `[]` of a slice either. The count is a literal
     // number today (`arrays.md` decision 19), so a reader who wrote an
     // expression has one thing to fix, and the message says which. The
     // offending token is consumed so the `]` below is the one that belongs to

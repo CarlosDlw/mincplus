@@ -69,8 +69,8 @@ enum class ParseErrorCode : std::uint8_t {
   // that decides it is the one the whole type's identity rests on.
   //
   // `[]` -- the two brackets with *nothing* between them -- is deliberately not
-  // this code: it is the reserved spelling of a slice, so it parses and is
-  // refused a stage later with a sentence about slices (`arrays.md` decision 17).
+  // this code: it is the spelling of a slice, a *complete* type, so it parses and
+  // is interned like any other (`slices.md`).
   ExpectedArrayCount,
   // `[N` with the closing bracket missing. Reported at the point the bracket
   // should have been, and the group is closed anyway so one missing `]` does not
@@ -85,13 +85,6 @@ enum class ParseErrorCode : std::uint8_t {
   // "expected an expression" at a token that starts an expression everywhere
   // else, which teaches nothing about the characters to change.
   BraceWithoutType,
-  // `..` where a slice's range will go: `a[1..2]`. The operator is *reserved*,
-  // like `[]T` is, so the sentence says so instead of leaving the reader with
-  // "expected `]`" about a bracket two tokens away from the operator they typed.
-  // Two spellings reserved in two stages is the point: the day a slice lands,
-  // both messages change in one place and no `.mx` file ever meant something else
-  // by either.
-  ReservedRange,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

@@ -172,6 +172,19 @@ private:
   // How a type is *stored*. `i1` is not a byte, so a `bool` object is `i8` with a
   // normalising store and a truncating load (`memory.md`, *Objects*). Everything
   // else is its own type.
+  // True for the types that cross a call as a **pointer to a copy the caller
+  // makes**: an array, and a `struct` when it lands. A slice is not one of them.
+  //
+  // This is the one place the two aggregate kinds part company, and it is an ABI
+  // decision rather than a language one. An array can be a megabyte, so it moves
+  // by reference under a shape this compiler defines (a leading pointer, an
+  // `sret` destination). A descriptor is two words -- a pointer and a length --
+  // and it crosses as itself: `{ptr, usize}` in the signature, which is smaller
+  // than a pointer to it would be and is what a debugger shows as two members
+  // (`slices.md` decision 17).
+  [[nodiscard]] bool byReference(sema::TypeId id) const {
+    return types_.isAggregate(id) && !types_.isSlice(id);
+  }
   [[nodiscard]] llvm::Type* storageType(sema::TypeId id) {
     // `llvmType` once, and a null is propagated: a type this stage cannot map
     // has already been refused (`ir-unsupported-type`), and asking a second time
@@ -333,6 +346,16 @@ private:
   // written out as. A constant when every element is one, an `insertvalue` chain
   // otherwise.
   [[nodiscard]] Value lowerArrayInitializer(ast::AstId expr);
+  // `a[1..2]` and its three other forms: the two-word descriptor, built from a
+  // place and two values. It is **not** a place -- a descriptor is a value, and a
+  // view of a temporary is the class of dangling this language does not hand out
+  // (`slices.md` decisions 6 and 11).
+  [[nodiscard]] Value lowerSlice(ast::AstId expr);
+  // The two operands of a view resolved into a place and a length, or a refusal.
+  // Split out because the four forms and the three bases would otherwise be
+  // twelve arms of one function.
+  [[nodiscard]] std::optional<std::pair<llvm::Value*, llvm::Value*>>
+  sliceRange(ast::AstId expr, const ast::SliceParts& parts);
   // The instruction for a binary operator (or its compound spelling), at the
   // type `sema` decided the operation happens at. One function, so `x += y` and
   // `x + y` cannot choose two different instructions.

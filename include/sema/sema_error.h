@@ -97,6 +97,21 @@ enum class SemaErrorCode : std::uint8_t {
   // the alternative is a symbol that links, runs, and reads the wrong bytes
   // (`arrays.md` decision 11).
   ExternAggregate,
+  // `a[..]` where the base is neither an array, nor a slice, nor a pointer: an
+  // integer has no elements to view, and there is no extent a bound could be
+  // measured against (`slices.md`). Distinct from `DerefNotPointer` because the
+  // *set* of bases is larger here -- a view can be taken of an object and of
+  // another view -- so the fix the sentence gives is a different one.
+  SliceNotViewable,
+  // `p[..4]` on a pointer: a view of a pointer is a view of an object whose
+  // length is **not in any type**, so both bounds have to be written, and this is
+  // the code for the form that wrote only one (`slices.md` decision 8).
+  SlicePointerNeedsBothBounds,
+  // `a[3..1]`: a constant begin after a constant end. The result would be a view
+  // of a negative number of elements, which is not an empty view -- it is a
+  // length the descriptor cannot hold -- and both numbers were written where the
+  // compiler can see them.
+  SliceBoundsReversed,
   // `break` with no loop to break out of.
   BreakOutsideLoop,
   // `continue` with no loop to continue.

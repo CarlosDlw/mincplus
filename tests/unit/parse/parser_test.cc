@@ -196,6 +196,47 @@ TEST(ParserTest, IndexIsAnIndexExpressionAndKeepsItsBrackets) {
   EXPECT_EQ(fixture.reconstruct(), fixture.source());
 }
 
+TEST(ParserTest, TheFourViewFormsAreFourTrees) {
+  // `a[1..2]`, `a[1..]`, `a[..2]` and `a[..]` are one node kind and four trees,
+  // and the difference is where the `..` sits -- which is why the separator stays
+  // in the tree instead of being dropped: `a[1..]` and `a[..1]` hold one operand
+  // each, and only the token between them says which bound was written. The
+  // reader that wants the two bounds asks `slicePartsOf`, and this test is the
+  // parse-level half of it: the forms are distinguishable from the source at all.
+  const std::string_view forms[] = {"a[1..2]", "a[1..]", "a[..2]", "a[..]"};
+  for (const std::string_view form : forms) {
+    const ParseFixture fixture(fnBody("let s: []i32 = " + std::string(form) + ";"));
+    ASSERT_EQ(fixture.errorCount(), 0u) << form << ": " << fixture.errorMessages();
+    const std::string tree = fixture.dump(/*showTrivia=*/false);
+    EXPECT_NE(tree.find("SliceExpr"), std::string::npos) << form << ": " << tree;
+    // The separator is two `Dot` tokens, which is what the lexer produces and
+    // what the reader of the tree looks for: there is no `..` token, so a dump
+    // shows the two it has.
+    EXPECT_NE(tree.find("Dot@"), std::string::npos) << form << ": " << tree;
+    // Lossless: a formatter could rewrite every form back, which is the statement
+    // that both dots are in the tree exactly where they were written.
+    EXPECT_EQ(fixture.reconstruct(), fixture.source()) << form;
+  }
+
+  // ... and the two readings of one bracket are two kinds: an index has no `..`
+  // and a view has one.
+  const ParseFixture index(fnBody("let y: i32 = a[1];"));
+  ASSERT_EQ(index.errorCount(), 0u) << index.errorMessages();
+  EXPECT_EQ(index.dump(/*showTrivia=*/false).find("SliceExpr"), std::string::npos);
+  EXPECT_NE(index.dump(/*showTrivia=*/false).find("IndexExpr"), std::string::npos);
+}
+
+TEST(ParserTest, ASliceTypeIsATypeInAWholeDeclaration) {
+  // The run a *declaration* reads -- the return type and the name of a function,
+  // the type of a parameter -- has to hold `[]T` whole. It is the one place the
+  // brackets are not inside an annotation that ends at the name, and a run that
+  // stopped at the `[` would split the `]` as the function's name.
+  const ParseFixture fixture("fn []i32 tail(a: []i32) { return a[1..2]; }\n");
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.errorMessages();
+  EXPECT_TRUE(fixture.tree().validate());
+  EXPECT_EQ(fixture.reconstruct(), fixture.source());
+}
+
 TEST(ParserTest, TheWholePointerSurfaceIsLossless) {
   const ParseFixture fixture(
       fnBody("let x: i32 = 1; let p: *i32 = &x; *p = x; let y: i32 = p[1]; return y;"));

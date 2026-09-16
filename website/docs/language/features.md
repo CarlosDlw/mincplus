@@ -222,6 +222,13 @@ Everything below is what lands on top of that model. See
       and a pointer is named (`&a[0]` is a `*i32`, `&a` is a `*[4]i32`), so
       `sizeof` cannot lie about a parameter and a bound can be checked
 - [x] Raw loads and stores through a pointer; type punning still to come
+- [x] **Slices** (`[]T`): a `{ptr, len}` **view** with no capacity and no literal,
+      taken with `a[l..r]` / `a[l..]` / `a[..r]` / `a[..]` from an array, another
+      view or a pointer (where both bounds are written), its own index `0`,
+      writable through, passed and returned by value, refused at an `extern`
+      boundary — see [Slices](/language/slices)
+- [ ] `len(x)` and `sizeof(x)`: the reading operators, each awaiting its own form
+      in the grammar (a call whose argument is a place, a type in an expression)
 
 **Arithmetic and comparison**
 

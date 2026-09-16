@@ -74,6 +74,36 @@ namespace {
   return value >= 0 && static_cast<std::uint64_t>(value) < count;
 }
 
+// Is a *constant bound* inside `[0, count]`? Inclusive, and that is the whole
+// difference from `indexInRange`: the end of a view is one past the last element,
+// so `a[0..4]` on a `[4]i32` is the whole object -- the same convention every
+// language with slicing uses, chosen here because the alternative (`a[0..3]` as
+// "the whole thing") makes the extent unreachable and the empty view unspellable
+// (`slices.md`).
+[[nodiscard]] bool boundInRange(support::ConstInt bound, std::uint64_t count) {
+  if (bound.isUnsigned) {
+    return bound.bits <= count;
+  }
+  const std::int64_t value = bound.signedValue();
+  return value >= 0 && static_cast<std::uint64_t>(value) <= count;
+}
+
+// The magnitude of a constant bound, when it can be one at all: a *negative*
+// bound is not "below zero and therefore backwards". For an array the range check
+// above has already refused it, and for a slice or a pointer it is a real
+// position relative to the view's start -- `p[-1..2]` is unchecked arithmetic the
+// model permits (`memory.md`, *Access*) -- so the order question is only asked
+// about the two numbers that are positions.
+[[nodiscard]] std::optional<std::uint64_t> nonNegative(support::ConstInt value) {
+  if (value.isUnsigned) {
+    return value.bits;
+  }
+  if (value.signedValue() < 0) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint64_t>(value.signedValue());
+}
+
 [[nodiscard]] bool isIntegerOnly(Tag kind) {
   switch (kind) {
   case kTokPercent:
@@ -176,6 +206,9 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
     break;
   case ast::NodeKind::IndexExpr:
     type = checkIndex(expr, info);
+    break;
+  case ast::NodeKind::SliceExpr:
+    type = checkSlice(expr, info);
     break;
   case ast::NodeKind::BinaryExpr:
     type = checkBinary(expr, info);
@@ -626,6 +659,27 @@ TypeId Checker::checkIndex(ast::AstId expr, ExprInfo& info) {
     recordAccess(expr, element, arrayProvenanceOf(base), count);
     return element;
   }
+  // `s[i]` on a **slice**: the element of the view, which is a load through the
+  // descriptor's pointer word. The third base that reaches memory, and the one
+  // whose extent is a *value* rather than a type -- so the access record carries
+  // no count (the `0` of "not known") and the scan says so instead of claiming an
+  // extent it cannot see (`slices.md` decision 20).
+  if (types_.isSlice(baseType)) {
+    if (!isIntegerOperand(types_, indexType)) {
+      error(index, SemaErrorCode::IndexNotInteger,
+            "`[]` needs an integer index; `" + types_.spelling(indexType) + "` is not one");
+      return kTypeError;
+    }
+    // Materialised at the index width for the same reason `p[i]` is: the
+    // `getelementptr` index has one width and the conversion is recorded here.
+    (void)checkOperand(expr, 1, index, types_.signedInt(types_.target().pointerBits));
+    const TypeId element = types_.elementOf(baseType);
+    info.isLvalue = true;
+    info.isConstant = false;
+    info.hasIntValue = false;
+    recordAccess(expr, element, provenanceOf(base));
+    return element;
+  }
   if (!types_.isPointer(baseType)) {
     // C also accepts `i[p]`, because for C it is `*(i + p)` and addition is
     // commutative. It is a curiosity of C's definition and not of the operation,
@@ -659,6 +713,150 @@ TypeId Checker::checkIndex(ast::AstId expr, ExprInfo& info) {
   info.hasIntValue = false;
   recordAccess(expr, pointee, provenanceOf(base));
   return pointee;
+}
+
+TypeId Checker::checkSlice(ast::AstId expr, ExprInfo& info) {
+  // `a[l..r]` -- the view, in its four forms. One function, because the four
+  // share every rule and differ only in which bound is absent: `a[l..]` is "from
+  // l to the end of what this base is", and for an array that end is a number the
+  // *type* holds, for a slice a word in the descriptor, and for a pointer
+  // something only the programmer knows -- which is why a pointer has to write
+  // both and the other two may omit the second (`slices.md` decisions 8 and 9).
+  const ast::SliceParts parts = file_.slicePartsOf(expr);
+  if (!parts.hasBase()) {
+    return kTypeError;
+  }
+  const TypeId baseType = checkExpr(parts.base, kInvalidType);
+
+  // Both bounds are typed before anything is refused, and they are typed even
+  // when the base is already an error: the reader wrote them, and skipping them
+  // would report one mistake and hide the one next to it.
+  const TypeId indexInt = types_.signedInt(types_.target().pointerBits);
+  // The operands as they appear in `SliceExpr`: the base, then the bounds, with
+  // the one that was not written simply absent. The ordinal is what
+  // `checkOperand` records the conversion against, so it is computed from the
+  // form and not from the position of a token.
+  const std::uint8_t endOperand = parts.hasBegin() ? 2 : 1;
+  std::optional<support::ConstInt> beginValue;
+  std::optional<support::ConstInt> endValue;
+  bool boundsOk = true;
+  if (parts.hasBegin()) {
+    const TypeId boundType = checkExpr(parts.begin, kInvalidType);
+    if (types_.isError(boundType)) {
+      boundsOk = false;
+    } else if (!isIntegerOperand(types_, boundType)) {
+      error(parts.begin, SemaErrorCode::IndexNotInteger,
+            "the beginning of a view is an integer; `" + types_.spelling(boundType) +
+                "` is not one");
+      boundsOk = false;
+    } else {
+      (void)checkOperand(expr, 1, parts.begin, indexInt);
+      const ExprInfo& boundInfo = out_.typed.infoOf(parts.begin);
+      if (boundInfo.hasIntValue) {
+        beginValue = boundInfo.value;
+      }
+    }
+  }
+  if (parts.hasEnd()) {
+    const TypeId boundType = checkExpr(parts.end, kInvalidType);
+    if (types_.isError(boundType)) {
+      boundsOk = false;
+    } else if (!isIntegerOperand(types_, boundType)) {
+      error(parts.end, SemaErrorCode::IndexNotInteger,
+            "the end of a view is an integer; `" + types_.spelling(boundType) + "` is not one");
+      boundsOk = false;
+    } else {
+      (void)checkOperand(expr, endOperand, parts.end, indexInt);
+      const ExprInfo& boundInfo = out_.typed.infoOf(parts.end);
+      if (boundInfo.hasIntValue) {
+        endValue = boundInfo.value;
+      }
+    }
+  }
+  if (types_.isError(baseType) || !boundsOk) {
+    return kTypeError;
+  }
+
+  const bool array = types_.isArray(baseType);
+  const bool slice = types_.isSlice(baseType);
+  const bool pointer = types_.isPointer(baseType);
+  if (!array && !slice && !pointer) {
+    error(parts.base, SemaErrorCode::SliceNotViewable,
+          "`[..]` takes a view of an array, a slice or a pointer; `" + types_.spelling(baseType) +
+              "` has no elements, and no extent to measure a bound against");
+    return kTypeError;
+  }
+  // A pointer is the one base with no length in any type, so the two bounds are
+  // both written and the compiler has nothing to infer. It is the form that
+  // reads as *unchecked*, and it is the form that says so (`slices.md` decision
+  // 8).
+  if (pointer && !(parts.hasBegin() && parts.hasEnd())) {
+    error(expr, SemaErrorCode::SlicePointerNeedsBothBounds,
+          "a view of a pointer `" + types_.spelling(baseType) +
+              "` has no length to count back from, so both bounds are written: `p[0..n]`");
+    return kTypeError;
+  }
+
+  const TypeId element = pointer ? types_.pointeeOf(baseType) : types_.elementOf(baseType);
+  if (!types_.known(element) || types_.isVoid(element)) {
+    error(expr, SemaErrorCode::PointerVoidAccess,
+          "`*void` cannot be viewed: `void` has no size, so there are no elements in a view of "
+          "one");
+    return kTypeError;
+  }
+
+  // The bounds that are numbers, checked where they are written -- the same
+  // argument a constant `a[i]` gets and for the same reason: the count is in the
+  // type, so "is this inside the object" is arithmetic on two numbers the
+  // compiler already has, and refusing it costs no analysis at all
+  // (`arrays.md` decision 7).
+  if (array) {
+    // The object's extent, and the end is allowed to *reach* it: `a[0..4]` on a
+    // `[4]i32` is the whole object rather than an error, which is the one place a
+    // bound and an index differ.
+    const std::uint64_t count = types_.countOf(baseType);
+    const auto outOfRange = [&](support::ConstInt value) { return !boundInRange(value, count); };
+    if (beginValue && outOfRange(*beginValue)) {
+      error(parts.begin, SemaErrorCode::IndexOutOfRange,
+            "the beginning " + valueText(*beginValue) + " is outside `" +
+                types_.spelling(baseType) + "`: a bound goes from 0 to " + std::to_string(count));
+      return kTypeError;
+    }
+    if (endValue && outOfRange(*endValue)) {
+      error(parts.end, SemaErrorCode::IndexOutOfRange,
+            "the end " + valueText(*endValue) + " is outside `" + types_.spelling(baseType) +
+                "`: a bound goes from 0 to " + std::to_string(count));
+      return kTypeError;
+    }
+  }
+  // A view of a negative number of elements. Its own sentence, because the
+  // repair is different from "outside the object": the two numbers are each
+  // inside it and in the wrong order, and the descriptor would hold a length that
+  // is a huge unsigned number rather than the empty view the reader meant.
+  if (beginValue && endValue) {
+    const std::optional<std::uint64_t> beginBound = nonNegative(*beginValue);
+    const std::optional<std::uint64_t> endBound = nonNegative(*endValue);
+    if (beginBound && endBound && *beginBound > *endBound) {
+      error(expr, SemaErrorCode::SliceBoundsReversed,
+            "`" + valueText(*beginValue) + ".." + valueText(*endValue) +
+                "` is backwards: the first bound is a beginning, so it cannot be past the end");
+      return kTypeError;
+    }
+  }
+
+  // The result is the view of the element, and it is **not** a place: `&s[0..2]`
+  // is refused one stage up by the address-of rule, because a descriptor built
+  // here is a value and a pointer to it would be a pointer to a temporary
+  // (`slices.md` decision 11).
+  info.isLvalue = false;
+  info.isConstant = false;
+  info.hasIntValue = false;
+  const TypeId result = types_.sliceOf(element);
+  if (!result.valid()) {
+    reportLimit(expr);
+    return kTypeError;
+  }
+  return result;
 }
 
 std::optional<TypeId> Checker::checkPointerStep(ast::AstId expr, TypeId type) {
@@ -928,14 +1126,23 @@ TypeId Checker::checkTypedInitializer(ast::AstId expr, ExprInfo& info) {
     return kTypeError;
   }
   setType(typeNode, spec.type);
+  if (types_.isSlice(spec.type)) {
+    // `[]i32{1, 2, 3}`, and the one refusal this node has that the array does not.
+    // A slice is a *view*: its bytes live somewhere else, so there is no object
+    // for a literal to be. The sentence names the two things the reader can
+    // actually write, which is the difference between a refusal and a dead end
+    // (`slices.md` decision 7).
+    error(typeNode, SemaErrorCode::InitializerShape,
+          "a slice has no literal: `" + types_.spelling(spec.type) +
+              "` is a view of storage something else owns, so name the object -- an array, or "
+              "the result of a pointer -- and take a view of it: `table[..]`");
+    return kTypeError;
+  }
   if (!types_.isArray(spec.type)) {
-    // Unreachable, and kept as a `return` rather than a diagnostic for a reason
-    // worth writing down: the parser recognizes a typed initializer only when the
-    // type run starts with `[N]`, so the constructor that introduces this node is
-    // the array's. The general `T{...}` -- and with it the sentence about braces
-    // being for aggregates and not for scalars -- arrives with the first
-    // non-array aggregate, which is where a *type name* followed by `{` stops
-    // being ambiguous with a block (`arrays.md`).
+    // A `Type` this node cannot hold. The parser recognizes a typed initializer
+    // when the run opens with a bracket group (`[N]`, `[_]`, `[]`), so the two
+    // shapes that can reach here are handled above and below; anything else is a
+    // tree this stage did not build.
     return kTypeError;
   }
 

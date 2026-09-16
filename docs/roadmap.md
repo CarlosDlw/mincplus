@@ -410,16 +410,32 @@ which also records the reversal.
       that converts to every other one. `sema` publishes one
       `AccessObligation` per dereference (`Object` or `Foreign` provenance) for
       the lowering to materialise rather than re-derive
-- [x] Slices **decided**: the record is
+- [x] **Slices**: the record is
       [`architectures/slices.md`](architectures/slices.md), and it answers the
       question `arrays.md` decision 17 left open (a slice does *not* need
       `struct` first — arrays already landed the aggregate-value machinery; what
-      waits for `cinterop` is the promise, not the mechanism). A slice is
-      `{ptr, len}`, a **view** with no capacity and no literal, taken with `..`
-      from an array, a slice or a pointer, its own index `0`, its length as a
-      `usize` word asked for as `len(x)`, and refused at an `extern` boundary the
-      way an array is. The six landing steps are in the record; the two
-      spellings (`[]T`, `..`) already parse and are refused with a sentence
+      waits for `cinterop` is the promise, not the mechanism). `[]T` is a
+      `{ptr, len}` descriptor, a **view** with no capacity and no literal, taken
+      with `..` from an array, a slice or a pointer, with its own index `0`, a
+      length that is a `usize` word, and an `extern` refusal the array shares.
+      Landed: the type and its layout (two words, the pointer's width twice),
+      the four forms (`a[l..r]`, `a[l..]`, `a[..r]`, `a[..]`) with the pointer
+      required to write both, the constant bounds (`a[0..5]` and `a[3..1]` each
+      with their own sentence), `s[i]` as a place, the view crossing a call **by
+      value** (`{ ptr, i64 }` in the signature, where an array crosses as a copy
+      and an `sret`), the two-member debug type, `examples/016_slices.mx`, and the
+      site page. The two reserved spellings are gone — `parse-reserved-range` no
+      longer exists, and `[]T` is a type rather than a sentence.
+      **Deferred, and not gaps in the view:** `len(x)` and `sizeof(x)` are each a
+      form the grammar has to have — a call whose argument is a place, and a type
+      in an expression — and each is its own item below; until they land a view's
+      extent is passed beside it, exactly as a view of a pointer always required
+- [ ] The **reading operators**: `len(x)` (a constant for an array, a word for a
+      view, one spelling for both — `architectures/slices.md` decision 15) and the
+      grammar family `sizeof` / `alignof` / `static_assert`, which take a *type*
+      in an expression. `len` is what a view still needs to be usable without
+      passing its extent beside it, and `sizeof([]i32)` is how the descriptor's two
+      words become askable from a program
 - [ ] The rest of the memory model: int ↔ ptr as named operations (`expose` /
       `with_exposed_provenance`), casts, `restrict`, `volatile`/`unaligned`
       accesses, the `slice<T>` / `&T` / `&mut T` layer, and the checked-build

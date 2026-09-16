@@ -152,16 +152,19 @@ A pointer crosses freely, because an address is something every ABI agrees about
 extern fn i32 takes(p: *[4]i32);  // fine
 ```
 
-## What is not here yet
+## The neighbour, and what is not here yet
 
-- **Slices** (`[]T`, a pointer and a length together) are **reserved**: the
-  spelling parses and is refused with a sentence, so no program can mean anything
-  else by it in the meantime.
+- **Slices** (`[]T`, a pointer and a length together) are the other thing brackets
+  are for: `a[1..2]` is a *view* of `a`, two words that alias the array and never
+  copy it. They have their own page — [Slices](./slices.md) — and their own type:
+  an array is storage and a view names storage, so `[4]i32` and `[]i32` never
+  convert, and `f(a)` is an error where `f(a[..])` is a view.
 - **`sizeof`/`alignof`** are not in the grammar yet. The layout is defined and
-  testable; the operator that exposes it arrives with them.
-- **The `..` of a slice range** (`a[1..2]`) is refused by name: the operator is
-  **reserved** for slices, exactly as `[]T` is, so nothing can come to mean
-  something else by it in the meantime.
+  testable — including the view's, which is two words — but the operator that
+  exposes it arrives with a type in an expression.
 - **Braces on a scalar or a `struct` name** (`i32{1}`, `Point{...}`) are not a
-  typed initializer: today a typed initializer is recognized by the `[N]` its type
-  starts with. The general `T{...}` lands with the first non-array aggregate.
+  typed initializer: today a typed initializer is recognized by the bracket its
+  type starts with, and the type has to be an array to hold one. `[]i32{1, 2, 3}`
+  is read and refused with a sentence of its own: a view has no literal, because a
+  literal would live in a temporary and a view of a temporary is the dangling this
+  language does not hand out.

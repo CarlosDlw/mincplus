@@ -130,7 +130,7 @@ void Lowering::declareFunctions() {
     // sides agree on by construction; `sret` is what says *why* that pointer is
     // there, and it is what lets a later stage reason about the callee writing
     // into the caller's object rather than through an arbitrary pointer.
-    if (types_.isAggregate(info.returnType) && function->arg_size() > 0) {
+    if (byReference(info.returnType) && function->arg_size() > 0) {
       function->getArg(0)->addAttr(
           llvm::Attribute::getWithStructRetType(context_, storageType(info.returnType)));
     }

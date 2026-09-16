@@ -169,6 +169,7 @@ struct TargetInfo {
 inline constexpr std::string_view kFallbackTriple = "x86_64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleLinuxAmd64 = "x86_64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleWindowsAmd64 = "x86_64-pc-windows-msvc";
+inline constexpr std::string_view kTripleLinuxI386 = "i686-unknown-linux-gnu";
 inline constexpr std::string_view kTripleLinuxAarch64 = "aarch64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleLinuxRiscv64 = "riscv64-unknown-linux-gnu";
 inline constexpr std::string_view kTripleDarwinAmd64 = "x86_64-apple-darwin";

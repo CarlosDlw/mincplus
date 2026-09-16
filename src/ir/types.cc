@@ -166,6 +166,17 @@ llvm::Type* Lowering::llvmType(sema::TypeId id) {
     }
     return llvm::ArrayType::get(element, types_.countOf(id));
   }
+  case sema::TypeKind::Slice:
+    // `{ ptr, usize }` -- the descriptor, and **structural** rather than a named
+    // struct type: it is one shape, there are no user structs yet, and a named
+    // type would be a symbol in every module for a type no program can write.
+    //
+    // The length is the *index* width -- the same integer a `getelementptr` index
+    // is made of -- because the length is what an index is checked against, and
+    // two widths for the same number would mean a truncation somewhere. The
+    // pointer is opaque, so the element type is not in the descriptor: an access
+    // carries it, and `elementOf` is where it is read (`slices.md` decision 17).
+    return llvm::StructType::get(context_, {llvm::PointerType::get(context_, 0), indexType()});
   }
   return nullptr;
 }
@@ -188,7 +199,7 @@ llvm::Type* Lowering::llvmFunctionType(sema::TypeId id) {
     // has to mean. It is also the shape the C ABI uses for an aggregate it
     // classifies as MEMORY, so `cinterop`'s work later is the parameter
     // *attributes* and not a second convention.
-    params.push_back(types_.isAggregate(param) ? pointerType() : mapped);
+    params.push_back(byReference(param) ? pointerType() : mapped);
   }
   // A by-value aggregate **return** is the same shape the other way round: the
   // caller passes the address of the object it wants filled, the function returns
@@ -201,7 +212,7 @@ llvm::Type* Lowering::llvmFunctionType(sema::TypeId id) {
   // without a second rule: `declareFunctions` attributes that first parameter,
   // `defineFunction` reads it as the destination, and `lowerCall` fills it.
   const sema::TypeId back = types_.get(id).returnType;
-  if (types_.isAggregate(back)) {
+  if (byReference(back)) {
     params.insert(params.begin(), pointerType());
     return llvm::FunctionType::get(llvm::Type::getVoidTy(context_), params, types_.isVariadic(id));
   }

@@ -107,6 +107,17 @@ enum class SyntaxKind : std::uint16_t {
   // index, and the brackets that delimit it) and the index is a full
   // expression of its own. Children are `base`, `[`, `index`, `]`.
   IndexExpr,
+  // `a[1..2]`, `a[1..]`, `a[..2]`, `a[..]`: the **view**, which is not an index
+  // with a funny index but its own expression with its own two operands, either
+  // of which may be absent.
+  //
+  // Children are `base`, `[`, then the operands in source order with the `..`
+  // between them, then `]`. The separator stays in the tree, and that is the
+  // whole reason the absent bound is expressible at all: `a[1..]` and `a[..1]`
+  // have one operand each, the same one by shape, and only the token between
+  // them says which side it is on. A reader that wants the two bounds asks
+  // `slicePartsOf` rather than counting children (`slices.md` decision 8).
+  SliceExpr,
   ArgList,
   // `[1, 2, 3]` and `[0; 64]`: the list form, whose type its consumer decides.
   // Children are `[`, the elements (or the fill's value and count), and `]`.

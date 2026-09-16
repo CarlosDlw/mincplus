@@ -245,8 +245,20 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
       }
       count = *inferredCount;
     } else if (!part.hasCount) {
-      return fail("`[]T` is the reserved spelling of a slice, which the language does not have "
-                  "yet: write `[N]T` for an array of N elements");
+      // `[]T`, the slice: a view, so none of the count rules apply and the one
+      // element rule does. Refused here rather than by the store so the sentence
+      // can name the element -- the same reason the array's four refusals live in
+      // this loop (`slices.md`).
+      if (!types.isObject(result)) {
+        return fail("`" + types.spelling(result) +
+                    "` cannot be a slice element: a view has to be a view of something "
+                    "that can be stored, whose size is a number");
+      }
+      result = types.sliceOf(result);
+      if (!result.valid()) {
+        return ok(kInvalidType);
+      }
+      continue;
     }
     if (part.countOverflow) {
       return fail("the count of an array type has to be a number that fits in 64 bits");

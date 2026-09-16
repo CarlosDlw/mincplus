@@ -122,6 +122,32 @@ ProvenanceKind Checker::provenanceOf(ast::AstId expr) const {
     }
     return ProvenanceKind::Foreign;
   }
+  case ast::NodeKind::SliceExpr: {
+    // Slicing does not invent provenance: a view of an object the unit named is
+    // still an access inside that object, and a view of anything else is unknown
+    // (`slices.md` decision 20).
+    //
+    // The three bases are three different questions. An **array** is not a
+    // pointer value at all -- there is nothing for `provenanceOf` to answer -- so
+    // it is the subscript's own question, one level down. A **pointer** carries
+    // whatever the expression that produced it carried, so `&table[0]` stays
+    // `object` and `p` from a parameter stays `foreign`. A **slice** is a value,
+    // and the pointer word inside it is not something this pass follows -- which
+    // is exactly what "unknown otherwise" means, and it is the conservative
+    // answer.
+    const ast::SliceParts parts = file_.slicePartsOf(expr);
+    if (!parts.hasBase()) {
+      return ProvenanceKind::Foreign;
+    }
+    const TypeId baseType = out_.typed.typeOf(parts.base);
+    if (types_.isArray(baseType)) {
+      return arrayProvenanceOf(parts.base);
+    }
+    if (types_.isPointer(baseType)) {
+      return provenanceOf(parts.base);
+    }
+    return ProvenanceKind::Foreign;
+  }
   case ast::NodeKind::BinaryExpr: {
     const std::vector<ast::AstId> operands = operandsOf(expr);
     if (operands.size() < 2) {

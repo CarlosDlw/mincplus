@@ -7,12 +7,21 @@ slice never becomes the thing that made C's arrays unexplainable.
 
 It sits under [`architecture.md`](../architecture.md) and beside
 [`arrays.md`](arrays.md) and [`memory.md`](memory.md). `arrays.md` decision 17
-reserved the two spellings — `[]T` parses today and is refused with a sentence,
-and `..` is lexed, parsed and refused with a sentence — so this record is the
-landing of something already spelled, not a new syntax.
+reserved the two spellings — `[]T` parsed and was refused with a sentence, and `..`
+was lexed, parsed and refused with a sentence — so this record is the landing of
+something already spelled, not a new syntax, and both reserved sentences are gone
+(`parse-reserved-range` no longer exists).
 
-**Status: planned.** Nothing here is implemented; the two spellings above are the
-only part of it that exists, and they exist as *refusals*.
+**Status: implemented, except the two readings of the length.** The type, its
+layout, the four forms, the bounds that are checked, the descriptor in the module,
+the by-value call convention, the debug type, the refusals and the example are in
+and tested. Two things this record assumed would land with it did **not**, and
+neither is a gap in the slice: **`len(x)`** (decision 15) and **`sizeof`** (step 5)
+are each a *form the grammar has to have* — `len` a call whose argument is a place,
+`sizeof` a type in an expression — and both are their own roadmap items rather
+than part of the view. Until they land, a view's length is read by the programmer
+who wrote the bounds (the example does exactly that), and the descriptor's two
+words are proved by the store's own layout tests instead of by `sizeof`.
 
 ## The decision, in one paragraph
 
@@ -93,7 +102,7 @@ and there is no second way to ask for a length.
 | **12** | **`s[i]` on a slice is a place**: it loads and stores through the descriptor's pointer under the same provenance rule as `p[i]` | A slice that could not be written through would be a read-only view with no way to say so in the type, and `str` already covers "read-only" by being a different type |
 | **13** | **Slices are passed and returned by value** (two words, registers), under the same **internal** convention as an array, and **`extern` refuses them** (`sema-extern-aggregate`, the code that already exists) | The promise at the C boundary is the same promise arrays are waiting for, and it is not this record's to make. What is not refused is `*[]T`: a pointer to a descriptor is a pointer |
 | **14** | **Arrays do not decay**: a `[]T` parameter is called with `a[..]` | `arrays.md` decision 2, kept. The alternative is the failure mode this whole area of the language is built to avoid |
-| **15** | **`len(x)` is the spelling, for arrays and slices both.** On an array it folds to the count; on a slice it reads the descriptor | It must be one form: an array can never have a member, so `.len` would be a spelling that only half the types could use. It also means a slice does not gain a member before `struct` exists, which is decision 22's whole point. `sizeof(x)` answers for the *descriptor* (two words) and `len(x)` for the *data*, and those are different numbers on purpose |
+| **15** | **`len(x)` is the spelling, for arrays and slices both**, and it is **not implemented yet** — it is the grammar item that reads a length, and it lands on its own | It must be one form: an array can never have a member, so `.len` would be a spelling that only half the types could use. It also means a slice does not gain a member before `struct` exists, which is decision 22's whole point. `sizeof(x)` answers for the *descriptor* (two words) and `len(x)` for the *data*, and those are different numbers on purpose |
 | **16** | **Bound checking is compile-time where the bound is constant, and the runtime case is named, not pretended**: a non-constant bound on a slice or a pointer is the checked build's (`-fcheck`), and the invariant scan says it cannot prove a runtime extent rather than claiming it did | The alternative is to emit a check nobody asked for (cost in every loop) or to call it UB in silence (the thing this language does not do). `arrays.md` decision 26 already answered this for an array's runtime index, and a slice is the same case with the length in hand instead of in the type |
 | **17** | **The `ir` type is `{ptr, usize}` as a first-class LLVM aggregate** — so a parameter arrives in registers and a local slice needs an `alloca` only when its address is taken | A hoisted `{ptr, i64}` in registers is what every backend does with a two-word descriptor; making it an address-taking object everywhere would pessimise the common case for a case nobody wrote |
 | **18** | **Debug info: a `DICompositeType` with two members** (`ptr`, `len`), built from `sema`'s answers the way the array's is | The machinery exists (`ir/debug.cc`), and a debugger that cannot show a slice's length is a debugger that cannot show a slice |
@@ -106,31 +115,37 @@ and there is no second way to ask for a length.
 ## The syntax, and the refusals
 
 ```minc
-fn usize first_half(a: []i32) { return len(a) / 2; }
-
-fn sum(s: []i32) {
-  let total: i32 = 0;
-  for i in 0..len(s) { total = total + s[i]; }
+// Two views of one table, and a write through one of them.
+fn void add_ten(s: []i32) {
+  for let i: i32 = 0; i < 2; i += 1 { s[i] = s[i] + 10; }
 }
 
-fn void main() {
-  let table: [8]i32 = [1, 2, 3, 4, 5, 6, 7, 8];
+fn []i32 tail(s: []i32) { return s[1..3]; }
+
+fn i32 main() {
+  let table: [4]i32 = [1, 2, 3, 4];
   let all: []i32 = table[..];        // the whole object, as a view
-  let head: []i32 = table[0..4];     // the first four
-  let tail: []i32 = table[4..];      // from four to the end
-  let mid: []i32 = head[1..3];       // a view of a view: 0 is `2` here, not `1`
-  sum(mid);
+  let head: []i32 = table[..2];      // the first two
+  let mid: []i32 = table[1..3];      // from one to, but not including, three
+  let from_two: []i32 = table[2..];  // from two to the end
+  add_ten(mid);                      // `table[1]` and `table[2]` are now 12, 13
+  let inner: []i32 = mid[1..2];      // a view of a view: `inner[0]` is `mid[1]`
   let p: *i32 = &table[0];
   let first_two: []i32 = p[0..2];    // from a pointer: both bounds written
+  return all[0] + head[1] + inner[0] + first_two[1]; // 1 + 12 + 13 + 12
 }
 ```
+
+A length is read by the programmer for now: `len(s)` (decision 15) is a separate
+grammar item, and until it lands a view's extent travels beside it as a parameter
+-- which is the same thing a view of a *pointer* has always required.
 
 Refused, each by name and each with the fix in the sentence:
 
 | Written | Why it is refused |
 | --- | --- |
 | `[]i32{1, 2, 3}` | a slice has no literal: name an array or an allocation first (decision 7) |
-| `s.len` | `len(s)` is the spelling; members arrive with `struct`, and a view will not be the type that introduces them (decision 15) |
+| `s.len` | no member access exists yet at all: `.` is not a postfix operator, and a member arrives with `struct`. When a length becomes readable it is `len(s)` and not a member, so a view does not gain one and there is no second spelling (decisions 15, 22) |
 | `&s[0..2]` | a pointer to a descriptor is a pointer to a temporary (decision 11) |
 | `p[..4]` on a `*i32` | a pointer has no length to count back from; write both bounds (decision 8) |
 | `extern fn f(s: []i32)` | the descriptor's ABI at a foreign boundary is not promised yet (decision 13) |
@@ -142,31 +157,36 @@ Refused, each by name and each with the fix in the sentence:
 The order is the pipeline's, and each step is a thing that can be tested alone: the
 type, then the length, then taking one, then the descriptor in the module.
 
-| # | Step | Files | What turns on | What is still refused |
+| # | Step | Files | What turns on | Status |
 | --- | --- | --- | --- | --- |
-| 1 | **The type and its layout** | `sema/type.h` (`TypeKind::Slice`), `type_store.h`/`.cc` (`sliceOf`, hash/equal, `sizeOf`, `alignOf`, `spelling`, `isObject`), `sema/typespec.cc` (the `[]T` reader produces the type instead of the sentence) | `[]i32` has a size, an alignment, one spelling and one `TypeId`; two slices of different elements are different types; the `[]T` refusal sentence disappears and a `[]T` *binding* starts working | taking one, `len`, anything that reads it |
-| 2 | **`len`** | the grammar (a keyword), `parse`, `syntax`, `ast`, `sema` (folding for an array, the descriptor read for a slice), `ir` | `len(a)` folds to a constant; `len(s)` reads a word. One operator, two answers, both tested | slicing |
-| 3 | **Taking one: the `SliceExpr`** | `syntax`/`ast` (a distinct node kind with `begin`/`end`, absent when the form omits it), `parse` (the `..` builds it instead of the reserved sentence), `sema` (`checkSlice`: base kinds, the four forms, constant bounds, the pointer's both-bounds rule) | all four forms type-check; `a[0..5]` on `[4]T` is `IndexOutOfRange`; `a[3..1]` is its own sentence; the reserved sentence for `..` is gone | the descriptor in the module |
-| 4 | **The descriptor** | `ir/types.cc` (`{ptr, usize}`), `ir/expr.cc` (build it from a place + two values), `ir/expr.cc` (`s[i]` as a place through it), `ir/declarations.cc` + `ir/types.cc` (by-value parameter and return) | a slice crosses a call by value; `s[i] = v` writes the array it views; a view of a view works; the aliasing test passes | `sizeof`, debug info, `str` |
-| 5 | **`sizeof` and the debug type** | `sema`, `ir/expr.cc`, `ir/debug.cc` | `sizeof([]i32)` is the descriptor's size and `sizeof(table)` the object's; `len(s)` and `sizeof(s)` disagree on purpose and both are tested; a debugger shows `ptr` and `len` | `alignof` (its own item) |
-| 6 | **The boundary and the corpus** | the `extern` refusal's message, `examples/016_slices.mx`, the site page, the roadmap, the invariant scan's "cannot prove a runtime extent" row | the refusal reads as a boundary rather than a gap; the example runs | everything in *Not in scope* |
+| 1 | **The type and its layout** | `sema/type.h` (`TypeKind::Slice`), `type_store.h`/`.cc` (`sliceOf`, hash/equal, `sizeOf`, `alignOf`, `spelling`, `isObject`), `sema/typespec.cc` (the `[]T` reader produces the type) | `[]i32` has a size, an alignment, one spelling and one `TypeId`; two slices of different elements are different types; the `[]T` refusal sentence is gone and a `[]T` *binding* works | **done** (`type_test.cc`: `ASliceIsTwoWordsWhateverItViews`, `ASliceIsAnObjectAndNotAnArray`) |
+| 2 | **`len`** | the grammar (a keyword), `parse`, `syntax`, `ast`, `sema` (folding for an array, the descriptor read for a slice), `ir` | `len(a)` folds to a constant; `len(s)` reads a word. One operator, two answers, both tested | **not done, and not a slice's**: a call whose argument is a *place* is a grammar item, and it lands with the other reading operators |
+| 3 | **Taking one: the `SliceExpr`** | `syntax`/`ast` (a distinct node kind; the operands split at the `..`, which stays in the tree), `parse` (the `..` builds it instead of the reserved sentence), `sema` (`checkSlice`: base kinds, the four forms, constant bounds, the pointer's both-bounds rule) | all four forms type-check; `a[0..5]` on `[4]T` is `IndexOutOfRange`; `a[3..1]` is its own sentence; `parse-reserved-range` is gone | **done** (`slice_test.cc`, `parser_test.cc`) |
+| 4 | **The descriptor** | `ir/types.cc` (`{ptr, usize}`), `ir/expr.cc` (build it from a place + two values, `s[i]` as a place), `ir/types.cc`/`expr.cc`/`declarations.cc`/`function.cc`/`stmt.cc` (`byReference`: a view crosses by value, an array by copy) | a slice crosses a call by value; `s[i] = v` writes the array it views; a view of a view works; the aliasing test passes | **done** (`ir/slice_test.cc`, `build_command_test.cc`) |
+| 5 | **The debug type, and `sizeof`** | `ir/debug.cc`; `sema`, `ir/expr.cc` for `sizeof` | a debugger shows `ptr` and `len`; `sizeof([]i32)` is the descriptor and `sizeof(table)` the object | **the debug type is done** (`ir/slice_test.cc`); **`sizeof` is not** -- it is a type in an expression, i.e. grammar, and it is its own roadmap item |
+| 6 | **The boundary and the corpus** | the `extern` refusal's message, `examples/016_slices.mx`, the site page, the roadmap | the refusal reads as a boundary rather than a gap; the example runs | **done** |
 
 ## Tests
 
-| Property | How it is a test |
-| --- | --- |
-| A slice is two words | `sizeOf`/`alignOf` per target triple, the shape the array's layout tests already use |
-| A copy is a view | compile and **run**: write through the copy, read through the original, assert the array changed |
-| A view's index 0 is its own | `s = a[2..5]; s[0]` is `a[2]`, asserted by value |
-| An array copy is a copy | the other half: `let b: [4]i32 = a;` then write `b`, assert `a` unchanged |
-| Constant bounds are checked | one case per form: `a[0..5]` on `[4]T`, `a[5..]`, `a[3..1]`, each asserting the code and the sentence |
-| `len` has two answers | `len(a)` is a constant (usable where a constant is required) and `len(s)` is a load, asserted from the module |
-| No literal, no member, no decay | the refusal table above, one test per row, each asserting the code |
-| `extern` refuses both directions | the existing aggregate drift, extended: `extern fn f(s: []i32)` and `extern fn []i32 g()`, while `*[]i32` passes |
-| A slice of a slice composes | `a[1..7][2..4]` — the bounds are relative to the view, and the test says so |
-| A slice of a pointer is unchecked | `p[0..n]` compiles for any `n`, which is the documented obligation (decision 8), and the test is that nothing pretends otherwise |
-| The descriptor is in registers | the module has no `alloca` for a slice parameter, and a returned slice is a two-word aggregate |
-| The scan is honest | an access through a slice whose extent is not provable produces the "runtime extent" row and not a claim |
+| Property | How it is a test | Where |
+| --- | --- | --- |
+| A slice is two words | `sizeOf`/`alignOf` on 64-bit and on `i686`: the pointer width twice, aligned like the pointer and not like the element | `type_test.cc::ASliceIsTwoWordsWhateverItViews` |
+| A view is an object and not an array | `isSlice`/`isArray`/`isAggregate`/`isObject`/`countOf`/`elementOf`, and the one element rule that can refuse | `type_test.cc::ASliceIsAnObjectAndNotAnArray` |
+| The four forms are one type | one case per form, on each of the three bases | `slice_test.cc::TheFourFormsAreOneType`, `TheThreeBasesAreOneType` |
+| A write through a view reaches the array | compile, link and **run**: write `view[0]`, read `table[2]`, and the exit status is the array's value | `build_command_test.cc::AWriteThroughAViewReachesTheArrayItViews` |
+| A view's index 0 is its own | `mid[1..3][0]` is `mid[1]`, asserted by the module's two address computations and by a run | `ir/slice_test.cc::AViewOfAViewWalksFromTheViewsOwnStart`, `build_command_test.cc` |
+| Constant bounds are checked | `a[0..5]` and `a[-1..2]` on a `[4]i32` are `IndexOutOfRange`, each naming the bound | `slice_test.cc::TheConstantBoundsAreCheckedAgainstTheObject` |
+| The end is one past the last element | `a[0..4]` is the whole object and `a[4..4]` the empty view: both accepted, and the length is the subtraction | `slice_test.cc::TheEndOfAViewIsOnePastTheLastElement`, `ir/slice_test.cc::TheLengthIsTheDifferenceAndNotALoad` |
+| A bound is an integer at the index width | a `u8` bound is accepted and a float is `IndexNotInteger` | `slice_test.cc::ABoundIsAnIntegerAtIndexWidth` |
+| `l > r` is its own sentence | `a[3..1]` is `SliceBoundsReversed`, and it is *not* the out-of-range sentence | `slice_test.cc::EveryRefusalHasItsSentence` |
+| No literal, no decay, no address | one case per row of the refusal table, each asserting the code *and* the fragment | `slice_test.cc::EveryRefusalHasItsSentence` |
+| `extern` refuses both directions | `extern fn f(s: []i32)` and `extern fn []i32 g()` both name the boundary, while `*[]i32` passes | `slice_test.cc::TheBoundarySaysWhatToWriteInstead` |
+| A slice of a slice composes | the element of a view of a view is the same element, and a `[][4]i32` is a view of rows | `slice_test.cc::ASliceIsAnObjectAndNotAnArray` |
+| A view crosses a call by value | the signature is `{ ptr, i64 }` in and out, with no `sret` and no caller copy | `ir/slice_test.cc::ASliceCrossesACallByValue` |
+| An element access is a plain `getelementptr` | `s[i]` is one extract, one `getelementptr` and one load; no `inbounds` | `ir/slice_test.cc::AnElementAccessReachesTheStorageTheViewNames` |
+| The scan is honest | the access through a slice carries extent `0` -- "not known" -- and the module has no assumption violations | `ir/slice_test.cc::ASliceAccessCarriesNoExtentAndTheScanSaysSo` |
+| Every code is reachable | the three new codes are in the list that proves the table has no row nobody can reach | `errors_test.cc::EveryCodeIsReachableFromAnInputTheGrammarAccepts` |
+| `len` has two answers | **deferred with the feature**: the item's own tests, and the example passes the count instead | -- |
 
 ## Hazards, and who paid for them
 
@@ -181,8 +201,50 @@ type, then the length, then taking one, then the descriptor in the module.
 | A borrowed view with no borrow checker | C++'s `span`, and every language that has slices and no lifetimes | the honest statement (21), plus the refusals that keep the *construction* of a dangling view out of the grammar (7, 11) |
 | A bounds check that is silently absent | C's `a[i]`, and every language whose answer is "undefined" | compile-time checks where the bound is constant (9), the runtime case named and scheduled (`-fcheck`) rather than denied (16) |
 
+## What the implementation found
+
+Four things the design did not predict, written down because each one changed a
+decision or a sentence above:
+
+1. **`[]T` was not parseable in a declaration at all.** A type *run* — the tokens a
+   `Type` node holds — counted `[N]` as three tokens and `[` alone as one, which
+   was correct while `[]` was a refusal one stage down. The moment `[]T` became a
+   type, `fn []i32 tail(...)` split its run at the `[`, took the `]` as the
+   function's *name*, and reported "expected a function name" at the bracket. The
+   run now holds `[]` whole, which is the same statement the type reader makes:
+   a slice is a type, so the run has to hold it. This is the class of bug a
+   reserved spelling hides: the refusal was doing the parser's job for it.
+2. **`sizeof([]i32)` does not parse, and it is not the slice's fault.** The
+   argument of a builtin is an expression, and a type in an expression is the
+   grammar item `sizeof` is waiting on. So the descriptor's size is asserted
+   against the store instead (`type_test.cc`), and the record says so rather than
+   showing a snippet that does not compile.
+3. **A slice is not an aggregate *for the ABI*.** `isAggregate` means "moves as one
+   object", and both kinds qualify; what the call machinery needed was the
+   narrower "crosses as a pointer to a copy the caller makes", which is the array
+   and not the view. That predicate is now `Lowering::byReference`, one place, and
+   it replaced six `isAggregate` call sites in the signature, the call, the
+   parameter binding, the `sret` attribute and the `return`. The two kinds were
+   never the same question and this is where the difference lands.
+4. **A parameter needs a slot, even a two-word one.** Decision 17 said a
+   parameter arrives in registers and a local needs an `alloca` only when its
+   address is taken. The parameter *does* get an entry-block slot — the same one
+   every scalar parameter gets — because `&s` has to work for a view exactly as it
+   works for a `u8`, and a rule that says "except for this type" is a rule that
+   will be forgotten. The register path is what the argument crosses *in*; the
+   slot is where the binding lives, and the optimiser removes it when nothing
+   takes its address.
+
 ## Not in scope, with the reason
 
+- **`len(x)` and `sizeof(x)`.** Each needs a form the grammar does not have — a
+  call whose argument is a place, and a type in an expression — and each is its
+  own roadmap item rather than part of the view. Until they land, a view's extent
+  is passed beside it, which is what the example does and what a view of a
+  *pointer* has always required.
+- **Member access (`s.len`).** `struct` brings `.field`; a slice will not be the
+  type that introduces a member, and `len(s)` is the spelling when it exists
+  (decisions 15, 22).
 - **`str` as `[]u8`.** `str` stays a NUL-terminated pointer; the conversion is a
   length computation and therefore explicit and named, and it is the next item
   after this one (decision 6).

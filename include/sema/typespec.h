@@ -62,9 +62,10 @@ struct TypePart {
   // `[N]`: the array constructor. `count` is the N, already folded.
   bool isArray = false;
   // Whether a number was written between the brackets at all. `[]` and `[0]`
-  // both arrive with `count == 0` and they are two different mistakes with two
-  // different fixes -- a reserved slice spelling and an impossible object -- so
-  // the reader has to be able to tell them apart (`arrays.md` decisions 5, 17).
+  // both arrive with `count == 0` and they are two different types with two
+  // different rules -- the slice, and an object of no elements -- so the reader
+  // has to be able to tell them apart (`arrays.md` decision 5,
+  // `slices.md`).
   bool hasCount = false;
   // The count of an `[N]` part, when one was written.
   //

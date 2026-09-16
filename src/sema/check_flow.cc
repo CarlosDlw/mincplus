@@ -429,6 +429,27 @@ void Checker::flowExpression(ast::AstId expr) {
     markAssigned(operands.front());
     return;
   }
+  case ast::NodeKind::SliceExpr: {
+    // Taking a view *reads*: the bounds are values, and the base is read in every
+    // form but one. An **array** is the exception, and it is the same exception
+    // `a[i]` gets: computing the address of an element reads no byte of the
+    // object, so `a[0..1]` is legal on a binding that has never held a value --
+    // which is what lets `let a: [4]i32; let v: []i32 = a[0..2];` be the two lines
+    // it says it is. A **slice** and a **pointer** are values, and viewing one
+    // reads it (`arrays.md` decision 23, `slices.md`).
+    const ast::SliceParts parts = file_.slicePartsOf(expr);
+    if (!parts.hasBase()) {
+      return;
+    }
+    if (types_.isArray(out_.typed.typeOf(parts.base))) {
+      flowStoreTarget(parts.base);
+    } else {
+      flowExpression(parts.base);
+    }
+    flowExpression(parts.begin);
+    flowExpression(parts.end);
+    return;
+  }
   case ast::NodeKind::CallExpr:
     // The callee and then the arguments, left to right: the order the language
     // guarantees and the order the lowering must produce.

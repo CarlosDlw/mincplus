@@ -702,24 +702,48 @@ void Checker::runSignatures() {
     // spelling of the same thing.
     if (!body.valid()) {
       if (types_.isAggregate(returnType)) {
+        // Two aggregates, two sentences, because the two are refused for
+        // different reasons and the repair is different. An array crosses as a
+        // *shape this compiler sets up* (a pointer to a copy, an `sret`
+        // destination), which no foreign callee knows; a slice crosses as a
+        // `{ptr, len}` descriptor whose layout this compiler chose and has not
+        // promised to anybody. Both are a boundary and not a gap, and the second
+        // sentence says what to write instead (`slices.md` decision 13).
+        const std::string answer = types_.isSlice(returnType)
+                                       ? "a pointer and a length, which are the two words the "
+                                         "caller can pass and read"
+                                       : "pass a pointer instead, and the address is what "
+                                         "crosses";
         error(typeNode.valid() ? typeNode : decl, SemaErrorCode::ExternAggregate,
               "`extern` says this function is defined somewhere this compiler is not looking, "
-              "and an array `" +
+              "and " +
+                  std::string(types_.isSlice(returnType) ? "a slice" : "an array") + " `" +
                   types_.spelling(returnType) +
-                  "` returns here as a shape the caller sets up: pass a pointer instead, and "
-                  "the address is what crosses");
+                  "` returns here as a shape this compiler "
+                  "chose: " +
+                  answer);
       }
       for (std::size_t i = 0; i < params.size() && i < paramTypeNodes.size(); ++i) {
         const TypeId declared = params[i];
-        if (types_.isAggregate(declared)) {
-          error(paramTypeNodes[i], SemaErrorCode::ExternAggregate,
-                "`extern` says this function is defined somewhere this compiler is not looking, "
-                "and an array `" +
-                    types_.spelling(declared) +
-                    "` is passed here as a copy the caller makes: pass a pointer instead, "
-                    "`*" +
-                    types_.spelling(declared) + "`, and the address crosses");
+        if (!types_.isAggregate(declared)) {
+          continue;
         }
+        // One string, built in place: the sentence is three parts -- what the
+        // parameter is, which aggregate it is, and what to write instead -- and
+        // the middle one is the type.
+        std::string message =
+            "`extern` says this function is defined somewhere this compiler is not looking, "
+            "and ";
+        message += types_.isSlice(declared) ? "a slice `" : "an array `";
+        message += types_.spelling(declared);
+        message += types_.isSlice(declared)
+                       ? "` is passed here as a descriptor whose layout this compiler chose: "
+                         "pass a pointer and a length, which are the two words the callee can "
+                         "read"
+                       : "` is passed here as a copy the caller makes: pass a pointer instead, "
+                         "`*" +
+                             types_.spelling(declared) + "`, and the address crosses";
+        error(paramTypeNodes[i], SemaErrorCode::ExternAggregate, std::move(message));
       }
     }
 

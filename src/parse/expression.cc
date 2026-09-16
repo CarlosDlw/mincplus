@@ -119,32 +119,45 @@ CompletedMarker Parser::parsePostfix() {
       expect(lex::TokenKind::RParen);
       expr = call.complete(SyntaxKind::CallExpr);
     } else if (at(lex::TokenKind::LBracket)) {
-      // `a[i]`. Bracketed rather than a `PostfixExpr` because the index is a
-      // full expression of its own, not the single operand an operator token
-      // implies -- and because the brackets have to stay in the tree: `a[i]` and
-      // `a i` are not the same program, and a dump that could not tell them
-      // apart would not be a dump of the source.
+      // `a[i]` and `a[1..2]` -- one bracket, two expressions, and the `..`
+      // decides which. Bracketed rather than a `PostfixExpr` because the index
+      // is a full expression of its own, not the single operand an operator
+      // token implies -- and because the brackets have to stay in the tree:
+      // `a[i]` and `a i` are not the same program, and a dump that could not
+      // tell them apart would not be a dump of the source.
       Marker index = expr.precede();
       bump(); // `[`
-      parseExpr();
-      // `a[1..2]` -- the range a future slice is taken with. Refused by name and
-      // not left to the `expected ']'` two tokens later, which is what the `..`
-      // used to produce: that message is about the *bracket* and says nothing
-      // about the operator that is reserved. The second bound is read anyway, so
-      // the subscript closes and the reader gets one sentence instead of two
-      // (`arrays.md` step 10, decision 17).
+      // Three cases, and each one is a *complete* tree: the operand before the
+      // `..`, the operand after it, or the index that makes this an `IndexExpr`.
+      // Nothing is left half-consumed, so the single `]` below closes whichever
+      // of the three was opened (`slices.md` decision 8).
       if (at(lex::TokenKind::Dot) && nth(1) == lex::TokenKind::Dot) {
-        error("`..` is reserved for slices: `a[1..2]` has no value today, and `a[i]` is an "
-              "element of the array",
-              ParseErrorCode::ReservedRange);
+        // `a[..r]` and `a[..]`: no first bound.
         bump(); // `.`
         bump(); // `.`
         if (!at(lex::TokenKind::RBracket) && !atEnd() && !bailedOut_) {
           parseExpr();
         }
+        expect(lex::TokenKind::RBracket);
+        expr = index.complete(SyntaxKind::SliceExpr);
+      } else {
+        parseExpr();
+        if (at(lex::TokenKind::Dot) && nth(1) == lex::TokenKind::Dot) {
+          bump(); // `.`
+          bump(); // `.`
+          // `a[l..r]` and `a[l..]`: the second bound is optional, and its absence
+          // is written, not inferred -- `a[l..]` and `a[l]` are different
+          // programmes and the `..` is what says which one was typed.
+          if (!at(lex::TokenKind::RBracket) && !atEnd() && !bailedOut_) {
+            parseExpr();
+          }
+          expect(lex::TokenKind::RBracket);
+          expr = index.complete(SyntaxKind::SliceExpr);
+        } else {
+          expect(lex::TokenKind::RBracket);
+          expr = index.complete(SyntaxKind::IndexExpr);
+        }
       }
-      expect(lex::TokenKind::RBracket);
-      expr = index.complete(SyntaxKind::IndexExpr);
     } else if (at(lex::TokenKind::PlusPlus) || at(lex::TokenKind::MinusMinus)) {
       Marker postfix = expr.precede();
       bump();
@@ -225,11 +238,24 @@ bool Parser::atTypedInitializer() const {
     return false;
   }
   const lex::TokenKind counted = nth(1);
-  if ((counted != lex::TokenKind::IntegerLiteral && counted != lex::TokenKind::Identifier) ||
-      nth(2) != lex::TokenKind::RBracket) {
+  // Three ways to open the group, and the third is the empty one: `[N]`, `[_]`,
+  // and `[]`. `[]i32{...}` is a *slice literal*, which the language does not have
+  // -- and reading it here is what makes that a sentence instead of a parse
+  // error: the constructor is built, and the type reader one stage down is the
+  // one that can say why a view has no literal (`slices.md` decision 7). A `[`
+  // followed by anything else is *not* this path, and stays the array reader's
+  // problem.
+  std::uint32_t i = 0;
+  if (counted == lex::TokenKind::RBracket) {
+    i = 2; // `[]`, closed as soon as it opened
+  } else if (counted == lex::TokenKind::IntegerLiteral || counted == lex::TokenKind::Identifier) {
+    if (nth(2) != lex::TokenKind::RBracket) {
+      return false;
+    }
+    i = 3;
+  } else {
     return false;
   }
-  std::uint32_t i = 3;
   while (true) {
     if (isTypeToken(nth(i))) {
       ++i;

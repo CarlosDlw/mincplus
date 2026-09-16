@@ -101,6 +101,33 @@ struct ItemTree {
   }
 };
 
+// The operands of a `SliceExpr`, split at the `..` that separates them.
+//
+// This is a function and not a field because the *source* is where the answer
+// is: `a[1..]` and `a[..1]` are the same shape -- one operand and a separator --
+// and only the separator's position says which bound was written. Counting
+// children would make them the same tree; splitting at the separator keeps them
+// two trees, which is what the reader typed and what a diagnostic has to name
+// (`slices.md` decision 8).
+//
+// A bound that was not written is `kInvalidAst`, and that is not a failure: it
+// is the form. `a[..]` has neither.
+struct SliceParts {
+  AstId base;
+  AstId begin;
+  AstId end;
+
+  [[nodiscard]] bool hasBase() const {
+    return base.valid();
+  }
+  [[nodiscard]] bool hasBegin() const {
+    return begin.valid();
+  }
+  [[nodiscard]] bool hasEnd() const {
+    return end.valid();
+  }
+};
+
 class LoweredFile {
 public:
   LoweredFile() = default;
@@ -140,6 +167,8 @@ public:
   // `kInvalidAst` when there is no child of that kind.
   [[nodiscard]] AstId childOfKind(AstId id, NodeKind kind) const;
   [[nodiscard]] std::vector<AstId> childrenOfKind(AstId id, NodeKind kind) const;
+  // The three operands of a `SliceExpr`, in the order the reader wrote them.
+  [[nodiscard]] SliceParts slicePartsOf(AstId id) const;
   // The interned spelling of a name-bearing node, as text.
   [[nodiscard]] std::string_view spellingOf(AstId id) const;
   [[nodiscard]] std::string_view spellingOf(const Node& node) const;

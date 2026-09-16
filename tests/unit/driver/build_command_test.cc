@@ -528,6 +528,79 @@ TEST(BuildCommandTest, ARotateCountIsTakenModuloTheWidth) {
   EXPECT_EQ(right.code, 1) << right.err;
 }
 
+// --- slices, as answers -------------------------------------------------------
+//
+// The view is the one feature whose *whole* meaning is aliasing: a slice that did
+// not reach the storage it names would still type-check, still lower, and still
+// pass every module assertion. So the proof is a program whose exit status
+// changes only if the write through the view landed on the array -- the same
+// argument the global-initializer tests make, made with a machine instead of a
+// sentence.
+TEST(BuildCommandTest, AWriteThroughAViewReachesTheArrayItViews) {
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  // `view[0]` is `table[2]`, and the exit status is `table[2]` -- so the answer is
+  // 30 only if the descriptor's first word is the address of the array's third
+  // element. A slice that copied its elements would return 3.
+  const Outcome aliased = runProgram(scratch, "view.mx",
+                                     "fn i32 main() {\n"
+                                     "  let table: [4]i32 = [1, 2, 3, 4];\n"
+                                     "  let view: []i32 = table[2..4];\n"
+                                     "  view[0] = 30;\n"
+                                     "  return table[2];\n"
+                                     "}\n");
+  if (aliased.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(aliased.code, 30) << aliased.err;
+
+  // ... and the *other* half, which is the one a value type would get wrong in
+  // the opposite direction: a view of a view indexes from its own start, so
+  // `inner[0]` is `table[3]` and not `table[2]`.
+  const Outcome composed = runProgram(scratch, "view2.mx",
+                                      "fn i32 main() {\n"
+                                      "  let table: [8]i32 = [1, 2, 3, 4, 5, 6, 7, 8];\n"
+                                      "  let mid: []i32 = table[2..6];\n"
+                                      "  let inner: []i32 = mid[1..3];\n"
+                                      "  mid[2] = 40;\n"
+                                      "  return inner[0] + inner[1];\n"
+                                      "}\n");
+  EXPECT_EQ(composed.code, 44) << composed.err;
+}
+
+TEST(BuildCommandTest, ASliceCrossesACallAsAValue) {
+  // Two words, by value: the callee sees the descriptor, so a slice *parameter*
+  // and a slice *return* both have to be the same shape on both sides. The exit
+  // status is read out of the returned view, and a return that lost its length or
+  // its pointer would be a different number (or a crash) rather than a wrong
+  // lookup.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  const Outcome crossed = runProgram(scratch, "cross.mx",
+                                     "fn []i32 tail(a: []i32) { return a[1..3]; }\n"
+                                     "fn i32 main() {\n"
+                                     "  let table: [4]i32 = [5, 6, 7, 8];\n"
+                                     "  return tail(table[..])[0];\n"
+                                     "}\n");
+  if (crossed.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(crossed.code, 6) << crossed.err;
+
+  // From a pointer, which is the unchecked form and the only one where the two
+  // bounds are both written: `p[1..3]` is `table[1]` and `table[2]`.
+  const Outcome fromPointer = runProgram(scratch, "ptr.mx",
+                                         "fn i32 sum(s: []i32) { return s[0] + s[1]; }\n"
+                                         "fn i32 main() {\n"
+                                         "  let table: [4]i32 = [5, 6, 7, 8];\n"
+                                         "  let p: *i32 = &table[0];\n"
+                                         "  return sum(p[1..3]);\n"
+                                         "}\n");
+  EXPECT_EQ(fromPointer.code, 13) << fromPointer.err;
+}
+
 TEST(BuildCommandTest, AChildThatDidNotExitIsNotAnExitStatus) {
   // Two platforms spell "the child died" differently, and the portable layer
   // documents one spelling. The rule is therefore pinned with the number each

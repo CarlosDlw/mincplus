@@ -37,6 +37,8 @@ std::string_view toString(TypeKind kind) {
     return "pointer";
   case TypeKind::Array:
     return "array";
+  case TypeKind::Slice:
+    return "slice";
   }
   return "unknown";
 }

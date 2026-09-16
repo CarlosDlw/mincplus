@@ -139,6 +139,9 @@ Value Lowering::lowerExpr(ast::AstId expr) {
   case ast::NodeKind::IndexExpr:
     result = lowerDerefOrIndex(expr);
     break;
+  case ast::NodeKind::SliceExpr:
+    result = lowerSlice(expr);
+    break;
   case ast::NodeKind::TypedInitializer:
   case ast::NodeKind::ArrayLiteral:
     result = lowerArrayInitializer(expr);
@@ -355,6 +358,32 @@ Place Lowering::lowerPlace(ast::AstId expr) {
       llvm::Value* address =
           builder_.CreateGEP(arrayType, basePlace.addr, {zero, index.v}, "index");
       return Place{address, types_.elementOf(basePlace.type)};
+    }
+    // `s[i]` on a **slice**: the descriptor is loaded, and the element is the
+    // first member walked by the index. A single-index `getelementptr` through the
+    // pointer word -- the pointer is already to elements, so there is no array for
+    // a leading zero to step over. The index's conversion is recorded by `sema`,
+    // the same as the two arms around this one.
+    if (types_.isSlice(typeOf(operands[0]))) {
+      const Value descriptor = lowerExpr(operands[0]);
+      if (descriptor.v == nullptr) {
+        return {};
+      }
+      const Value index = lowerOperand(expr, operands[1]);
+      if (index.v == nullptr) {
+        return {};
+      }
+      const sema::TypeId element = types_.elementOf(typeOf(operands[0]));
+      llvm::Type* elementType = llvmType(element);
+      if (elementType == nullptr) {
+        return {};
+      }
+      llvm::Value* data = builder_.CreateExtractValue(descriptor.v, {0}, "slice.ptr");
+      // A *plain* `getelementptr` here too: the view's length is a value this
+      // stage does not compare the index against, and `inbounds` would be a
+      // promise the language has not asked anyone to keep (`slices.md`).
+      llvm::Value* address = builder_.CreateGEP(elementType, data, {index.v}, "index");
+      return Place{address, element};
     }
     const Value base = lowerExpr(operands[0]);
     if (base.v == nullptr) {
@@ -724,6 +753,123 @@ Value Lowering::lowerArrayInitializer(ast::AstId expr) {
     built = builder_.CreateInsertValue(built, pieces[i], static_cast<unsigned>(i), "array");
   }
   return Value{built, type};
+}
+
+std::optional<std::pair<llvm::Value*, llvm::Value*>>
+Lowering::sliceRange(ast::AstId expr, const ast::SliceParts& parts) {
+  if (!parts.hasBase()) {
+    return std::nullopt;
+  }
+  const sema::TypeId baseType = typeOf(parts.base);
+  const bool array = types_.isArray(baseType);
+  const bool slice = types_.isSlice(baseType);
+  const sema::TypeId element =
+      array || slice ? types_.elementOf(baseType) : types_.pointeeOf(baseType);
+  llvm::Type* elementType = storageType(element);
+  if (elementType == nullptr) {
+    return std::nullopt;
+  }
+
+  // The base, as an address to walk from, plus -- when the *type* has one -- the
+  // extent a missing end takes. Three bases, three answers, and the only one
+  // whose extent is a number in the type is the array; a slice's is a word in
+  // the descriptor, and a pointer has none.
+  llvm::Value* from = nullptr;
+  // The descriptor, when the base is one, kept for the length below and read
+  // there and then -- a `a[1..3]` of a slice never needs the word, and extracting
+  // it eagerly would be a dead instruction in every such view.
+  llvm::Value* descriptor = nullptr;
+  // An array is the one base whose address is not the element address: the object
+  // is here, so its `getelementptr` has the two-index form the subscript uses --
+  // a leading zero for the object, then the bound into it. `a[..]` on a
+  // *parameter* is the same shape, because a parameter's storage is the pointer
+  // the caller passed.
+  llvm::Type* arrayType = nullptr;
+  if (array) {
+    const Place place = lowerPlace(parts.base);
+    if (place.addr == nullptr) {
+      return std::nullopt;
+    }
+    arrayType = storageType(place.type);
+    if (arrayType == nullptr) {
+      return std::nullopt;
+    }
+    from = place.addr;
+  } else if (slice) {
+    const Value base = lowerExpr(parts.base);
+    if (base.v == nullptr) {
+      return std::nullopt;
+    }
+    descriptor = base.v;
+    from = builder_.CreateExtractValue(descriptor, {0}, "slice.data");
+  } else {
+    const Value pointer = lowerExpr(parts.base);
+    if (pointer.v == nullptr) {
+      return std::nullopt;
+    }
+    from = pointer.v;
+  }
+
+  const Value begin = parts.hasBegin()
+                          ? convert(lowerOperand(expr, parts.begin), pointerIntType())
+                          : Value{llvm::ConstantInt::get(indexType(), 0), pointerIntType()};
+  if (begin.v == nullptr) {
+    return std::nullopt;
+  }
+  // A missing end is the extent the base has: the array's count, which is a
+  // constant in its type, or the slice's own length, which is the descriptor's
+  // second word. A pointer cannot get here -- `sema` refuses the half-written
+  // form, because there is no extent to take (`checkSlice`).
+  Value end;
+  if (parts.hasEnd()) {
+    end = convert(lowerOperand(expr, parts.end), pointerIntType());
+  } else if (array) {
+    end = Value{llvm::ConstantInt::get(indexType(), types_.countOf(baseType)), pointerIntType()};
+  } else if (descriptor != nullptr) {
+    end = Value{builder_.CreateExtractValue(descriptor, {1}, "slice.size"), pointerIntType()};
+  } else {
+    fatal(spanOf(expr), IRDiagnosticCode::Internal,
+          "a view of a pointer reached lowering with only one bound");
+    return std::nullopt;
+  }
+  if (end.v == nullptr) {
+    return std::nullopt;
+  }
+  // A plain `getelementptr` -- not `inbounds`: the view's extent is a value this
+  // stage does not compare the start against, and `ir.md`'s assumption list
+  // forbids an `inbounds` without a recorded proof.
+  llvm::Value* address = nullptr;
+  if (array) {
+    llvm::Value* zero = llvm::ConstantInt::get(indexType(), 0);
+    address = builder_.CreateGEP(arrayType, from, {zero, begin.v}, "slice.begin");
+  } else {
+    address = builder_.CreateGEP(elementType, from, {begin.v}, "slice.begin");
+  }
+  llvm::Value* length = builder_.CreateSub(end.v, begin.v, "slice.len");
+  return std::make_pair(address, length);
+}
+
+Value Lowering::lowerSlice(ast::AstId expr) {
+  // The descriptor, built as a value: no `alloca`, no load. It is two words and
+  // it crosses a call as itself (`byReference`), so materialising it as storage
+  // first would be a second copy of something the ABI already passes whole
+  // (`slices.md` decision 17).
+  const ast::SliceParts parts = file_.slicePartsOf(expr);
+  const std::optional<std::pair<llvm::Value*, llvm::Value*>> range = sliceRange(expr, parts);
+  if (!range.has_value()) {
+    return {};
+  }
+  llvm::Type* shape = llvmType(typeOf(expr));
+  if (shape == nullptr) {
+    return {};
+  }
+  // `insertvalue` from a poison whole, the same shape the array initializer uses
+  // and for the same reason: it stays a *value*, and LLVM folds the chain into a
+  // constant the moment both operands are ones.
+  llvm::Value* descriptor = llvm::PoisonValue::get(shape);
+  descriptor = builder_.CreateInsertValue(descriptor, range->first, {0}, "slice.ptr.value");
+  descriptor = builder_.CreateInsertValue(descriptor, range->second, {1}, "slice.len.value");
+  return Value{descriptor, typeOf(expr)};
 }
 
 Value Lowering::lowerDerefOrIndex(ast::AstId expr) {
@@ -1117,7 +1263,7 @@ Value Lowering::lowerCall(ast::AstId expr) {
       // which is a licence it earns and not one this stage grants (no `byval`, no
       // `readonly`, `noalias` or `nocapture` attribute is emitted here).
       const sema::TypeId paramType = index < params.size() ? params[index] : sema::kInvalidType;
-      if (types_.isAggregate(paramType)) {
+      if (byReference(paramType)) {
         llvm::AllocaInst* copy = argumentCopy(paramType, value, argument);
         if (copy == nullptr) {
           return {};
@@ -1136,7 +1282,7 @@ Value Lowering::lowerCall(ast::AstId expr) {
   // the load is what turns "storage" into "value", which is the same pair of
   // steps every object-to-value move in this stage takes.
   const sema::TypeId returned = typeOf(expr);
-  if (types_.isAggregate(returned)) {
+  if (byReference(returned)) {
     llvm::Type* slotType = storageType(returned);
     if (slotType == nullptr) {
       return {};

@@ -25,6 +25,9 @@ optimizer's imagination:
   never one the program did not state.
 - **A pointer is an address with a provenance.** Not an integer that is secretly
   an address, and with no type-based aliasing rule to trip over.
+- **An array is an object and a slice is a view.** `[4]i32` *holds* its elements
+  and copies them; `[]i32` names somebody else's and copies two words. Neither
+  decays into the other, so `sizeof` cannot start lying about a parameter.
 - **Mistakes are errors, not warnings.** Reading a binding that was never
   assigned, and a non-`void` function that can reach its end without returning,
   both fail to compile.
@@ -101,10 +104,10 @@ only the reporting libraries and the driver turn those into text and an exit
 code. The stage order is stated once, in
 [`docs/architecture.md`](docs/architecture.md#the-pipeline).
 
-What is not there yet is the *surface*: arrays, `struct`/`union`/`enum`, casts,
-`sizeof`, `switch`, file-scope bindings, and C interoperability beyond
-declarations. Generics, slices and function pointers are open questions rather
-than planned work.
+What is not there yet is the *surface*: `struct`/`union`/`enum`, casts, `sizeof`,
+`switch`, and C interoperability beyond declarations — plus `len(x)`, the one
+thing a slice still lacks. Generics and function pointers are open questions
+rather than planned work.
 
 - **[Feature checklist](website/docs/language/features.md)** — the whole
   language in one page: what is **decided**, what is **planned**, what is still
