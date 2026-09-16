@@ -46,6 +46,13 @@ namespace {
   return out;
 }
 
+// A constant as the *program* wrote it, for a message that has to name it: the
+// decimal value signed as its own type reads it, exactly as a diagnostic would
+// have to say it out loud.
+[[nodiscard]] std::string constantSpelling(support::ConstInt value) {
+  return value.isUnsigned ? std::to_string(value.bits) : std::to_string(value.signedValue());
+}
+
 // Why a character literal is not a `char`, in the language's own terms: a `char`
 // is one byte (README, *Types*), so a literal of more than one code unit, or
 // whose one unit is above a byte, is refused with the two spellings that *do*
@@ -563,6 +570,37 @@ TypeId Checker::checkCast(ast::AstId expr, ExprInfo& info) {
     if (!cast.message.empty()) {
       error(expr, SemaErrorCode::CastInvalid, cast.message);
     }
+    info.isConstant = false;
+    return kTypeError;
+  }
+
+  // **An address cannot come from a constant, not even zero.**
+  // `with_exposed_provenance` is a named operation, and naming an address is an
+  // assertion about *where the value came from*: an address is obtained -- from an
+  // object (`&x`), from a pointer whose provenance was exposed, or from the system
+  // (`mmap`, a table) -- and a constant is a number the program never obtained.
+  // The null address is not an exception to that, because it has a spelling of its
+  // own (`null`), and `0 as *T` is `inttoptr` of a zero: a pointer with permission
+  // over *every* exposed allocation, which is the opposite of what a reader
+  // writing `null` means (`casts.md`, decision 11b).
+  //
+  // This is `casts.md` decision 8's shape applied to the other join: the compiler
+  // can *see* the value, so it refuses instead of emitting a program whose first
+  // access crashes with no sentence anywhere -- which is what `let x = (str)1;
+  // printf(x);` did. A value is never refused, however it was arrived at:
+  // `memory.md`'s answer to "where did this come from" is to count the operation
+  // (`-Wprovenance`), not to guess.
+  if (cast.kind == CastKind::IntegerToPointer && operandFacts.isConstant &&
+      operandFacts.hasIntValue) {
+    const bool toIsStr = to == kTypeStr;
+    error(expr, SemaErrorCode::AddressFromConstant,
+          "an address cannot come from a constant: nothing in this program obtained " +
+              constantSpelling(operandFacts.value) +
+              ". An address comes from an object (`&x`), from a pointer that was exposed "
+              "(`p as usize`, and that value cast back), or from the system; the null "
+              "address is " +
+              (toIsStr ? std::string("`null as str`, because a `str` is not a `*void`")
+                       : std::string("`null`")));
     info.isConstant = false;
     return kTypeError;
   }

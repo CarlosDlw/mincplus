@@ -189,6 +189,23 @@ let p2: *u8 = addr as *u8;      // with_exposed_provenance(addr)
 `-Wprovenance` names every such site, because an access through the result is
 defined only for an allocation whose provenance has been exposed.
 
+**An address cannot come from a constant — not even zero.** Naming an address is
+an assertion about where the value came from, and a constant is a number the
+program never obtained:
+
+```console
+$ printf 'fn i32 main() { let x = (str)1; return 0; }\n' | mincc check -
+<stdin>:1:30: error[sema-address-from-constant]: an address cannot come from a constant: nothing in this program obtained 1. An address comes from an object (`&x`), from a pointer that was exposed (`p as usize`, and that value cast back), or from the system; the null address is `null as str`, because a `str` is not a `*void`
+  fn i32 main() { let x = (str)1; return 0; }
+                               ^^^^^^
+```
+
+A *value* is never refused, however it was arrived at — a parameter, a load, a
+name whose value the compiler cannot see, or an `expose`d pointer cast back. The
+one address that needs no obtaining has a spelling of its own: `null` for a `*T`,
+and `null as str` for a `str` (a `str` is not a `*void`, so it does not take
+`null` directly).
+
 ### What a cast may lose
 
 `-Wcast`, off by default, reports each cast whose result may not be the value
@@ -228,6 +245,7 @@ Each refusal says what to write instead:
 | `x as fn(...)` | expected a type after `as` — a function type is not a type this language has yet |
 | `1.5u` | a float literal cannot have the integer suffix `u`: `(u32)1.5`, or `1.5 as u32` |
 | `10wb` | `wb` names a C23 bit-precise integer, and this language has no such type: write `i64` (or `i128`) |
+| `1 as *u8`, `(str)1`, `0 as *i32` | an address cannot come from a constant: nothing in the program obtained it. An address comes from an object (`&x`), from an `expose`d pointer cast back, or from the system — and `0` is not an exception, because the null address is `null` (`null as str` for a `str`) |
 
 Two of those are worth reading twice. `"abc" as u8` is **not** on the list:
 `str` is a pointer, and pointer → integer is the `expose` row, so the cast is

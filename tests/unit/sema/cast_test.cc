@@ -518,6 +518,64 @@ TEST(CastTest, WCastNamesTheLossAndIsOffByDefault) {
   }
 }
 
+// An address is *obtained*, and the compiler can see when it was not. The refusal
+// is the same shape as the float constant that cannot fit (decision 8): a value
+// the compiler knows is a value it can refuse, and a *value* -- however it was
+// arrived at -- is never refused, because counting the operation is the model's
+// answer to "where did this come from" (`casts.md`, decision 11b).
+TEST(CastTest, AnAddressCannotComeFromAConstant) {
+  struct Case {
+    const char* source;
+    const char* nullSpelling;
+  };
+  // Every spelling of a constant address reaches the one code: a literal, a
+  // folded expression, a `const` name, a negative number, and zero -- which is
+  // not an exception, because the null address has a spelling of its own.
+  const Case refused[] = {
+      {"fn i32 main() { let p: *i32 = 1 as *i32; return 0; }\n", "`null`"},
+      {"fn i32 main() { let p: *i32 = 0 as *i32; return 0; }\n", "`null`"},
+      {"fn i32 main() { let p: *i32 = (1 + 1) as *i32; return 0; }\n", "`null`"},
+      {"fn i32 main() { let p: *i32 = -1 as *i32; return 0; }\n", "`null`"},
+      {"const n: usize = 4096;\nfn i32 main() { let p: *u8 = n as *u8; return 0; }\n", "`null`"},
+      // A `str` is not a `*void`, so its null spelling is a cast of one -- and the
+      // sentence says so rather than sending the reader to a spelling that does
+      // not compile.
+      {"fn i32 main() { let s: str = (str)1; return 0; }\n", "`null as str`"},
+      {"fn i32 main() { let s: str = 0 as str; return 0; }\n", "`null as str`"},
+  };
+  for (const Case& testCase : refused) {
+    test::SemaFixture f;
+    f.source(testCase.source);
+    ASSERT_TRUE(f.build());
+    ASSERT_TRUE(f.hasError("sema-address-from-constant")) << f.dump();
+    EXPECT_EQ(f.errorCount(), 1u) << f.dump();
+    const sema::SemaError& error = f.firstError();
+    // One sentence, and it names the null spelling *this* target type takes.
+    EXPECT_NE(error.message.find(testCase.nullSpelling), std::string::npos) << error.message;
+    EXPECT_NE(error.message.find("nothing in this program obtained"), std::string::npos)
+        << error.message;
+  }
+
+  // Values are not refused: an object's address, an exposed pointer cast back, an
+  // integer that came from somewhere the compiler cannot see, and the null address
+  // in its own spelling -- for both a `*T` and a `str`.
+  const char* const accepted[] = {
+      "fn i32 main() { let x: i32 = 1; let p: *i32 = &x; return 0; }\n",
+      "fn i32 main() { let x: i32 = 1; let p: *i32 = &x; let a = p as usize;\n"
+      "  let q: *i32 = a as *i32; return 0; }\n",
+      "fn i32 main(a: usize) { let p: *u8 = a as *u8; return 0; }\n",
+      "extern fn usize getenv(s: str);\nfn i32 main() { let n = getenv(\"X\");\n"
+      "  let p: *u8 = n as *u8; return 0; }\n",
+      "fn i32 main() { let p: *i32 = null; let s: str = null as str; return 0; }\n",
+  };
+  for (const char* source : accepted) {
+    test::SemaFixture f;
+    f.source(source);
+    ASSERT_TRUE(f.build());
+    EXPECT_EQ(f.errorCount(), 0u) << f.dump();
+  }
+}
+
 TEST(CastTest, AProvenanceCastIsCountedAndIsNotAWarningAboutAccuracy) {
   // `*i32 → usize` is `expose`, and the count is `-Wprovenance`, not `-Wcast`:
   // the two are different claims (one says "this address escapes to an integer"

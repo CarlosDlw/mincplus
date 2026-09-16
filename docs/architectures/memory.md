@@ -835,7 +835,7 @@ Same standard as `ir.md`'s five rules: mechanical, not "be careful".
 | 4 | **Objects are allocations**, each stack binding its own | It is what makes two adjacent locals non-aliasing, which is the basis of every optimization |
 | 5 | **Access is `[p, p+S) ⊆ a live object that `p`'s provenance covers`** | The single rule from which the rest follows; it is also LLVM's own |
 | 6 | **A pointer is address + provenance**, and provenance never grows | Without it, `p + n` would be "whatever is at that address", which is the C position this document refuses |
-| 7 | **`ptr → int` and `int → ptr` are named operations**, never implicit | They are where provenance is lost; naming them is what makes the loss auditable, and it is what a capability target needs |
+| 7 | **`ptr → int` and `int → ptr` are named operations**, never implicit — and the `int → ptr` name takes a **value**, never a constant | They are where provenance is lost; naming them is what makes the loss auditable, and it is what a capability target needs. The constant half is the same rule seen from the other side: naming an address asserts where it came from, and a constant came from nowhere — so `1 as *u8` is refused and `null` is the address that needs no obtaining (`casts.md`, decision 11b) |
 | 8 | **No `unsafe` keyword**; the counted operations are what a reader audits | The language is unchecked everywhere, so a keyword would gate nothing; `-Wprovenance` counts instead |
 | 9 | **No TBAA, ever**, and no `noalias` except a written annotation | An inferred `noalias` is the classic silent miscompile; the history of the attribute is the evidence |
 | 10 | **No `inbounds` unless proved**, the analogue of no-`nsw` | A promise the compiler did not prove is a licence to change a correct program |

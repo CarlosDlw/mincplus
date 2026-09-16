@@ -223,6 +223,7 @@ type and **one** string type, and `'a'u8` says nothing that `'a' as u8` does not
 | 10 | **Adjacent: `11` and `12c` do not exist; `bool` ↔ integer is explicit; float → `bool` is refused** | `int → bool` is defined (≠ 0) and useful; `float → bool` has NaN, which is neither true nor false, and the sentence sends the reader to `x != 0.0` |
 | 11 | **Pointer ↔ pointer emits nothing**; pointer ↔ integer *is* `expose`/`with_exposed_provenance` and is counted by `-Wprovenance` | `memory.md` decision 7 says the two joins are named operations and never implicit; a cast is the name. Opaque pointers make the pointer-to-pointer case a *type* change with no instruction at all |
 | 11a | **The two joins have different losses, and they are read from the target**: `ptrtoint` truncates when the integer is narrower; `inttoptr` truncates when it is *wider*, and reinterpret a **signed** narrower integer's sign because it zero-extends | The first implementation mirrored one rule into the other, so `u8 → *u8` claimed "bits are dropped" and `u128 → *u8` said nothing. `ztests` is where it surfaced. The widths come from `target().pointerBits`, so `i32 → *u8` is a sign loss on x86_64 and nothing at all on i386 — a rule that cannot be written without the target |
+| 11b | **An `int → ptr` conversion from a *constant* is refused**, zero included (`sema-address-from-constant`) | Naming an address is an assertion about *where the value came from*: an address is obtained — from an object (`&x`), from an exposed pointer, or from the system — and a constant is a number the program never obtained. It is decision 8's shape on the other join: the compiler can *see* the value, so it refuses instead of emitting a program whose first access crashes with no sentence anywhere. `let x = (str)1; printf(x);` passed `check`, built, and died of SIGSEGV — a failure with no diagnostic is the one outcome this project does not allow. Zero is not an exception because the null address has a spelling of its own (`null`), and `0 as *T` is `inttoptr` of a zero: permission over *every* exposed allocation, which is not what a reader writing `null` means. A **value** is never refused, however it was arrived at: `memory.md`'s answer to "where did this come from" is to *count* the operation (`-Wprovenance`), not to guess. What the refusal does not break: MMIO and fixed addresses stay writable through a value the program obtained (`mmap`, a table, a parameter), which is how a portable program gets one anyway |
 | 12 | **No reinterpretation in a cast.** `x as i32` on an `f32` is a *value* conversion; the bits are a name of their own, reserved for that item (`bitcast`/`transmute`) | This is C++'s `reinterpret_cast`/`bit_cast` split and Zig's `@bitCast`: the one operation where "convert" and "reinterpret" cannot share a spelling |
 | 13 | **Aggregates are refused, each with the sentence that says what to write** | `[N]T` → `*T` is no decay (arrays.md decision 4) and the workaround is `&a[0]`; a slice → pointer needs the extent, and there is no literal slice (`slices.md`, decision 4) |
 | 14 | **A cast that the language would have done implicitly emits nothing** | A cast is a *statement about the program*, not an instruction: `let x: i64 = a as i64;` is one conversion in the record, and the flag-and-materialiser produce the same code it always did |
@@ -253,7 +254,7 @@ instruction.
 | `*T` → `*U`, `*T` ↔ `*void` | *nothing* | defined | opaque pointers: a pointer cast is a type change. `*void` already converts implicitly |
 | `str` ↔ `*u8` | *nothing* | defined | the *sentinel* is a documented obligation, not a type: `str → *u8` drops the guarantee that the bytes are terminated, `*u8 → str` asserts it |
 | `*T`/`str`/`*void` → integer | `ptrtoint` | defined | `memory.md`'s `expose`: the value is the address, and provenance is recorded as *exposed*. Counted by `-Wprovenance`; `-Wcast: truncation` when the integer is narrower than the pointer |
-| integer → `*T`/`*void`/`str` | `inttoptr` | defined | `memory.md`'s `with_exposed_provenance`: permission over every allocation whose provenance has been exposed, and no other. Counted by `-Wprovenance`. **Not the mirror of the row above**: `-Wcast: truncation` when the integer is *wider* than the pointer (the low bits are kept), and `-Wcast: sign` when it is a **signed** integer *narrower* than it — `inttoptr` zero-extends, so `-1 as *u8` is `0x0000_0000_FFFF_FFFF` on a 64-bit target, measured and not assumed |
+| integer → `*T`/`*void`/`str` | `inttoptr` | defined | `memory.md`'s `with_exposed_provenance`: permission over every allocation whose provenance has been exposed, and no other. Counted by `-Wprovenance`. **Not the mirror of the row above**: `-Wcast: truncation` when the integer is *wider* than the pointer (the low bits are kept), and `-Wcast: sign` when it is a **signed** integer *narrower* than it — `inttoptr` zero-extends, so `-1 as *u8` is `0x0000_0000_FFFF_FFFF` on a 64-bit target, measured and not assumed. **A constant operand never reaches this row**: it is refused (11b), because the compiler can see that the program never obtained the address |
 | `!` → anything | *nothing* | defined | the operand never produces a value, so the conversion is vacuous — the rule `never.md` already ships |
 | `[N]T`, `[]T`, a function, `void` → anything | — | **refused** | § below |
 
@@ -313,11 +314,12 @@ which is the mechanism `memory.md` chose instead of an `unsafe` keyword. The
 diagnostic's text uses the model's own words (*expose*, *with exposed
 provenance*), so a reader who finds the operation here can read the rule there.
 
-The one thing that is *not* this record's: **how a null pointer is written**. A
-cast from a literal zero (`0 as *u8`) is `inttoptr` and means "provenance over
-everything exposed", which is the opposite of what a user writing `null` means; the
-spelling of a null pointer is its own item, and this record leaves the space for
-it rather than filling it with a conversion that happens to work.
+**The literal-zero case is now decided, and the space is filled.** `null` exists
+and is a `*void`, so a cast from a literal zero (`0 as *u8`) is `inttoptr` and
+means "provenance over everything exposed" — the opposite of what a reader writing
+`null` means. So it is refused, together with every other constant, by decision
+11b below, and the sentence names `null` (`null as str` where the target is a
+`str`, which is not a `*void`).
 
 ## What is refused, and the sentence that replaces it
 
@@ -334,6 +336,7 @@ around. Each of these is a named code with a sentence:
 | `x as void`, `x as fn(...)` | `void` is the absence of a value and a function type is not an object |
 | `1.5u` | a float literal cannot have an integer suffix: `(u32)1.5`, or `1.5 as u32` |
 | `10wb` | C23's bit-precise suffix has no type here: use `i64` (or `i128`) |
+| `1 as *u8`, `0 as *i32`, `(str)1` | an address cannot come from a constant: nothing in the program obtained it. Write `&x` for an object, cast an **exposed** value back for an address that came from somewhere, or `null` for the null address (`null as str` when the target is a `str`, which is not a `*void`) |
 
 `(i32)` with no operand is not a cast at all — it is a parenthesized type name,
 and the diagnostic is "a type is not a value; did you mean to cast?" rather than
@@ -450,6 +453,13 @@ Each step is a commit that passes the gates on its own; steps 1–4 are the surf
   directions. Their *losses* are pinned per target: `i32 → *u8` is `sign` on
   x86_64 and nothing on i386, and `u128 → *u8` is `truncation` on both — the pair
   of answers a rule written as one mirror image gets wrong.
+- **A constant address is refused, and a value is not.** `cast_test.cc` walks one
+  case per spelling of a constant (a literal, zero, a folded expression, a `const`
+  name, a negative number) and asserts the same code and the same sentence for
+  each, including the null spelling the *target* type takes (`null` for a `*T`,
+  `null as str` for a `str`); then it asserts that an object's address, an
+  `expose`d pointer cast back, a parameter, and a value from an `extern` call are
+  all accepted, because a value is where the address came from.
 - **Regression on the ambiguity.** `(x) + 1` for a variable `x`, `(i32)-1`,
   `(u8)(i32)1`, `f((i32)1)` and `(a)(b)` (a call of a parenthesized name) each
   parse to the tree they are supposed to, which is the test C's typedef rule would

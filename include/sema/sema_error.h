@@ -210,6 +210,11 @@ enum class SemaErrorCode : std::uint8_t {
   // a warning about *where*, not about *how much* -- a 64-bit pointer into a
   // `usize` loses nothing and is still a site the model wants counted.
   ProvenanceCast,
+  // An `int -> ptr` conversion **from a constant that is not zero**: the program
+  // never obtained that address. `with_exposed_provenance` is a named operation,
+  // and naming an address is an assertion about where the value came from -- which
+  // a constant cannot make (`casts.md`, decision 11b).
+  AddressFromConstant,
 };
 
 struct SemaErrorCodeInfo {

@@ -116,6 +116,7 @@ $ printf 'fn i32 f(p: *void) { return *p; }\n' | mincc check -
 ```minc
 let empty: *i32 = null;
 let alsoEmpty: *void = null;
+let noString: str = null as str;   // a `str` is not a `*void`, so it takes a cast
 
 if p == null
 {
@@ -123,8 +124,9 @@ if p == null
 }
 ```
 
-There is no integer zero that means an address. `p == 0` is refused, and the
-refusal explains that a pointer is not an integer — see below.
+There is no integer zero that means an address. `p == 0` is refused, and so is
+`0 as *i32`: the refusal explains that a pointer is not an integer, and that the
+null address is spelled `null` — see below.
 
 ## Arithmetic and indexing
 
@@ -183,6 +185,15 @@ let addr: usize = p as usize;   // expose(p)
 let p2: *u8 = addr as *u8;      // with_exposed_provenance(addr)
 let p3: *u8 = (*u8)p;           // the same two lines, spelled C's way
 ```
+
+**The integer has to have come from somewhere.** `addr` above is a value — a
+parameter, a load, a name the compiler cannot see through — and that is the point:
+an address is *obtained* (from an object, from an `expose`d pointer, or from the
+system), and a constant is a number the program never obtained. `1 as *u8` and
+`0 as *u8` are both `sema-address-from-constant`, and the sentence names the
+spellings that do mean what a reader meant: `&x`, an exposed pointer cast back,
+or `null` (see [`null`](#null)). A value is never refused, however it was arrived
+at.
 
 Both are counted by `-Wprovenance`, whose sentence is the model's own: the
 address is defined, and an access through it is defined only for an allocation

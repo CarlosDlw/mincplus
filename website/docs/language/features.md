@@ -249,7 +249,9 @@ Everything below is what lands on top of that model. See
 - [x] Pointer to integer and integer to pointer, sized by `usize`/`isize`. They
       are **cast-only** (`p as usize`, `addr as *u8`), because that cast *is* the
       model's `expose` / `with_exposed_provenance`: never implicit, and counted
-      by `-Wprovenance`
+      by `-Wprovenance`. The integer side must be a **value**: a constant address
+      is `sema-address-from-constant` (zero included — the null address is
+      spelled `null`, or `null as str` for a `str`)
 - [x] Reinterpret cast between pointer types (`p as *u8`): with opaque pointers a
       type change and no instruction at all
 - [x] `*void` to and from any object pointer, **implicit in both directions**

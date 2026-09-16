@@ -253,7 +253,10 @@ typed AST view on top.
       ([`architectures/casts.md`](architectures/casts.md)): the grammar, the
       matrix, the lowering, the flags (`-Wcast`, `-Wprovenance`) and the tests
       that walk every ordered pair of the type universe are in, and
-      `examples/017_casts.mx` is the runnable page
+      `examples/017_casts.mx` is the runnable page. An `int → ptr` cast takes a
+      **value, never a constant** (`sema-address-from-constant`, zero included):
+      an address is obtained from an object, an `expose`d pointer, or the system,
+      and the null address is `null` (`null as str` for a `str`)
 - [ ] Generated typed AST layer, once the node count justifies the generator
 - [ ] Reserved syntax kinds for macro calls, token trees, and attributes
 - [ ] Grammar documented next to the code it implements
