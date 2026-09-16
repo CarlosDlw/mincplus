@@ -18,7 +18,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install toolchain (Linux)
         if: runner.os == 'Linux'
@@ -43,7 +43,7 @@ jobs:
       # means a run always starts from the most recent cache for its platform;
       # only the process-cache is reused, never the configure step.
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/ccache
@@ -90,7 +90,7 @@ jobs:
       # development tree is at `/mingw64`.
       MINC_LLVM_ROOT: /mingw64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -111,7 +111,7 @@ jobs:
           cmake --version | head -1
 
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-windows-${{ github.sha }}
@@ -130,7 +130,7 @@ jobs:
     name: sanitize (ubuntu, ASan + UBSan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install toolchain
         run: |
@@ -142,7 +142,7 @@ jobs:
       # A separate cache from the `ci` job: the sanitizer build compiles with
       # different flags, so its objects cannot be shared with the plain one.
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-sanitize-${{ github.sha }}
@@ -158,7 +158,7 @@ jobs:
     name: format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The formatter comes from the pinned LLVM release and not from the
       # distribution, and that is the whole point of this job: `clang-format`
       # changes its mind between majors, so a tree that is clean under 22 is not
@@ -178,8 +178,8 @@ jobs:
     name: docs (Docusaurus build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -203,7 +203,7 @@ jobs:
     name: clang-tidy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install toolchain
         run: |
           sudo apt-get update
