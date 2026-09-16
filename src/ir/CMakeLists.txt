@@ -27,6 +27,7 @@ minc_add_library(minc_ir
     expr.cc
     builtins.cc
     runtime.cc
+    checks.cc
     invariants.cc
     dump.cc
   DEPS minc_ast minc_builtins minc_resolve minc_sema minc_intern minc_span minc_consteval

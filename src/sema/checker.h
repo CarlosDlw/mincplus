@@ -211,11 +211,13 @@ private:
   // the binding between the record and the node the lowering stands on is the
   // identity and not a search.
   //
-  // `extent` is the count of the object the place is inside, or 0 for "not
-  // known" -- a `*p` and a subscript through a pointer have no number to give,
-  // and a subscript of a named array has the type's (`arrays.md` decision 26).
+  // `extent` and `extentKind` are the half of the obligation the checked build's
+  // bounds guard reads: `Count` with the type's number for a subscript of a named
+  // array (`arrays.md` decision 26), `Length` for a subscript of a slice, whose
+  // number is a word in the descriptor, and `Unknown` for a `*p` or a subscript
+  // through a pointer, which have no number to give (`checks.md`).
   void recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance,
-                    std::uint64_t extent = 0);
+                    std::uint64_t extent = 0, ExtentKind extentKind = ExtentKind::Unknown);
   // The provenance of an array subscript, which is not `provenanceOf`'s
   // question: `provenanceOf` asks what allocation a *pointer value* came from,
   // and an array is not a pointer value. This asks what allocation the *place*

@@ -47,6 +47,20 @@ constexpr std::array<ProvenanceKindInfo, 2> kProvenanceKindInfos{{
     {ProvenanceKind::Object, "object"},
     {ProvenanceKind::Foreign, "foreign"},
 }};
+
+// The three extents, in the order a reader asks about them: nothing, a count in
+// a type, a length in a descriptor. The names are the words the lowering and the
+// dumps use, and the third one exists because a slice's bounds check compares
+// against a value -- the first draft had only the first two, which left `s[i]`
+// unchecked while `a[i]` on a four-element array was checked (`checks.md`).
+// The first row is spelled `none` and **not** `unknown`: `toString` answers
+// `"unknown"` for a kind that has no row, so a row named after the fallback would
+// make "the table has a problem" and "this access has no extent" the same string.
+constexpr std::array<ExtentKindInfo, 3> kExtentKindInfos{{
+    {ExtentKind::Unknown, "none"},
+    {ExtentKind::Count, "count"},
+    {ExtentKind::Length, "length"},
+}};
 // NOLINTEND(readability-identifier-naming)
 
 template <std::size_t... Indexes>
@@ -59,10 +73,17 @@ template <std::size_t... Indexes>
   return std::array<ProvenanceKind, sizeof...(Indexes)>{kProvenanceKindInfos[Indexes].kind...};
 }
 
+template <std::size_t... Indexes>
+[[nodiscard]] constexpr auto extentKindsFromTable(std::index_sequence<Indexes...>) {
+  return std::array<ExtentKind, sizeof...(Indexes)>{kExtentKindInfos[Indexes].kind...};
+}
+
 constexpr auto kAllAccessKinds =
     accessKindsFromTable(std::make_index_sequence<kAccessKindInfos.size()>{});
 constexpr auto kAllProvenanceKinds =
     provenanceKindsFromTable(std::make_index_sequence<kProvenanceKindInfos.size()>{});
+constexpr auto kAllExtentKinds =
+    extentKindsFromTable(std::make_index_sequence<kExtentKindInfos.size()>{});
 
 } // namespace
 
@@ -93,6 +114,23 @@ std::span<const ProvenanceKind> allProvenanceKinds() {
 
 std::string_view toString(ProvenanceKind kind) {
   for (const ProvenanceKindInfo& info : kProvenanceKindInfos) {
+    if (info.kind == kind) {
+      return info.name;
+    }
+  }
+  return "unknown";
+}
+
+std::span<const ExtentKindInfo> extentKindInfos() {
+  return kExtentKindInfos;
+}
+
+std::span<const ExtentKind> allExtentKinds() {
+  return kAllExtentKinds;
+}
+
+std::string_view toString(ExtentKind kind) {
+  for (const ExtentKindInfo& info : kExtentKindInfos) {
     if (info.kind == kind) {
       return info.name;
     }
@@ -200,7 +238,7 @@ ProvenanceKind Checker::arrayProvenanceOf(ast::AstId base) const {
 }
 
 void Checker::recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance,
-                           std::uint64_t extent) {
+                           std::uint64_t extent, ExtentKind extentKind) {
   if (!place.valid() || !type.valid()) {
     return;
   }
@@ -211,7 +249,8 @@ void Checker::recordAccess(ast::AstId place, TypeId type, ProvenanceKind provena
   if (types_.isError(type) || types_.isVoid(type)) {
     return;
   }
-  out_.typed.addAccess(AccessObligation{place, type, AccessKind::Ordinary, provenance, extent});
+  out_.typed.addAccess(
+      AccessObligation{place, type, AccessKind::Ordinary, provenance, extent, extentKind});
 }
 
 } // namespace minc::sema

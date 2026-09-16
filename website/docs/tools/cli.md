@@ -201,6 +201,14 @@ the type checker recorded.
 | Option | Effect |
 | --- | --- |
 | `-g` | emit debug information into the module |
+| `-fcheck` | emit the checked build's guards (on by default, because this command prints the module a `-O0` build emits) |
+| `-fno-check` | print the module without them |
+
+The guards are the memory model's diagnostic half: every access through a pointer
+is tested against null, against the alignment its type requires, and — where the
+record has an extent — against an index outside it. `mincc ir -fcheck` is how a
+trap you saw in a running program is read back as the blocks and the message that
+produced it ([the checked build](/language/memory-model#what-a-checked-build-reports)).
 
 ## `mincc build`
 
@@ -215,6 +223,8 @@ runtime and the platform's linker flags are knowledge a C toolchain already has.
 | `-O [LEVEL]` | `-O0`..`-O3`, `-Os`, `-Oz`. A bare `-O` is `-O1`, and the level is never taken from the next argument |
 | `--emit KIND` | `exe` (default), `obj`, or `asm` |
 | `-g` | emit debug information (DWARF on ELF and Mach-O, CodeView on PE) |
+| `-fcheck` | guard every access through a pointer — null, alignment, and bounds — and print the site of the one that fails. On at `-O0`, which is the build a program is developed with |
+| `-fno-check` | no guards, even at `-O0`: for a program whose invariants live in a language the compiler cannot see |
 | `-v` | print the commands the build runs — the first thing to look at after a link failure |
 | `-L DIR` | add a directory to the linker driver's search list |
 | `-l NAME` | link with a library. Order is meaning, so libraries reach the driver in the order written, after the objects |

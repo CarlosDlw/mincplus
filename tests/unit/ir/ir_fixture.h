@@ -67,6 +67,14 @@ public:
     lowering_.producer = std::move(text);
     return *this;
   }
+  // The checked build. Off by default, like every other option here, so a test
+  // that does not ask for the guards keeps measuring the module it was written
+  // against -- and so that `checks.cpp`'s absence from a module is a thing the
+  // suite asserts rather than assumes.
+  IrFixture& checks(bool on = true) {
+    lowering_.checks = on;
+    return *this;
+  }
   // Hands the lowering no source file at all. The driver always has one, so this
   // exists to prove the *refusal* rather than to model a real invocation: `-g`
   // with nothing to point a line table at is a caller bug, and the lowering says
@@ -106,6 +114,10 @@ public:
     if (!withoutSource_) {
       lowering_.source = session_.sources().find(lowerLoweredFile_);
     }
+    // The guard messages name the file an access is written in, which for a unit
+    // is the file itself and for an included header is the header: the same
+    // `SourceManager` a real build hands over, and never a copy the fixture made.
+    lowering_.sources = &session_.sources();
     if (lowering_.producer.empty()) {
       lowering_.producer = "minc+ test";
     }
@@ -156,10 +168,17 @@ public:
   // The number of rules in `ir.md`'s assumption list that the module violates.
   // Zero for every program this compiler accepts.
   [[nodiscard]] std::size_t violations() const {
-    return ir::scanModule(result_.module).size();
+    return ir::scanModule(result_.module, scanOptions()).size();
   }
   [[nodiscard]] std::vector<ir::IRDiagnostic> scan() const {
-    return ir::scanModule(result_.module);
+    return ir::scanModule(result_.module, scanOptions());
+  }
+  // What the scan is told about how the module was built: the same answer the
+  // driver passes, and there is exactly one place it can come from.
+  [[nodiscard]] ir::ScanOptions scanOptions() const {
+    ir::ScanOptions options;
+    options.checks = lowering_.checks;
+    return options;
   }
 
 private:

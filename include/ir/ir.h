@@ -36,6 +36,7 @@
 #include "sema/typed_ast.h"
 #include "support/intern/interner.h"
 #include "support/source/source_file.h"
+#include "support/source/source_manager.h"
 #include "support/span/span.h"
 
 namespace minc::ir {
@@ -188,8 +189,24 @@ struct LoweringOptions {
   // in every pass, and a build that did not ask for a debugger's benefit should
   // not pay for it.
   bool debugInfo = false;
-  // The unit's main file. Null when `debugInfo` is false.
+  // The **checked build**: the memory model's diagnostic half, where every access
+  // that reaches memory through a pointer is guarded against null, against the
+  // alignment its type requires, and -- where the access record has an extent --
+  // against an index outside it (`docs/architectures/checks.md`).
+  //
+  // The driver turns it on for `-O0` and for `-fcheck`, and off for `-fno-check`
+  // and every optimised build, which is the shape `memory.md` decision 19 asks
+  // for: a language that cannot stop checking is unshippable, and one that never
+  // checks has an aspirational model.
+  bool checks = false;
+  // The unit's main file. Read by the debug info under `-g`, and by the *site
+  // messages* of the checked build's guards either way -- a guard that fires has
+  // to say where, and that is a fact about the source rather than about `-g`.
   const support::SourceFile* source = nullptr;
+  // The compilation's files, so a guard inside an included file names that file
+  // and not the unit's. Null is allowed and means "the unit's own file only",
+  // which is what a caller that has no `SourceManager` (a test) passes.
+  const support::SourceManager* sources = nullptr;
   // `DW_AT_producer`, so a debugger (and `readelf --debug-dump`) can say which
   // compiler produced the line table.
   std::string producer = "minc+";

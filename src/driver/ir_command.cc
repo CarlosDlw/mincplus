@@ -61,7 +61,9 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
     ir::LoweringOptions loweringOptions;
     loweringOptions.debugInfo = request.debugInfo;
     loweringOptions.producer = producerString();
+    loweringOptions.checks = request.checks;
     loweringOptions.source = sources.find(unit.file);
+    loweringOptions.sources = &sources;
 
     const ir::IRResult result =
         ir::lowerUnit(*unit.lowered, unit.resolved->map, unit.typed->typed, frontEnd.sema().types(),
@@ -78,7 +80,8 @@ int irInputs(const IrRequest& request, std::ostream& out, std::ostream& err) {
     out << ir::dumpModule(result.module);
     out.flush();
 
-    const std::vector<ir::IRDiagnostic> violations = ir::scanModule(result.module);
+    const std::vector<ir::IRDiagnostic> violations =
+        ir::scanModule(result.module, ir::ScanOptions{request.checks});
     if (!violations.empty()) {
       renderStageDiagnostics(violations, sources, diag, err);
       ok = false;
@@ -100,6 +103,8 @@ int runIr(const CliOptions& options) {
   }
 
   IrRequest request;
+  // The checked build at `-O0`'s answer, unless the command line said otherwise
+  // (`ir_command.h`).
   request.inputs = options.inputs;
   request.defines = splitDefines(options.defines);
   request.undefines = options.undefines;
@@ -115,6 +120,10 @@ int runIr(const CliOptions& options) {
       support::colorModeFrom(support::stderrSupportsColor(), options.colorChoice);
   request.errorLimit = options.errorLimit;
   request.debugInfo = options.debugInfo;
+  // `-fcheck`/`-fno-check` when one was written, and the `-O0` answer otherwise:
+  // this command has no `-O`, and it prints the module a `-O0` build would have
+  // emitted.
+  request.checks = options.checkBuild.value_or(true);
   return irInputs(request, std::cout, std::cerr);
 }
 

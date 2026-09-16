@@ -253,8 +253,11 @@ decision or a sentence above:
 - **Borrow checking (`&T` / `&mut T`).** `memory.md`'s checked layer. It is what
   would turn decision 21's obligation into a rule, and it is a project, not a
   step.
-- **`-fcheck` and runtime bounds.** Named by decision 16 and by `arrays.md`
-  decision 26, and a switch rather than a language feature.
+- **`-fcheck` and runtime bounds.** **Landed** for the descriptor's own length:
+  `s[i]` is compared against the `len` word the record names
+  (`ExtentKind::Length`, `checks.md`), which is decision 16's runtime case and not
+  a new language feature. A subscript through a *pointer* still has no extent, and
+  that is `checks.md`'s absence rather than a slice's.
 - **`alloc` returning a slice.** The allocator's own item; today it returns a `*T`
   and the length lives in the programmer's head, which `p[0..n]` at least makes
   explicit.

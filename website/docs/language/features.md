@@ -275,9 +275,14 @@ Everything below is what lands on top of that model. See
 - [x] Raw pointers are unchecked and need no keyword — no borrow checker, but
       every access carries a written obligation (an access is **defined** where
       it stays inside the object; it is the obligation that is the programmer's)
-- [ ] Null dereference: a checked-build trap rather than undefined behavior
+- [x] **The checked build** (`-fcheck`, on at `-O0`): a null dereference, a
+      misaligned access, and an index outside an array's count or a view's length
+      are traps that print the site and stop — `memory-null`,
+      `memory-misaligned`, `memory-out-of-bounds`. The release build emits none of
+      them ([the memory model](/language/memory-model#what-a-checked-build-reports))
 - [ ] Optional non-null pointer type `[?]`
-- [x] Bounds are the programmer's responsibility: `*T` carries no length
+- [ ] A *pointer*'s own extent: the object it names is not in this unit, so the
+      check needs the shadow memory above
 
 ## Declarations and modules
 
@@ -491,7 +496,12 @@ library symbol is a declaration, not a builtin.
 
 ## Safety
 
-- [ ] Bounds-checked indexing, with an opt-out `[?]`
+- [x] Bounds-checked indexing in the checked build: `a[i]` against the count in
+      the type, `s[i]` against the descriptor's `len`, and both against a
+      constant index at compile time. The opt-out is the build flag
+      (`-fno-check`), not a spelling at the subscript
+- [ ] A checked build with the shadow memory: unwritten bytes, dead allocations,
+      a pointer's extent
 - [x] **Definite assignment**: a `let` with no initializer holds no value until
       an assignment reaches the read on *every* path, and reading it is
       `sema-use-before-assignment` — an error, as in Java, C# and Swift, not C's

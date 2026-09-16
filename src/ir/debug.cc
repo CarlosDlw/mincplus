@@ -105,6 +105,16 @@ DebugInfo::DebugInfo(llvm::Module& module, const support::SourceFile& source,
 
 DebugInfo::~DebugInfo() = default;
 
+llvm::DIScope* DebugInfo::currentScope() const {
+  if (!blocks_.empty()) {
+    return blocks_.back();
+  }
+  if (subprogram_ != nullptr) {
+    return subprogram_;
+  }
+  return file_;
+}
+
 llvm::DebugLoc DebugInfo::locationAt(support::Span span) const {
   // A span from an included file, a malformed one, or one from before the unit's
   // copy of its file was created: all of them are "no location", and an empty
@@ -113,10 +123,33 @@ llvm::DebugLoc DebugInfo::locationAt(support::Span span) const {
     return {};
   }
   const support::LineCol position = positionOf(source_, span.begin);
-  llvm::DIScope* const scope = subprogram_ != nullptr ? static_cast<llvm::DIScope*>(subprogram_)
-                                                      : static_cast<llvm::DIScope*>(file_);
   return llvm::DebugLoc(
-      llvm::DILocation::get(module_.getContext(), position.line, position.col, scope));
+      llvm::DILocation::get(module_.getContext(), position.line, position.col, currentScope()));
+}
+
+void DebugInfo::openBlock(support::Span span) {
+  if (subprogram_ == nullptr) {
+    return;
+  }
+  // The scope's own line is the block's opening brace. A block inside a block
+  // nests in the one around it -- which is what makes the vector a stack and not
+  // a single slot: `{ { let a = 1; } }` is two lexical blocks, and a walk that can
+  // nest them is the only walk that can lower one.
+  const support::LineCol position = span.valid() && span.file == source_.id
+                                        ? positionOf(source_, span.begin)
+                                        : support::LineCol{1, 1};
+  blocks_.push_back(
+      builder_.createLexicalBlock(currentScope(), file_, position.line, position.col));
+}
+
+void DebugInfo::closeBlock() {
+  // Balanced by construction: the lowering opens a block around the statements it
+  // lowers and closes it after them, so a pop on an empty stack would be a bug in
+  // the walk -- and one that must not *silently* narrow the scope of everything
+  // that follows. The guard is the cheap half of that statement.
+  if (!blocks_.empty()) {
+    blocks_.pop_back();
+  }
 }
 
 void DebugInfo::enterFunction(llvm::Function& function, std::string_view name,
@@ -182,6 +215,10 @@ llvm::SmallVector<llvm::Metadata*, 8> DebugInfo::subroutineElements(const sema::
 }
 
 void DebugInfo::leaveFunction() {
+  // The scopes belong to the function that opened them. Clearing them here and
+  // not in `closeBlock` is what keeps a lowering bug from putting the *next*
+  // function's first binding inside the previous function's last block.
+  blocks_.clear();
   subprogram_ = nullptr;
 }
 
@@ -266,18 +303,34 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
     // named as `slices.md` names them. A debugger that showed only a pointer (the
     // habit from C's `char *`) would leave a reader with no way to see the length
     // the program is walking by, which is the one number a slice adds.
+    //
+    // The two members are `DW_TAG_member` nodes and not the types they have, and
+    // that is not a formality: a struct whose element list holds bare types has
+    // no members to emit, so the descriptor reaches a debugger as an opaque
+    // sixteen-byte object and `print s.len` is answered "no member named len".
+    // A `createMemberType` carries the three things a member has and a type does
+    // not -- the name, the offset, and the tag -- so the two are built here with
+    // the offsets the descriptor's layout gives them (zero, and the pointer's
+    // own width).
     const std::uint64_t pointerBits = static_cast<std::uint64_t>(types.target().pointerBits);
-    // The alignment of the member is the pointer's, which in bits is the same
-    // number as its size: a descriptor is aligned like the pointer it starts with.
-    llvm::DIType* pointerMember =
-        builder_.createPointerType(debugType(types, types.elementOf(id)), pointerBits,
-                                   static_cast<std::uint32_t>(pointerBits), std::nullopt, "ptr");
-    llvm::DIType* lengthMember =
-        builder_.createBasicType("len", pointerBits, llvm::dwarf::DW_ATE_unsigned);
     const std::uint64_t size = static_cast<std::uint64_t>(types.sizeOf(id)) * 8;
-    node = builder_.createStructType(nullptr, std::string(types.spelling(id)), nullptr, 0, size,
-                                     static_cast<std::uint32_t>(types.alignOf(id)) * 8,
-                                     llvm::DINode::FlagPublic, nullptr,
+    const std::uint32_t align = static_cast<std::uint32_t>(types.alignOf(id)) * 8;
+    // The member's alignment in a two-word descriptor is the pointer's, which in
+    // bits is the same number as its size: a descriptor is aligned like the word
+    // it starts with, and so is each of its two words.
+    const std::uint32_t memberAlign = static_cast<std::uint32_t>(pointerBits);
+    llvm::DIType* const pointerType = builder_.createPointerType(
+        debugType(types, types.elementOf(id)), pointerBits, memberAlign, std::nullopt);
+    llvm::DIType* const lengthType =
+        builder_.createBasicType("len", pointerBits, llvm::dwarf::DW_ATE_unsigned);
+    llvm::DIType* const pointerMember =
+        builder_.createMemberType(file_, "ptr", file_, 0, pointerBits, memberAlign,
+                                  /*OffsetInBits=*/0, llvm::DINode::FlagPublic, pointerType);
+    llvm::DIType* const lengthMember = builder_.createMemberType(
+        file_, "len", file_, 0, pointerBits, memberAlign, /*OffsetInBits=*/pointerBits,
+        llvm::DINode::FlagPublic, lengthType);
+    node = builder_.createStructType(currentScope(), std::string(types.spelling(id)), file_, 0,
+                                     size, align, llvm::DINode::FlagPublic, nullptr,
                                      builder_.getOrCreateArray({pointerMember, lengthMember}));
     break;
   }
@@ -300,23 +353,25 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
 }
 
 void DebugInfo::declareBinding(llvm::AllocaInst& alloca, std::string_view name,
-                               const sema::TypeStore& types, sema::TypeId type,
-                               support::Span span) {
+                               const sema::TypeStore& types, sema::TypeId type, support::Span span,
+                               unsigned parameterNumber) {
   // Right after the slot. `getIterator()` is `end()` when the alloca is the last
   // instruction in the entry block, and `InsertPosition` accepts that: it is the
   // position that means "trailing records of this block", which is a well-defined
   // place in LLVM's new debug format and is where the record belongs.
-  declareAt(alloca, name, types, type, span, std::next(alloca.getIterator()));
+  declareAt(alloca, name, types, type, span, parameterNumber, std::next(alloca.getIterator()));
 }
 
 void DebugInfo::declareParameterBinding(llvm::Argument& storage, std::string_view name,
                                         const sema::TypeStore& types, sema::TypeId type,
-                                        support::Span span, llvm::BasicBlock::iterator where) {
-  declareAt(storage, name, types, type, span, where);
+                                        support::Span span, unsigned parameterNumber,
+                                        llvm::BasicBlock::iterator where) {
+  declareAt(storage, name, types, type, span, parameterNumber, where);
 }
 
 void DebugInfo::declareAt(llvm::Value& storage, std::string_view name, const sema::TypeStore& types,
-                          sema::TypeId type, support::Span span, llvm::BasicBlock::iterator where) {
+                          sema::TypeId type, support::Span span, unsigned parameterNumber,
+                          llvm::BasicBlock::iterator where) {
   if (subprogram_ == nullptr || name.empty()) {
     return;
   }
@@ -327,18 +382,37 @@ void DebugInfo::declareAt(llvm::Value& storage, std::string_view name, const sem
   const support::LineCol position = span.valid() && span.file == source_.id
                                         ? positionOf(source_, span.begin)
                                         : support::LineCol{1, 1};
+  // The scope is the innermost block, so a name declared inside a block is out of
+  // scope outside it. `declareAt` is the one place a variable is created, which
+  // is what makes that a rule rather than a check at each call site.
+  llvm::DIScope* const scope = currentScope();
 
+  // **A parameter is a parameter.** `DW_TAG_formal_parameter` and
+  // `DW_TAG_variable` are the two children a subprogram can have, and a debugger
+  // reads the first kind as "the frame's arguments" -- `gdb`'s `info args`, its
+  // call-frame printing, and its `bt` all come from it. A parameter lowered as a
+  // variable is a frame whose arguments the debugger reports as "No arguments"
+  // and whose `argv`-style printing is missing, which is what this compiler did
+  // until the number below was passed through.
+  //
+  // The number is the parameter's own -- one for the first, counting the `sret`
+  // destination out, which is not a parameter anybody wrote.
+  //
   // AlwaysPreserve false: a binding no code reads is a variable the debugger has
   // no reason to keep, and preserving every one would pin temporaries the
   // optimizer is entitled to delete.
-  llvm::DILocalVariable* const variable = builder_.createAutoVariable(
-      subprogram_, std::string(name), file_, position.line, debugTypeNode);
+  llvm::DILocalVariable* const variable =
+      parameterNumber == 0
+          ? builder_.createAutoVariable(scope, std::string(name), file_, position.line,
+                                        debugTypeNode)
+          : builder_.createParameterVariable(scope, std::string(name), parameterNumber, file_,
+                                             position.line, debugTypeNode);
 
   // The location is the scope and nothing else -- line 0, column 0 -- because
   // `#dbg_declare` is a *declaration*: pointing it at the initializing expression
   // tells a stepping debugger the variable came into being there, which is the
   // one thing it is not.
-  llvm::DebugLoc location(llvm::DILocation::get(module_.getContext(), 0, 0, subprogram_));
+  llvm::DebugLoc location(llvm::DILocation::get(module_.getContext(), 0, 0, scope));
 
   (void)builder_.insertDeclare(&storage, variable, builder_.createExpression(), location,
                                llvm::InsertPosition(where));

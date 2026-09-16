@@ -47,7 +47,7 @@ namespace {
 // same reason.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' tables.
-constexpr std::array<ModuleAssumptionInfo, 10> kModuleAssumptionInfos{{
+constexpr std::array<ModuleAssumptionInfo, 11> kModuleAssumptionInfos{{
     {ModuleAssumption::Metadata, "metadata", IRDiagnosticCode::Assumption},
     {ModuleAssumption::FunctionAttribute, "function-attribute", IRDiagnosticCode::Assumption},
     {ModuleAssumption::Inbounds, "inbounds", IRDiagnosticCode::Assumption},
@@ -59,6 +59,7 @@ constexpr std::array<ModuleAssumptionInfo, 10> kModuleAssumptionInfos{{
     {ModuleAssumption::UnguardedDivision, "unguarded-division", IRDiagnosticCode::UnguardedOp},
     {ModuleAssumption::UnguardedFloatToInt, "unguarded-float-to-int",
      IRDiagnosticCode::UnguardedOp},
+    {ModuleAssumption::UnguardedAccess, "unguarded-access", IRDiagnosticCode::UnguardedOp},
 }};
 // NOLINTEND(readability-identifier-naming)
 
@@ -164,6 +165,19 @@ void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function&
   if (const auto* comparison = llvm::dyn_cast<llvm::CmpInst>(condition)) {
     return comparison->getOperand(0) == subject || comparison->getOperand(1) == subject;
   }
+  // **The address's integer image counts as the address.** The checked build's
+  // alignment guard is `ptrtoint address` against the low bits, because an
+  // alignment is a property of the number and not of the pointer LLVM keeps; a
+  // walk that only compared values would call that guard invisible and report a
+  // guarded access as unguarded. `ptrtoint` and `bitcast` are the two ways to ask
+  // about an address without changing which address it is.
+  if (const auto* cast = llvm::dyn_cast<llvm::CastInst>(condition)) {
+    const unsigned opcode = cast->getOpcode();
+    if ((opcode == llvm::Instruction::PtrToInt || opcode == llvm::Instruction::BitCast) &&
+        cast->getOperand(0) == subject) {
+      return true;
+    }
+  }
   if (const auto* binary = llvm::dyn_cast<llvm::BinaryOperator>(condition)) {
     if (binary->getOpcode() == llvm::Instruction::And ||
         binary->getOpcode() == llvm::Instruction::Or) {
@@ -237,6 +251,51 @@ void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function&
   return testsValue(branch->getCondition(), cast.getOperand(0), /*depth=*/0);
 }
 
+// Is this access reached through a test of its address?
+//
+// The test is looked for in the chain of unique conditional predecessors and not
+// in the block immediately above, because one access can carry three guards in a
+// row: the null test's passing edge enters the alignment test's block, whose
+// passing edge enters the bounds test's block, and only the *first* of the three
+// compares the address itself. Walking the chain is what makes the rule about the
+// access rather than about which guard happened to be emitted last.
+//
+// A block with no unique predecessor stops the walk: two paths into the block mean
+// the guard is on one of them, which is not a guard for the access.
+[[nodiscard]] bool guardedAddress(const llvm::Instruction& access, const llvm::Value* address) {
+  constexpr int kMaxGuardChain = 8;
+  const llvm::BasicBlock* block = access.getParent();
+  // **The block immediately above is a conditional branch.** Without this, the
+  // rule would be satisfied by an access emitted in a straight line whose address
+  // some *earlier* guard happened to test -- which is a module where a guard was
+  // dropped and the file still passes. The test below is the other half: the
+  // branch's condition is about *this* address.
+  if (block != nullptr) {
+    const llvm::BasicBlock* immediate = block->getUniquePredecessor();
+    const auto* terminator = immediate == nullptr
+                                 ? nullptr
+                                 : llvm::dyn_cast<llvm::BranchInst>(immediate->getTerminator());
+    if (terminator == nullptr || !terminator->isConditional()) {
+      return false;
+    }
+  }
+  for (int depth = 0; block != nullptr && depth < kMaxGuardChain; ++depth) {
+    const llvm::BasicBlock* predecessor = block->getUniquePredecessor();
+    if (predecessor == nullptr) {
+      return false;
+    }
+    const auto* branch = llvm::dyn_cast<llvm::BranchInst>(predecessor->getTerminator());
+    if (branch == nullptr || !branch->isConditional()) {
+      return false;
+    }
+    if (testsValue(branch->getCondition(), address, /*depth=*/0)) {
+      return true;
+    }
+    block = predecessor;
+  }
+  return false;
+}
+
 [[nodiscard]] bool isDivision(llvm::Instruction::BinaryOps opcode) {
   switch (opcode) {
   case llvm::Instruction::SDiv:
@@ -250,7 +309,8 @@ void scanAttributes(const llvm::AttributeList& attributes, const llvm::Function&
 }
 
 void scanInstruction(const llvm::Instruction& instruction, const llvm::Function& function,
-                     const llvm::DataLayout& layout, std::vector<IRDiagnostic>& out) {
+                     const llvm::DataLayout& layout, const ScanOptions& options,
+                     std::vector<IRDiagnostic>& out) {
   const std::string where =
       "`" + function.getName().str() + "` in block `" +
       (instruction.getParent() != nullptr ? instruction.getParent()->getName().str()
@@ -325,6 +385,48 @@ void scanInstruction(const llvm::Instruction& instruction, const llvm::Function&
           "a float-to-integer conversion in " + where +
               " is not reached through a test of its operand; the language defines the "
               "conversion as a trap on a value the destination cannot hold");
+    }
+  }
+
+  // --- the checked build's guards --------------------------------------------
+  //
+  // A module that was built with `-fcheck` promises that every access through a
+  // pointer is guarded (`checks.md`, `ir.md` § *The checked build's guards*), and a
+  // guard is exactly the kind of invariant this file exists for: a forgotten one
+  // is not a compile error anywhere, it is a program that reads address zero in
+  // the *checked* build -- which is the one build where the promise is load
+  // bearing.
+  //
+  // The rule reads the *shape the lowering emits*, which is the same shape the two
+  // rows above read: a test of the address, and the access in the block the passing
+  // edge enters. It is walked transitively and not one step, because one access may
+  // carry three guards in a row (null, then alignment, then bounds) and only the
+  // first of them tests the address itself.
+  //
+  // The three escapes are one sentence: a check is unnecessary exactly when the
+  // object under the address is one the compiler -- or the ABI -- put there. A
+  // **constant** address is a global (never null) or a null constant, and an
+  // access through a null constant is refused before the lowering
+  // (`sema-address-from-constant`, `casts.md` decision 11b), and a constant
+  // comparison folds, which is why the escape is about the *address* rather than
+  // about the guard (`guardBranch`, `checks.cc`); an **`alloca`** is a frame object
+  // whose address is non-null by construction; an **`Argument`** is the storage of
+  // a by-reference aggregate parameter, which is the pointer the calling
+  // convention promised and not one the program computed (`arrays.md` decision 13).
+  if (options.checks) {
+    const llvm::Value* address = nullptr;
+    if (const auto* load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
+      address = load->getPointerOperand();
+    } else if (const auto* store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+      address = store->getPointerOperand();
+    }
+    if (address != nullptr && !llvm::isa<llvm::Constant>(address) &&
+        !llvm::isa<llvm::AllocaInst>(address) && !llvm::isa<llvm::Argument>(address) &&
+        !guardedAddress(instruction, address)) {
+      add(out, IRDiagnosticCode::UnguardedOp,
+          "an access through a pointer in " + where +
+              " is not reached through a test of its address; the checked build guards every "
+              "access it did not put an object under (see `checks.md`)");
     }
   }
 
@@ -420,7 +522,7 @@ std::string_view toString(ModuleAssumption assumption) {
   return "unknown";
 }
 
-std::vector<IRDiagnostic> scanModule(const Module& module) {
+std::vector<IRDiagnostic> scanModule(const Module& module, const ScanOptions& options) {
   std::vector<IRDiagnostic> violations;
   if (!ModuleAccess::built(module)) {
     return violations;
@@ -437,7 +539,7 @@ std::vector<IRDiagnostic> scanModule(const Module& module) {
     scanAttributes(function.getAttributes(), function, violations);
     for (const llvm::BasicBlock& block : function) {
       for (const llvm::Instruction& instruction : block) {
-        scanInstruction(instruction, function, layout, violations);
+        scanInstruction(instruction, function, layout, options, violations);
       }
     }
   }

@@ -278,8 +278,14 @@ private:
   // `at` is the declaration the slot is for, so the frame slot carries the
   // location of the binding the reader wrote rather than of whatever instruction
   // happened to be last.
+  //
+  // `parameterNumber` is `0` for a `let`, and one-based for a parameter's own
+  // spill slot: the slot is where a debugger reads the argument from *after* the
+  // prologue, and the number is what says the binding is an argument rather than
+  // a variable (`debug.h`).
   [[nodiscard]] llvm::AllocaInst* declareLocal(resolve::DefId def, sema::TypeId type,
-                                               std::string_view name, ast::AstId at);
+                                               std::string_view name, ast::AstId at,
+                                               unsigned parameterNumber = 0);
   // The caller's copy of a by-value aggregate argument: the temporary an
   // aggregate parameter points at (`arrays.md` decision 13). The slot is an
   // entry-block `alloca` -- the copy's lifetime is the call, and a slot in the
@@ -317,7 +323,14 @@ private:
   void terminateDangling(llvm::Function* function);
 
   // --- statements -------------------------------------------------------------
+  // A block is a *scope* as well as a sequence: the two functions below are the
+  // two halves of that sentence. `lowerBlock` opens a `DW_TAG_lexical_block`
+  // around the statements and closes it after them, so a name declared inside is
+  // out of scope outside; `lowerStatements` is the walk itself, and the function
+  // body uses it directly because a body's bindings belong to the *function's*
+  // scope and not to a block inside it (`debug.h`).
   void lowerBlock(ast::AstId block);
+  void lowerStatements(ast::AstId block);
   void lowerStatement(ast::AstId stmt);
   void lowerBinding(ast::AstId stmt);
   void lowerIf(ast::AstId stmt);
@@ -471,6 +484,48 @@ private:
   // module is ever a constant-folded `fcmp` away from being unguarded.
   [[nodiscard]] Value checkedFloatToInt(const Value& value, sema::TypeId to, support::Span at);
   void trapBlock();
+
+  // --- the checked build -------------------------------------------------------
+  //
+  // The memory model's diagnostic half (`docs/architectures/checks.md`): every
+  // access that reaches memory through a pointer is guarded, and the guards are
+  // emitted **from the access obligation** -- the record `sema` wrote at the same
+  // node -- so there is no path by which an unguarded access reaches the module,
+  // and no guard whose rule this stage invented.
+  //
+  // All of it lives in `checks.cc`, and the four functions below are its whole
+  // surface: `guardAccess` is called by the two functions an access can be
+  // lowered through (`loadPlace`, `storePlace`), `guardBranch` is the one shape a
+  // guard has, and the rest is the runtime entry the failure edge calls.
+  [[nodiscard]] bool checksEnabled() const {
+    return options_.checks;
+  }
+  // The guards for one access: null, alignment, and -- when the place carries the
+  // evidence -- bounds. `obligation` is the record, and it is the argument rather
+  // than a second lookup because a missing obligation is already a refusal at the
+  // call site: a guard for an access nobody recorded would be a guard for a
+  // program the checker never saw.
+  void guardAccess(const Place& place, const sema::AccessObligation& obligation, support::Span at);
+  // One guard: `bad` is the condition that means "outside the model", and the
+  // failing edge prints `message` and traps. A condition that folded to a
+  // constant is handled by what it folded to and not by pretending it is a test
+  // (`checks.cc`).
+  void guardBranch(llvm::Value* bad, const std::string& message);
+  // The message for one rule at one span: "`mincc: trap: <rule> at <file>:<line>:<col>`".
+  // Built at compile time, because everything in it is known then -- which is why
+  // a fired guard needs no formatting machinery at run time (`checks.md`).
+  [[nodiscard]] std::string checkMessage(std::string_view rule, support::Span span) const;
+  // The private constant holding `text`, deduplicated by its own bytes: two
+  // guards on one line of one file are one object.
+  [[nodiscard]] llvm::GlobalVariable* checkMessageGlobal(const std::string& text);
+  // The one runtime entry the failure edges call, defined in the module on first
+  // use. `internal`, so the checked build adds no symbol to the program's
+  // namespace and no library to its link line.
+  void ensureCheckRuntime();
+  // The failure edge itself: print `message` and trap. Shared by the two ways a
+  // guard can end -- the conditional's failing edge, and a condition that folded
+  // to "always bad" -- so a failed check is one call in one shape.
+  void emitCheckFail(llvm::GlobalVariable* message, std::uint64_t length);
 
   // Which conversion a pair of types needs. Named rather than reduced to a cast
   // opcode because *two* appliers read it: an instruction, for a runtime value,
@@ -634,6 +689,11 @@ private:
   std::unordered_map<std::uint64_t, llvm::GlobalVariable*> globals_;
   std::unordered_map<std::uint64_t, llvm::Function*> functions_;
   std::unordered_map<std::string, llvm::GlobalVariable*> strings_;
+  // The checked build's state: the runtime entry, once, and the message objects
+  // by their text. Both are per module and both are created on demand, so a unit
+  // with no access through a pointer carries neither.
+  llvm::Function* checkFail_ = nullptr;
+  std::unordered_map<std::string, llvm::GlobalVariable*> messages_;
   // Which types have had their layout checked, by `TypeId::index`. A byte per
   // type and not a set: the question is asked once per mapping of a type, and the
   // answer is "already known good" for every call after the first.

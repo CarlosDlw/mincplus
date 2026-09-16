@@ -447,6 +447,79 @@ TEST(BuildCommandTest, LinkingProducesAnExecutableAndRunReturnsItsStatus) {
   EXPECT_EQ(executed.code, 42) << executed.err;
 }
 
+// --- the checked build --------------------------------------------------------
+
+// A program that reads one element past the end of a two-element view. The program
+// is *wrong* and the checker was right to accept it -- the index is a value, and
+// the compiler cannot see that it is out of range -- which is exactly the situation
+// `checks.md` is about: the checker cannot prove it, so the build guards it.
+constexpr std::string_view kOutOfBoundsProgram = "fn i32 at(v: []i32, i: i32)\n"
+                                                 "{\n"
+                                                 "  return v[i];\n"
+                                                 "}\n"
+                                                 "fn i32 main()\n"
+                                                 "{\n"
+                                                 "  let t: [2]i32 = [7, 8];\n"
+                                                 "  let v: []i32 = t[..];\n"
+                                                 "  return at(v, 5);\n"
+                                                 "}\n";
+
+TEST(BuildCommandTest, TheCheckedBuildStopsAProgramTheCheckerCannotRefuse) {
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+  const std::string source = scratch.write("oob.mx", kOutOfBoundsProgram);
+
+  // `-O0` is the checked build, so the default build traps. The program's own
+  // message goes to its stderr, which the harness inherits rather than captures --
+  // what is asserted here is the *status*: a trap is a death, and the driver
+  // reports it as a failure rather than as an exit code the program chose.
+  BuildRequest checked = requestFor(source);
+  checked.checks = true;
+  checked.run = true;
+  const Outcome trapped = run(checked, /*execute=*/true);
+  if (trapped.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(trapped.code, exitCode(ExitCode::Failure)) << trapped.err;
+  EXPECT_NE(trapped.err.find("terminated abnormally"), std::string::npos) << trapped.err;
+
+  // The same program, built without the guards: the access reads whatever is one
+  // element past the array and the program *exits with that value*, which is the
+  // difference the flag buys and the reason it exists.
+  BuildRequest unchecked = requestFor(source);
+  unchecked.checks = false;
+  unchecked.run = true;
+  const Outcome unguarded = run(unchecked, /*execute=*/true);
+  EXPECT_NE(unguarded.code, exitCode(ExitCode::Failure))
+      << "an unchecked build must not be killed by a guard it never emitted: " << unguarded.err;
+}
+
+TEST(BuildCommandTest, TheGuardsSurviveOptimisation) {
+  // `memory.md` decision 19: a check the optimizer can delete is not a check. The
+  // guards are in the checked build at *every* level, so `-fcheck -O2` traps where
+  // `-O2` alone does not.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+  const std::string source = scratch.write("oob2.mx", kOutOfBoundsProgram);
+
+  BuildRequest optimised = requestFor(source);
+  optimised.checks = true;
+  optimised.level = backend::OptLevel::O2;
+  optimised.run = true;
+  const Outcome checked = run(optimised, /*execute=*/true);
+  if (checked.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(checked.code, exitCode(ExitCode::Failure)) << checked.err;
+
+  BuildRequest release = requestFor(source);
+  release.level = backend::OptLevel::O2;
+  release.checks = false;
+  release.run = true;
+  const Outcome unchecked = run(release, /*execute=*/true);
+  EXPECT_NE(unchecked.code, exitCode(ExitCode::Failure)) << unchecked.err;
+}
+
 // --- builtins, as answers -----------------------------------------------------
 //
 // The only tests in the suite where a builtin's *answer* is checked against the

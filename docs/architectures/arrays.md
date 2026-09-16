@@ -264,7 +264,7 @@ diagnostic or a scan, never a convention.
 | `char*` and `char[]` as one thing spelled twice | C, still | a string literal does not become an array and an array does not become a pointer (16); `str` is a future `[:0]u8` and not a parallel concept (17) — steps 3 and 6 |
 | Address comparison through `=`/`==` | C: `a == b` on two arrays compares addresses, and the reader means element-wise | every operator but `=` and the subscript is refused by name (25) — step 3 |
 | A const object whose bytes the same unit rewrites | nobody, because every language decided the other way — but C's own `const`-qualifier hole shows how the rule leaks | the place rule reaches an element (24), with the pointer escape stated as the *documented* hole it already is — step 4 |
-| `-fcheck` bounds checking an object it cannot name | C: the check exists only in `-fsanitize=bounds` and `_FORTIFY_SOURCE`, both of which need the compiler to know the extent it threw away | `object` provenance plus the recorded count (26) is exactly the module-statable half of the checked build — step 4 |
+| `-fcheck` bounds checking an object it cannot name | C: the check exists only in `-fsanitize=bounds` and `_FORTIFY_SOURCE`, both of which need the compiler to know the extent it threw away | `object` provenance plus the recorded count (26) is exactly the module-statable half of the checked build — **shipped** (`checks.cc`; a pointer's own extent stays out, `checks.md`) |
 
 ## What this makes impossible
 
@@ -342,7 +342,7 @@ the table is the work list, one row per module and per mini-behaviour.
 | **`const` reaches the elements** | `TABLE[0] = 1` and `&TABLE[0]` are both `sema_address_of_const` / the store rule, with a scalar `&c` test alongside so the extension did not widen the rule (decision 24) |
 | **A partially initialized array is not read as whole** | the loop that writes elements and then reads the object is refused, and the sentence names `[0; N]`; an initializer and a whole-object `=` are accepted (decision 23) |
 | **The value shape in the module** | a by-value parameter is a `ptr` and **not** a `[N x T]` in the signature, the call site holds exactly **one** memory intrinsic, a return is `sret`-shaped, and no `insertvalue` chain appears for a copy (decision 13) |
-| **The extent is recorded, and the checked build uses it** | `a[i]` on a local records `object` plus the count and `-fcheck` emits the bounds comparison; the same subscript on a parameter records `foreign` and emits none (decision 26) |
+| **The extent is recorded, and the checked build uses it** | `a[i]` on a local records `object` plus the count and `-fcheck` emits the bounds comparison (`IrChecksTest.AnArraySubscriptIsBoundedByItsCount`); the same subscript on a parameter records `foreign` and emits none (decision 26) |
 | **The splat is a shape, not bytes** | a large `[0; N]` lowers to `zeroinitializer`/`ConstantAggregateZero` from the record's shape, asserted on the module — a folded element list would show up as a compile time and as a count mismatch (decisions 15, 20) |
 | The reserved spellings stay reserved | `[]T` and `..` each have a test asserting the sentence (`parse-reserved-range` is in the reachability sweep, so it cannot go dead), and the lexer has one asserting `a[1..2]` is two dots while `.5` and `1.5` are still numbers |
 

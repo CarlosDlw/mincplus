@@ -112,6 +112,12 @@ struct CliOptions {
 
   // `-g`. Debug information; see `codegen.md` § *Debug information*.
   bool debugInfo = false;
+  // `-fcheck` / `-fno-check`. **Three states and not two**, which is why it is an
+  // `optional`: "not said" is a different answer from "said no", because the
+  // default is a level -- the checked build is what `-O0` means, and an optimised
+  // build is what pays nothing (`checks.md`). A `bool` would make `-O0`
+  // indistinguishable from `-O0 -fno-check`.
+  std::optional<bool> checkBuild;
   // `-v`. Print the exact commands the build runs, which is the first thing a
   // reader wants after a link failure. With `--version`, the version becomes the
   // block a bug report needs.

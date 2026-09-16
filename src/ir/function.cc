@@ -107,6 +107,12 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
       const ast::AstId paramName = childOf(param, ast::NodeKind::Name);
       const std::optional<resolve::DefId> paramDef = defAtName(paramName);
       const sema::TypeId paramType = index < params.size() ? params[index] : sema::kTypeError;
+      // The number DWARF gives this parameter: **one-based and counting out the
+      // `sret` destination**, which is an ABI argument nobody wrote. The index in
+      // the LLVM signature shifts by one when an aggregate is returned
+      // (`sretOffset()`), and this one does not -- the two are different numbers
+      // and conflating them is how a debugger ends up naming the wrong argument.
+      const unsigned parameterNumber = static_cast<unsigned>(index) + 1U;
       if (paramDef.has_value()) {
         std::string_view name{};
         if (paramDef->index < defs_.defs.size() &&
@@ -128,10 +134,11 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
             // argument and not an instruction, so there is nothing to sit behind,
             // and "before the body runs" is where an `alloca`'s record sits too.
             debug_->declareParameterBinding(*argument, name, types_, paramType, spanOf(paramAt),
-                                            entry->begin());
+                                            parameterNumber, entry->begin());
           }
         } else {
-          llvm::AllocaInst* slot = declareLocal(*paramDef, paramType, name, paramAt);
+          llvm::AllocaInst* slot =
+              declareLocal(*paramDef, paramType, name, paramAt, parameterNumber);
           storePlace(Place{slot, paramType}, Value{argument, paramType}, ast::AstId{});
         }
       }
@@ -139,7 +146,11 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
     }
   }
 
-  lowerBlock(info.body);
+  // The body's statements directly, and not through `lowerBlock`: a function body
+  // is not a block *inside* the function to a debugger, it is the function's own
+  // scope, and wrapping it would put every top-level binding in an anonymous
+  // lexical block that a reader never wrote.
+  lowerStatements(info.body);
 
   // The terminator for a function that runs off the end. A `void` function
   // returns; anything else is the case `sema` already refused (a non-void
@@ -189,6 +200,22 @@ void Lowering::terminateDangling(llvm::Function* function) {
 // --- blocks -------------------------------------------------------------------
 
 void Lowering::lowerBlock(ast::AstId block) {
+  if (!block.valid() || failed_) {
+    return;
+  }
+  // The scope is opened before the block's own location is set, so the brace
+  // itself and everything under it carry the block's scope.
+  const bool scoped = debug_ != nullptr && debug_->inFunction();
+  if (scoped) {
+    debug_->openBlock(spanOf(block));
+  }
+  lowerStatements(block);
+  if (scoped) {
+    debug_->closeBlock();
+  }
+}
+
+void Lowering::lowerStatements(ast::AstId block) {
   if (!block.valid() || failed_) {
     return;
   }

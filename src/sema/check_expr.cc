@@ -924,14 +924,16 @@ TypeId Checker::checkIndex(ast::AstId expr, ExprInfo& info) {
     // The record carries the element type *and the count*, which is the extent
     // the checked build bounds-checks against when the base is an object this
     // unit named (26).
-    recordAccess(expr, element, arrayProvenanceOf(base), count);
+    recordAccess(expr, element, arrayProvenanceOf(base), count, ExtentKind::Count);
     return element;
   }
   // `s[i]` on a **slice**: the element of the view, which is a load through the
   // descriptor's pointer word. The third base that reaches memory, and the one
-  // whose extent is a *value* rather than a type -- so the access record carries
-  // no count (the `0` of "not known") and the scan says so instead of claiming an
-  // extent it cannot see (`slices.md` decision 20).
+  // whose extent is a *value* rather than a type -- so the record says
+  // `ExtentKind::Length` and **not** a count: the number is the descriptor's own
+  // `len` word, which the checked build is the reader of, and a record that
+  // carried `0` here would be claiming an empty object rather than a length it
+  // cannot see (`slices.md` decision 20, `checks.md`).
   if (types_.isSlice(baseType)) {
     if (!isIntegerOperand(types_, indexType)) {
       error(index, SemaErrorCode::IndexNotInteger,
@@ -945,7 +947,7 @@ TypeId Checker::checkIndex(ast::AstId expr, ExprInfo& info) {
     info.isLvalue = true;
     info.isConstant = false;
     info.hasIntValue = false;
-    recordAccess(expr, element, provenanceOf(base));
+    recordAccess(expr, element, provenanceOf(base), /*extent=*/0, ExtentKind::Length);
     return element;
   }
   if (!types_.isPointer(baseType)) {

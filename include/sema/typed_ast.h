@@ -133,6 +133,27 @@ enum class ProvenanceKind : std::uint8_t {
   Foreign,
 };
 
+// Where the number an in-bounds check compares the index against comes from.
+//
+// The checked build's bounds guard needs two values -- the index and the extent
+// of the object the place is inside -- and the *extent* has three possible
+// answers, which is why it is an enumeration and not the `extent` field alone:
+// a count that is a number in the type, a length that is a word in a descriptor,
+// and the case where the compiler has nothing to compare against at all. A
+// boolean would have said the same thing while making `extent == 0` mean both
+// "empty object" and "unknown", which is the kind of overload that turns a guard
+// into a wrong answer (`checks.md`).
+enum class ExtentKind : std::uint8_t {
+  // Nothing this unit can compare against: `*p`, and `p[i]` through a pointer
+  // parameter. The access is the one only a shadow memory can judge.
+  Unknown,
+  // `extent` elements, from the base's **type** (`a[i]` on an array object).
+  Count,
+  // The base's own length word, in the descriptor a slice is (`s[i]`). A value
+  // and not a number in a type, which is why it is its own answer.
+  Length,
+};
+
 // One access. `type` is what is accessed -- the access's size and alignment are
 // its -- and the lowering reads those from the store rather than from the
 // pointer's own type.
@@ -147,8 +168,8 @@ struct AccessObligation {
   ProvenanceKind provenance = ProvenanceKind::Foreign;
   // How many elements the object the place is *inside* has, when this stage can
   // prove one: an array subscript always can, because the count is in the type.
-  // `0` is "not known", which is every `*p` -- a pointer's extent is not a
-  // number this stage can see.
+  // Read only when `extentKind` is `Count`; the `0` of an `Unknown` or `Length`
+  // entry is not an extent and is not meant to be read as one.
   //
   // It is the half of the checked build's guard that the module can answer on
   // its own: `object` provenance *plus* a count is a bounds check the lowering
@@ -156,6 +177,10 @@ struct AccessObligation {
   // subscript through a pointer keeps its `foreign` answer and no guard, which
   // is why the two spellings of "element i" are not the same program here.
   std::uint64_t extent = 0;
+  // Which of the three extents above this entry has. Separate from `extent`
+  // because a slice's bounds check compares against a *value* the module reads
+  // out of the descriptor, and "no extent at all" is a third thing again.
+  ExtentKind extentKind = ExtentKind::Unknown;
 };
 
 // The stable name of an access kind, in one table with the enumeration so a kind
@@ -178,6 +203,16 @@ struct ProvenanceKindInfo {
 [[nodiscard]] std::span<const ProvenanceKindInfo> provenanceKindInfos();
 [[nodiscard]] std::span<const ProvenanceKind> allProvenanceKinds();
 [[nodiscard]] std::string_view toString(ProvenanceKind kind);
+
+struct ExtentKindInfo {
+  ExtentKind kind;
+  const char* name;
+};
+
+[[nodiscard]] std::span<const ExtentKindInfo> extentKindInfos();
+// Every extent kind, derived from the table above.
+[[nodiscard]] std::span<const ExtentKind> allExtentKinds();
+[[nodiscard]] std::string_view toString(ExtentKind kind);
 
 // A *modifiable* lvalue is an lvalue whose declaration is not a `const`. The two
 // questions are separate on purpose: `const c = 1; c = 2;` must be one specific

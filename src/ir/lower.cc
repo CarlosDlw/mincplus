@@ -448,7 +448,8 @@ bool Lowering::frameObjectFits(sema::TypeId type, ast::AstId at) {
 }
 
 llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
-                                         std::string_view name, ast::AstId at) {
+                                         std::string_view name, ast::AstId at,
+                                         unsigned parameterNumber) {
   const std::uint64_t key = defKey(def);
   const auto existing = locals_.find(key);
   if (existing != locals_.end()) {
@@ -494,7 +495,7 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
   alloca->setAlignment(llvm::Align(alignmentOf(type)));
   locals_.emplace(key, alloca);
   if (debug_ != nullptr && at.valid()) {
-    debug_->declareBinding(*alloca, name, types_, type, spanOf(at));
+    debug_->declareBinding(*alloca, name, types_, type, spanOf(at), parameterNumber);
   }
   return alloca;
 }

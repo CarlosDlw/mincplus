@@ -79,18 +79,37 @@ wrongly:
 
 | Situation | Checked build | Release build |
 | --- | --- | --- |
-| Access outside the object | **trapped**, with a named site (`memory-out-of-object`) | outside the model |
-| Access at the wrong alignment | **trapped** (`memory-misaligned`) | outside the model |
-| Access through a null pointer | **trapped** (`memory-null`) | outside the model |
-| Read of unwritten bytes | **trapped** (`memory-uninitialized`) | outside the model |
-| Access after the object's lifetime | **trapped** (`memory-dangling`) | outside the model |
-| Two pointers violating a written `restrict` | **reported** (`memory-restrict-overlap`) | outside the model |
+| Access outside the object, an array's or a slice's extent | **trapped**, with a named site (`memory-out-of-bounds`) — shipped | outside the model |
+| Access at the wrong alignment | **trapped** (`memory-misaligned`) — shipped | outside the model |
+| Access through a null pointer | **trapped** (`memory-null`) — shipped | outside the model |
+| Access outside the object, a *pointer*'s extent | not yet: the object is not in this unit | outside the model |
+| Read of unwritten bytes | **trapped** (`memory-uninitialized`) — not yet | outside the model |
+| Access after the object's lifetime | **trapped** (`memory-dangling`) — not yet | outside the model |
+| Two pointers violating a written `restrict` | **reported** (`memory-restrict-overlap`) — not yet | outside the model |
 | A data race (future) | **reported** by the race check | outside the model |
 
 "Outside the model" is a deliberate phrase: it is not "undefined behavior" with
 its loaded history, it is "this program did not meet a precondition the language
 states in writing" — and the diagnostic vocabulary above is how a reader is told
 *which* precondition.
+
+The **shipped** rows are the checked build: `-fcheck`, and what `-O0` already
+means. A program that reads past the end of a `[4]i32` or of a view prints where
+it happened and stops:
+
+```console
+$ mincc run oob.mx
+mincc: trap: memory-out-of-bounds at oob.mx:4:10
+mincc: error: the program was terminated abnormally
+```
+
+The guards are only in the build that asked for them — `-O1` and above pay
+nothing — and they stay in at every optimisation level `-fcheck` is on for, because
+a check the optimizer can delete is not a check. `-fno-check` is the way to say
+"not even at `-O0`". The rows that are *not* shipped are the ones that need a
+shadow memory to answer: the extent of an object a *pointer* names, whether a byte
+was ever written, and whether an allocation is still alive. Each is named above
+rather than approximated.
 
 ## Where the language is today
 
@@ -104,9 +123,12 @@ alignment, the conversion, the operation type.
 
 :::note[Not implemented yet]
 Aggregates (`struct`, which needs member alignment), `restrict`, address spaces,
-`alloc`/`free`, the checked build and its guards, the *named* forms `expose` /
-`with_exposed_provenance` (the casts that carry their semantics are implemented —
-see [Casts](/language/expressions#casts)), and `volatile` are not implemented.
+`alloc`/`free`, the shadow-memory half of the checked build (a pointer's own
+extent, unwritten bytes, a dead allocation, a `restrict` overlap — the guards
+that *are* implemented need nothing but the module, see above), the *named* forms
+`expose` / `with_exposed_provenance` (the casts that carry their semantics are
+implemented — see [Casts](/language/expressions#casts)), and `volatile` are not
+implemented.
 Arrays are: `[N]T` with the count in the type is what makes `&a[0]` and `&a` two
 different, checkable pointers. What exists is the model, the reasoning, and the
 parts of the surface that do not need the rest.

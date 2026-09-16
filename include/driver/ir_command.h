@@ -51,6 +51,13 @@ struct IrRequest {
   // `-g`. Prints the same module with debug metadata attached, which is how the
   // line table is reviewed as text rather than through a debugger.
   bool debugInfo = false;
+  // The checked build's guards (`-fcheck`/`-fno-check`). Off in a hand-built
+  // request, like `BuildRequest`'s, and **on** for the command itself: `runIr`
+  // resolves it the way `build` resolves `-O0`, because the whole point of this
+  // command is that the module it prints is the module a build emits -- and a
+  // reader hunting a trap they saw has to be looking at the module that carries
+  // it.
+  bool checks = false;
 };
 
 // The command minus the choice of streams, so the contract -- which stream

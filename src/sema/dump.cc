@@ -45,12 +45,26 @@ namespace {
 // One access, in the short form a reader scans for. `object` and `foreign` are
 // the whole answer the record gives about what the optimizer may assume, so they
 // are printed as words rather than as numbers.
+//
+// The extent is printed between the provenance and the type, and only when there
+// is one: `count 4` is the checked build's bounds check for `a[i]`, `length` is
+// the one for `s[i]` and names no number because the number is the descriptor's,
+// and an `*p` prints neither -- `unknown` is the record saying what it cannot
+// see rather than a value to be read (`checks.md`).
 [[nodiscard]] std::string accessText(const AccessObligation& access, const TypeStore& types) {
   std::string out = " [access ";
   out += std::string(toString(access.kind));
   out += ' ';
   out += std::string(toString(access.provenance));
   out += ' ';
+  if (access.extentKind != ExtentKind::Unknown) {
+    out += std::string(toString(access.extentKind));
+    if (access.extentKind == ExtentKind::Count) {
+      out += ' ';
+      out += std::to_string(access.extent);
+    }
+    out += ' ';
+  }
   out += types.spelling(access.type);
   out += ']';
   return out;

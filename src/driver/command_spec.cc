@@ -29,7 +29,7 @@ constexpr std::array<std::string_view, 3> kColorValues{"auto", "always", "never"
 constexpr std::array<std::string_view, 6> kOptLevels{"O0", "O1", "O2", "O3", "Os", "Oz"};
 constexpr std::array<std::string_view, 3> kEmitKinds{"exe", "obj", "asm"};
 
-constexpr std::array<OptionSpec, 33> kOptions{{
+constexpr std::array<OptionSpec, 35> kOptions{{
     // --- global: accepted by every command ---------------------------------
     {.id = OptionId::Help,
      .name = "--help",
@@ -148,6 +148,18 @@ constexpr std::array<OptionSpec, 33> kOptions{{
      .shortName = 'g',
      .help = "emit debug information (DWARF on ELF and Mach-O, CodeView on PE), read "
              "by gdb, lldb and llvm-dwarfdump"},
+    // The checked build. The help says what the guards *are*, because a reader who
+    // has to guess what a flag checks is a reader who leaves it on by accident or
+    // turns it off without knowing what they gave up (`checks.md`).
+    {.id = OptionId::CheckBuild,
+     .name = "-fcheck",
+     .help = "guard every access through a pointer (null, alignment, and bounds) and "
+             "print the site of the one that fails; on by default at -O0"},
+    {.id = OptionId::NoCheckBuild,
+     .name = "-fno-check",
+     .help = "no guards, even at -O0: the checked build is what a program is "
+             "developed with, and this is what a program is built with when a "
+             "guard's rule is the programmer's and not the compiler's"},
     {.id = OptionId::Emit,
      .name = "--emit",
      .value = ValueKind::Required,
@@ -231,9 +243,14 @@ constexpr std::array<OptionId, 4> kResolveIds{OptionId::Ast, OptionId::Refs, Opt
                                               OptionId::At};
 constexpr std::array<OptionId, 3> kCheckIds{OptionId::Ast, OptionId::Types, OptionId::Stats};
 constexpr std::array<OptionId, 1> kParseIds{OptionId::NoTrivia};
-constexpr std::array<OptionId, 1> kModuleDebugIds{OptionId::DebugInfo};
-constexpr std::array<OptionId, 5> kEmitIds{OptionId::Output, OptionId::OptLevel, OptionId::Emit,
-                                           OptionId::DebugInfo, OptionId::Verbose};
+// The commands that lower a unit take both spellings of the checked build: `ir`
+// prints the module a build would emit, so a flag that changes that module has to
+// be accepted there or the dump is a dump of something nobody can build.
+constexpr std::array<OptionId, 3> kModuleDebugIds{OptionId::DebugInfo, OptionId::CheckBuild,
+                                                  OptionId::NoCheckBuild};
+constexpr std::array<OptionId, 7> kEmitIds{
+    OptionId::Output,     OptionId::OptLevel,     OptionId::Emit,   OptionId::DebugInfo,
+    OptionId::CheckBuild, OptionId::NoCheckBuild, OptionId::Verbose};
 constexpr std::array<OptionId, 4> kLinkIds{OptionId::LibraryDir, OptionId::Library,
                                            OptionId::Linker, OptionId::Sysroot};
 

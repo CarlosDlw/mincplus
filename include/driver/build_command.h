@@ -81,6 +81,16 @@ struct BuildRequest {
   // named by the target's platform.
   std::string output;
   bool debugInfo = false;
+  // The checked build (`-fcheck`/`-fno-check`), already resolved against the
+  // level by the caller: it is on at `-O0` and off above it, which is one rule
+  // and not two, and this field is that rule's answer (`checks.md`).
+  //
+  // The default here is **off**, and it is the plain answer rather than the
+  // command's: a request built by hand (a test, a future library user) gets the
+  // module without guards unless it asks, exactly as it gets no debug info. The
+  // rule that decides for `mincc build` lives in `requestFrom`, where the level
+  // is known.
+  bool checks = false;
   bool verbose = false;
   std::vector<std::string> libraryDirs;
   std::vector<std::string> libraries;

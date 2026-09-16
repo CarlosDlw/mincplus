@@ -78,6 +78,13 @@ enum class ModuleAssumption : std::uint8_t {
   // the second row of the same shape, which is why the two are separate rows and
   // not one: the bounds and the operand are different in each.
   UnguardedFloatToInt,
+  // An access through a pointer with no test of its address in front of it, in a
+  // module that was built with the checked build's guards. Not an "assumption" in
+  // `ir.md`'s sense -- it is the *checked build's own promise* -- and it is a row
+  // here because the failure mode is the same one the rest of this file exists
+  // for: a rule that is a sentence in a document until something reads it back
+  // (`checks.md`, `ir.md` § *The checked build's guards*).
+  UnguardedAccess,
 };
 
 struct ModuleAssumptionInfo {
@@ -95,12 +102,25 @@ struct ModuleAssumptionInfo {
 [[nodiscard]] std::span<const ModuleAssumption> allModuleAssumptions();
 [[nodiscard]] std::string_view toString(ModuleAssumption assumption);
 
+// What the scan needs to know about how the module was built. Not a property of
+// the module: a checked module declares its runtime entry and carries guards, and
+// an unchecked one carries neither, so "was this built with `-fcheck`" is a fact
+// the caller passes rather than one the scan could read back. It is an argument
+// and not a global because the same module object may be scanned by a test that
+// built it either way.
+struct ScanOptions {
+  // True when the lowering was asked for the checked build's guards
+  // (`ir::LoweringOptions::checks`).
+  bool checks = false;
+};
+
 // Every violated invariant, in the order they were found. Empty means the module
 // is one this compiler is allowed to have built.
 //
 // A non-empty result is *always* a bug in this compiler -- the program it came
 // from was checked and accepted -- so a caller reports these the way it reports
 // an internal error, with the module dumped beside them.
-[[nodiscard]] std::vector<IRDiagnostic> scanModule(const Module& module);
+[[nodiscard]] std::vector<IRDiagnostic> scanModule(const Module& module,
+                                                   const ScanOptions& options = {});
 
 } // namespace minc::ir

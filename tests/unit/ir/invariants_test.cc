@@ -265,6 +265,47 @@ void tripUnguardedFloatToInt(llvm::Module& module) {
   }
 }
 
+// The checked build's row, and the only one whose module has to be built with a
+// flag on: the promise is about a module that *asked* for the guards, and an
+// unguarded access in an unchecked module is what an unchecked module is.
+//
+// The mutation removes the guard rather than weakening it: the conditional branch
+// that stands in front of an access is replaced by an unconditional one, which is
+// exactly the shape of "an access was emitted without its guard" -- and neither
+// half of the scan's rule can be satisfied by what is left.
+void tripUnguardedAccess(llvm::Module& module) {
+  llvm::Function* function = definitionOf(module, "mix");
+  if (function == nullptr) {
+    return;
+  }
+  for (llvm::BasicBlock& block : *function) {
+    // The first access whose address the compiler did not put there itself: the
+    // same two escapes the scan uses, so the mutation reaches a guarded access and
+    // not a binding's slot.
+    llvm::Value* address = nullptr;
+    for (llvm::Instruction& instruction : block) {
+      if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
+        address = load->getPointerOperand();
+      } else if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+        address = store->getPointerOperand();
+      } else {
+        continue;
+      }
+      if (llvm::isa<llvm::Constant>(address) || llvm::isa<llvm::AllocaInst>(address) ||
+          llvm::isa<llvm::Argument>(address)) {
+        continue;
+      }
+      llvm::BasicBlock* predecessor = block.getUniquePredecessor();
+      if (predecessor == nullptr || predecessor->getTerminator() == nullptr) {
+        continue;
+      }
+      predecessor->getTerminator()->eraseFromParent();
+      llvm::BranchInst::Create(&block, predecessor);
+      return;
+    }
+  }
+}
+
 [[nodiscard]] const std::map<ModuleAssumption, Mutation>& tripwires() {
   static const std::map<ModuleAssumption, Mutation> table{
       {ModuleAssumption::Metadata, &tripMetadata},
@@ -277,6 +318,7 @@ void tripUnguardedFloatToInt(llvm::Module& module) {
       {ModuleAssumption::Alignment, &tripAlignment},
       {ModuleAssumption::UnguardedDivision, &tripUnguardedDivision},
       {ModuleAssumption::UnguardedFloatToInt, &tripUnguardedFloatToInt},
+      {ModuleAssumption::UnguardedAccess, &tripUnguardedAccess},
   };
   return table;
 }
@@ -291,6 +333,12 @@ TEST(IrInvariantsTest, EveryAssumptionRowCanBeTripped) {
 
     test::IrFixture fixture;
     fixture.source(std::string(kTripwireProgram));
+    // The guards, for the one row about them: every other row is tripped on a
+    // module of either kind, and building all of them checked would put a guard in
+    // front of the accesses these rows are about -- which is fine, but it also
+    // means the *clean* module assertion below would be measuring the guards
+    // rather than the row.
+    fixture.checks(row.assumption == ModuleAssumption::UnguardedAccess);
     ASSERT_TRUE(fixture.build());
     ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
     // The program itself has to be clean, or the row's violation would be one of

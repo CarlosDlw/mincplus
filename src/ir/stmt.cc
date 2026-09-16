@@ -21,6 +21,7 @@
 #include "llvm/IR/Instructions.h"
 
 #include "ast/node.h"
+#include "debug.h"
 #include "sema/type.h"
 #include "sema/typed_ast.h"
 #include "support/intern/sym_id.h"
@@ -285,6 +286,14 @@ void Lowering::lowerFor(ast::AstId stmt) {
     return;
   }
 
+  // The `for` statement is a scope of its own: the binding its initializer
+  // declares is visible to the condition, the step and the body, and to nothing
+  // else -- and that "nothing else" is what the debugger reads, so the scope is
+  // opened here and closed after the loop's end block.
+  const bool scoped = debug_ != nullptr && debug_->inFunction();
+  if (scoped) {
+    debug_->openBlock(spanOf(stmt));
+  }
   // The initializer runs once, before the loop, in the enclosing block: it is a
   // statement of the enclosing scope as far as control flow is concerned, and
   // the binding it declares is visible to the condition, the step and the body
@@ -303,6 +312,9 @@ void Lowering::lowerFor(ast::AstId stmt) {
     }
   }
   if (failed_) {
+    if (scoped) {
+      debug_->closeBlock();
+    }
     return;
   }
 
@@ -341,6 +353,9 @@ void Lowering::lowerFor(ast::AstId stmt) {
   }
   branchTo(condBB);
 
+  if (scoped) {
+    debug_->closeBlock();
+  }
   builder_.SetInsertPoint(endBB);
 }
 

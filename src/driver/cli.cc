@@ -513,6 +513,12 @@ void parseInto(CliOptions& opts, const PreScan& prescan, int argc, const char* c
     case OptionId::DebugInfo:
       opts.debugInfo = true;
       break;
+    case OptionId::CheckBuild:
+      opts.checkBuild = true;
+      break;
+    case OptionId::NoCheckBuild:
+      opts.checkBuild = false;
+      break;
     case OptionId::Verbose:
       opts.verbose = true;
       break;

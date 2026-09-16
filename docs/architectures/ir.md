@@ -357,8 +357,9 @@ same rule the rest of the compiler follows:
 | `function.cc` | one function: parameters, the entry block, the return, the `main` special case |
 | `stmt.cc` | statements: blocks, `if`/`else`, loops, jumps, returns |
 | `expr.cc` | expressions: the arithmetic, the coercions, the calls, and every access, read out of `TypedFile::accessAt` rather than decided |
-| `runtime.cc` | the four semantic guards (`/`, `%`, shift counts, `INT_MIN / -1`) and the checked build's module-statable access guards (null, alignment, an `object`-provenance extent) |
-| `invariants.cc` | the post-lowering scans: the runtime contract, the assumption list (functions *and* file-scope objects), and that every emitted alignment equals the record's |
+| `runtime.cc` | the four semantic guards (`/`, `%`, shift counts, `INT_MIN / -1`), which are the language *defining* an outcome and are therefore in every build |
+| `checks.cc` | the checked build's module-statable access guards — null, alignment, an `object`-provenance count and a slice's `Length` — read from the same `AccessObligation`; the site messages; and the `__minc_check_fail` entry the failing edges call. Only in a build that asked for them (`checks.md`) |
+| `invariants.cc` | the post-lowering scans: the runtime contract, the assumption list (functions *and* file-scope objects), that every emitted alignment equals the record's, and — in a checked module — that every access through a pointer is reached through a guard (`ir-unguarded-access`) |
 | `diag.h` | `IRDiagnostic` — this stage's errors as values, like every other stage |
 
 **One `IRUnit` owns everything LLVM for one translation unit: the
@@ -622,14 +623,18 @@ Where each guard can come from is not a matter of taste — it is decided by the
 | `memory-null` | the module | the address against zero, for any non-zero access — the instruction already holds it |
 | `memory-misaligned` | the module | the address against `alignOf(access.type)`; both numbers are in the instruction |
 | `memory-out-of-object`, provenance `object` | the module | the base and the extent are the *tree's* (`&x`, `sizeOf`), and so is the reached offset |
-| `memory-out-of-object`, provenance `foreign` | the shadow memory | the module has no base to compare against |
+| `memory-out-of-object`, provenance `object`, a **slice** | the module | the extent is the descriptor's `len` *word* rather than a number in a type, which is why the record carries `ExtentKind::Length` and not a count (`checks.md`) |
+| `memory-out-of-object`, provenance `foreign` | the shadow memory | the module has no base to compare against — including `p[i]` through a pointer, whose object is not in this unit |
 | `memory-uninitialized` | the shadow memory | a write map keyed by allocation |
 | `memory-dangling` | the shadow memory | the same map, plus the `lifetime` interaction in § *Storage* |
 | `memory-restrict-overlap` | the shadow memory | the annotation's meaning, checked at the call |
 
-The first three are `runtime.cc`'s, emitted **from the obligation** — which is
-the only way `expr.cc` may emit an access at all, so there is no path by which an
-access reaches the module unguarded. The rest need state a module cannot carry,
+The module-answerable rows are `checks.cc`'s, emitted **from the obligation** —
+which is the only way `expr.cc` may emit an access at all, so there is no path by
+which an access reaches the module unguarded. **They are implemented**, for a build
+that asked for them (`-fcheck`, and `-O0` by default): `checks.md` is that record,
+and `invariants.cc` reads the finished module back to prove no access lost its
+guard. The rows below the line need state a module cannot carry,
 which is why `memory.md` assigns them to the runtime; this stage's whole
 contribution is to *not delete* the shadow calls and to keep the object live.
 

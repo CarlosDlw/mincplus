@@ -386,7 +386,14 @@ Place Lowering::lowerPlace(ast::AstId expr) {
       llvm::Value* zero = llvm::ConstantInt::get(indexType(), 0);
       llvm::Value* address =
           builder_.CreateGEP(arrayType, basePlace.addr, {zero, index.v}, "index");
-      return Place{address, types_.elementOf(basePlace.type)};
+      // The evidence the checked build's bounds guard compares: the index it just
+      // used, and the count the *type* gave. Whether the guard is emitted is not
+      // decided here -- the access record decides, at the access -- but the two
+      // values exist here and nowhere else (`values.h`).
+      Place place{address, types_.elementOf(basePlace.type)};
+      place.bounds =
+          BoundsGuard{index.v, llvm::ConstantInt::get(indexType(), types_.countOf(basePlace.type))};
+      return place;
     }
     // `s[i]` on a **slice**: the descriptor is loaded, and the element is the
     // first member walked by the index. A single-index `getelementptr` through the
@@ -408,11 +415,19 @@ Place Lowering::lowerPlace(ast::AstId expr) {
         return {};
       }
       llvm::Value* data = builder_.CreateExtractValue(descriptor.v, {0}, "slice.ptr");
-      // A *plain* `getelementptr` here too: the view's length is a value this
-      // stage does not compare the index against, and `inbounds` would be a
-      // promise the language has not asked anyone to keep (`slices.md`).
+      // A *plain* `getelementptr` here too: `inbounds` is a promise this language
+      // does not make, and an index the checked build will trap on is exactly a
+      // promise that would be false (`slices.md`, `ir.md`).
       llvm::Value* address = builder_.CreateGEP(elementType, data, {index.v}, "index");
-      return Place{address, element};
+      // The view's own length word: the second member of the descriptor the
+      // record says this subscript compares against (`ExtentKind::Length`). It is
+      // read for the guard and never for the addressing, which is what keeps the
+      // unchecked form of a pointer a view of a *pointer* (`slices.md`, decision
+      // 20) and not a change to how a slice is walked.
+      llvm::Value* length = builder_.CreateExtractValue(descriptor.v, {1}, "slice.len");
+      Place place{address, element};
+      place.bounds = BoundsGuard{index.v, length};
+      return place;
     }
     const Value base = lowerExpr(operands[0]);
     if (base.v == nullptr) {
@@ -460,6 +475,14 @@ Value Lowering::loadPlace(const Place& place, ast::AstId placeNode) {
           "stopped recording where this stage reads the record");
     return {};
   }
+  // The checked build's guards, before the instruction they guard and not after:
+  // the passing edge of each test is the block the load lives in, which is the
+  // shape `invariants.cc` reads back (`ir.md` § *The checked build's guards*).
+  if (checksEnabled()) {
+    if (const sema::AccessObligation* obligation = obligationFor(placeNode)) {
+      guardAccess(place, *obligation, spanOf(placeNode));
+    }
+  }
   llvm::Type* type = storageType(place.type);
   if (type == nullptr) {
     return {};
@@ -496,6 +519,14 @@ void Lowering::storePlace(const Place& place, const Value& value, ast::AstId pla
     fatal(spanOf(placeNode), IRDiagnosticCode::Internal,
           "a store would write a value of the wrong type");
     return;
+  }
+  // The same guards as a read, from the same record: a write outside the model is
+  // the violation that corrupts the *next* thing rather than this one, and it is
+  // the half a reader is least able to notice from a stack trace.
+  if (checksEnabled()) {
+    if (const sema::AccessObligation* obligation = obligationFor(placeNode)) {
+      guardAccess(place, *obligation, spanOf(placeNode));
+    }
   }
   llvm::StoreInst* store = builder_.CreateStore(stored.v, place.addr);
   store->setAlignment(llvm::Align(alignmentOf(place.type)));

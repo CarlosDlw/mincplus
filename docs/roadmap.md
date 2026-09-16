@@ -609,10 +609,16 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
       `tests/unit/ir/layout_test.cc` walks every named triple (plus a doctored row
       that proves the refusal fires); the same pass fixed `long double` on
       `x86_64-apple-darwin`, which is the x87 format and not a `double`
-- [ ] The checked build's **module-statable guards** (null dereference,
-      misalignment, an `object`-provenance extent) behind `-fcheck`, which `-O0`
-      defaults to — explicitly *not* the semantic guards, which belong in every
-      build. The shadow-memory half is § 11's runtime
+- [x] The checked build's **module-statable guards** (null dereference,
+      misalignment, an `object`-provenance extent, and a slice's own length)
+      behind `-fcheck`, which `-O0` defaults to, and `-fno-check` to turn off —
+      explicitly *not* the semantic guards, which belong in every build. Each
+      failure prints its site (`memory-null`, `memory-misaligned`,
+      `memory-out-of-bounds`) and traps, the scan reports `ir-unguarded-access`
+      when an access lost its guard, and `-fcheck -O2` keeps every one of them.
+      `docs/architectures/checks.md`. The shadow-memory half is § 11's runtime and
+      is **not** started: a pointer's own extent, unwritten bytes, a dead
+      allocation and a `restrict` overlap each need state a module cannot carry
 - [x] Signedness from the *type* and not the opcode: `i32` and `u32` are one LLVM
       type, so `/`, `%`, `>>` and the comparisons pick `sdiv`/`udiv`,
       `ashr`/`lshr` and `sgt`/`ugt` from what `sema` recorded -- the difference

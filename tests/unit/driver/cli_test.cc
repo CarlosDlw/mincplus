@@ -240,6 +240,25 @@ TEST(CliTest, TheOptimisationLevelIsOptionalAndNeverEatsTheNextArgument) {
   EXPECT_EQ(parse({"build", "-Oz", "a.mx"}).optLevel, "z");
 }
 
+TEST(CliTest, TheCheckedBuildIsThreeStatesAndNotTwo) {
+  // "Not said" is a different answer from "said no": the default is a *level* --
+  // the checked build is what `-O0` means -- so the parsed options have to keep
+  // the difference, and `requestFrom` is what resolves it (`checks.md`).
+  const CliOptions silent = parse({"build", "a.mx"});
+  ASSERT_TRUE(silent.error.empty());
+  EXPECT_FALSE(silent.checkBuild.has_value());
+
+  const CliOptions on = parse({"build", "-fcheck", "a.mx"});
+  ASSERT_TRUE(on.error.empty());
+  ASSERT_TRUE(on.checkBuild.has_value());
+  EXPECT_TRUE(*on.checkBuild);
+
+  const CliOptions off = parse({"build", "-fno-check", "a.mx"});
+  ASSERT_TRUE(off.error.empty());
+  ASSERT_TRUE(off.checkBuild.has_value());
+  EXPECT_FALSE(*off.checkBuild);
+}
+
 TEST(CliTest, JoinedAndSeparateValuesAgree) {
   const CliOptions joined = parse({"build", "-DFOO=1", "-Iinc", "-oout", "a.mx"});
   ASSERT_TRUE(joined.error.empty());

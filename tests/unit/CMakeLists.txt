@@ -106,6 +106,7 @@ minc_add_executable(minc_unit_tests
   sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
+    ir/checks_test.cc
     ir/slice_test.cc
     ir/builtins_test.cc
     ir/cast_test.cc

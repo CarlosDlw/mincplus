@@ -586,13 +586,21 @@ otherwise fill in wrongly:
 
 | Situation | Checked build | Release build |
 | --- | --- | --- |
-| Access outside the object | **trapped** with a named site (`memory-out-of-object`) | outside the model |
-| Access at the wrong alignment | **trapped** (`memory-misaligned`) | outside the model |
-| Access through a null pointer | **trapped** (`memory-null`) | outside the model |
-| Read of unwritten bytes | **trapped** (`memory-uninitialized`) | outside the model |
-| Access after the object's lifetime | **trapped** (`memory-dangling`) | outside the model |
-| Two pointers violating a written `restrict` | **reported** (`memory-restrict-overlap`) | outside the model |
+| Access outside the object, an `object` or a slice's extent | **trapped** with a named site (`memory-out-of-bounds`) — **shipped** | outside the model |
+| Access at the wrong alignment | **trapped** (`memory-misaligned`) — **shipped** | outside the model |
+| Access through a null pointer | **trapped** (`memory-null`) — **shipped** | outside the model |
+| Access outside the object, a *pointer*'s extent | not yet: the object is not in this unit, so it needs the shadow memory | outside the model |
+| Read of unwritten bytes | **trapped** (`memory-uninitialized`) — needs the shadow memory | outside the model |
+| Access after the object's lifetime | **trapped** (`memory-dangling`) — needs the shadow memory | outside the model |
+| Two pointers violating a written `restrict` | **reported** (`memory-restrict-overlap`) — needs the shadow memory | outside the model |
 | A data race (future) | **reported** by the race check | outside the model |
+
+The three shipped rows are `-fcheck` (`docs/architectures/checks.md`), which is
+what `-O0` already means: the guard is emitted from the access obligation, it
+prints the site that failed, and it is in the build at every optimisation level
+the flag is on for. What the *module* can answer is the whole of what is shipped;
+what needs a shadow memory is named here as absent rather than approximated by a
+bounds check that would be about the wrong thing.
 
 "Outside the model" is a deliberate phrase: it is not "undefined behavior" with
 its loaded history, it is "the program did not meet a precondition the language
@@ -648,9 +656,10 @@ pointer are marked.
 | **`src/sema/access.cc`** (the record) | **shipped:** `TypedFile::accesses()` — an `AccessObligation` per dereference, with `accessAt(node)` | **The lowering may not re-derive an alignment or a provenance fact**, exactly as it may not re-derive a conversion. The shape, and the two fields deliberately narrower than this model, are in the section below |
 | `src/ir/values.h` | `Place` gains producers: `&`, `*`, indexing, field projection | `ir.md` already specifies the table over producers as the mechanism, so a new producer is a line |
 | `src/ir/expr.cc` | the accesses themselves, from the record | It materialises decisions, it does not make them |
-| `src/ir/runtime.cc` | the checked-build access guards (null, alignment, bounds, liveness) and `expose`/`with_exposed_provenance` | `ir.md` already designates it as the home of the operations the hardware does not define |
+| **`src/ir/checks.cc`** (the guards) | **shipped:** null, alignment, and bounds from the record — the `object` count and a slice's `Length` — with the site message and the `__minc_check_fail` entry | The design record is `checks.md`; the order, the unsigned comparison and the folding rules are argued there |
+| `src/ir/checks.cc` (the rest) | `expose`/`with_exposed_provenance` as *guards*, liveness, and the shadow-memory calls | `ir.md` already designates the runtime as the home of the operations the hardware does not define |
 | `src/ir/invariants.cc` | the assumption scan: no TBAA metadata, no unproved `inbounds`, no `nsw`/`nuw`, alignments as recorded, no `dereferenceable`/`nonnull` the language did not state | It is the file `ir.md` already designates for exactly this; the list is § *Not undefined* turned into code |
-| `src/driver` | `-Wprovenance` and the checked-build switch (`-fcheck`), which is what `-O0` defaults to | Driver decisions, and the flags have to exist before the checks are useful |
+| **`src/driver`** | **shipped:** `-Wprovenance` and `-fcheck` / `-fno-check`, with `-O0` defaulting to the checked build | The flags exist before the checks are useful, which is what this row asked for; the resolution rule is one line in `requestFrom` (`checks.md`) |
 | `docs/architectures/ir.md` | the assumption list it already promised — now the enumerated table the scan reads, with `inbounds` marked as the one row whose proof still has no home | The list is a property of what gets *emitted*, which is that stage's business; the rules it encodes stay here, and it links back for them |
 
 ### The record the lowering is not allowed to re-derive

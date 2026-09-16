@@ -58,6 +58,12 @@ enum class OptionId : std::uint8_t {
   Output,
   OptLevel,
   DebugInfo,
+  // The checked build's two spellings, and they are two options rather than one
+  // with a value because that is how every flag that has an `-fno-` form is
+  // written, and because the *default* is a level (`-O0`) and not a constant:
+  // `-fno-check` is the only way to say "not even at `-O0`" (`checks.md`).
+  CheckBuild,
+  NoCheckBuild,
   Verbose,
   Emit,
   LibraryDir,

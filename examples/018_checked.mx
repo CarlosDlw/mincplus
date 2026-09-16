@@ -1,0 +1,87 @@
+// The checked build -- `-fcheck`, and what `-O0` already means.
+//
+// `memory.md` states one obligation per access: aligned, inside an object, and --
+// the half a compiler can *check* rather than define -- against an address that is
+// not null and an index that is inside the extent the type or the descriptor gives.
+// `-O0` is the build that verifies it, and `-fcheck` asks for it at any level.
+//
+// The guards are three, and each is a test the compiler writes in front of the
+// access it belongs to:
+//
+//   * `memory-null`          the address against zero
+//   * `memory-misaligned`    the address's low bits against the type's alignment
+//   * `memory-out-of-bounds` the index against the count (`a[i]` on an array) or
+//                            against the view's own length (`s[i]` on a slice)
+//
+// Nothing in this program traps, which is the point of the example: a correct
+// program pays for the checks and answers the same numbers it would have answered
+// without them. The one thing to take away is *when* a trap happens -- at the
+// access, with the site in the message -- rather than somewhere later, in code
+// that did nothing wrong.
+//
+//   $ mincc run examples/018_checked.mx
+//   total 24 from 4 elements, middle 12, again 24
+//   last 9 (the view is 4 long, and the language says so)
+//
+// The same file with the guard off (`mincc run -fno-check`) prints the same thing,
+// because the accesses are inside their objects. An access that is *not* is the
+// case the build exists for -- and `past` below is one, uncalled here so that this
+// program stays a correct one. A program that calls a subscript out of range stops
+// with the site in the message:
+//
+//   mincc: trap: memory-out-of-bounds at <file>:<line>:<col>
+//   mincc: error: the program was terminated abnormally
+//
+// which is the difference between a bug that is found where it was written and one
+// that is found later, in code that did nothing wrong: with the flag off, the same
+// access reads whatever is past the array.
+//
+// Three details of the design are visible from here. The index comparison is
+// **unsigned**, so a negative index is caught by the same instruction as an index
+// past the end. The extent of `a[i]` is a number in its *type* and the extent of
+// `s[i]` is the descriptor's `len` **word**, which is why the two are different
+// rows of the same guard. And a subscript through a *pointer* (`p[i]`) has no
+// extent to compare against -- the object `p` names is not in this unit -- so it is
+// guarded against null and alignment and not against its extent, which is the
+// honest answer rather than a guess (`checks.md`).
+
+extern fn i32 printf(format: str, ...);
+
+// Two guards on one access: the address against null, and the index against the
+// view's length. Both are the record's, and neither is proved away -- a checker
+// that deletes the checks it can prove stops reporting the day the proof has a bug.
+fn i32 at(view: []i32, i: i32) {
+  return view[i];
+}
+
+// `a[i]` on a named array: the count is four, in the type, and the guard compares
+// against exactly that.
+fn i32 sum4(table: [4]i32) {
+  let total: i32 = 0;
+  for let i: i32 = 0; i < 4; i += 1 {
+    total = total + table[i];
+  }
+  return total;
+}
+
+// Nine elements into a view of whatever length it is handed. The guard for this
+// one is emitted like every other; nothing calls it from this file, which is what
+// makes the program above a correct one *and* leaves the reader a site to point
+// `mincc run` at.
+fn i32 past(view: []i32) {
+  return at(view, 9);
+}
+
+fn i32 main() {
+  let table: [4]i32 = [3, 5, 7, 9];
+  let view: []i32 = table[..];
+  let total: i32 = sum4(table);
+  let middle: i32 = at(view, 1) + at(view, 2);
+  let again: i32 = 0;
+  for let i: i32 = 0; i < 4; i += 1 {
+    again = again + at(view, i);
+  }
+  printf("total %d from 4 elements, middle %d, again %d\n", total, middle, again);
+  printf("last %d (the view is 4 long, and the language says so)\n", at(view, 3));
+  return 0;
+}

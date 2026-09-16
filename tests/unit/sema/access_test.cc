@@ -38,6 +38,65 @@ TEST(AccessTest, TheTablesHaveOneRowPerKind) {
   for (const sema::ProvenanceKind kind : sema::allProvenanceKinds()) {
     EXPECT_NE(sema::toString(kind), "unknown");
   }
+  EXPECT_EQ(sema::extentKindInfos().size(), sema::allExtentKinds().size());
+  for (const sema::ExtentKind kind : sema::allExtentKinds()) {
+    EXPECT_NE(sema::toString(kind), "unknown");
+  }
+}
+
+// --- the extent ------------------------------------------------------------------
+//
+// The three answers the checked build's bounds guard is read from (`checks.md`).
+// The tests are separate per base because the three bases are different *kinds*
+// of object, and one test asserting "the extent is right" over all three would not
+// say which one changed when it failed.
+
+TEST(AccessTest, AnArraySubscriptRecordsTheCountItsTypeGives) {
+  SemaFixture f;
+  f.source("fn i32 main() { let table: [4]i32 = [1, 2, 3, 4]; let i: i32 = 1; "
+           "return table[i]; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.accessCount(), 1u);
+  const sema::AccessObligation& access = f.typed().accesses().front();
+  EXPECT_EQ(access.extentKind, sema::ExtentKind::Count);
+  EXPECT_EQ(access.extent, 4u);
+}
+
+TEST(AccessTest, ASliceSubscriptRecordsALengthAndNotACount) {
+  // The length is a *value* -- the descriptor's `len` word -- so the record says
+  // which kind of extent it is and carries no number: `Count` with a `0` would be
+  // the record claiming an empty object.
+  SemaFixture f;
+  f.source("fn i32 at(s: []i32, i: i32) { return s[i]; }\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.accessCount(), 1u);
+  const sema::AccessObligation& access = f.typed().accesses().front();
+  EXPECT_EQ(access.extentKind, sema::ExtentKind::Length);
+  EXPECT_EQ(access.extent, 0u);
+}
+
+TEST(AccessTest, APointerSubscriptRecordsNoExtent) {
+  // The object a pointer names is not in this unit, which is the case `memory.md`
+  // assigns to a shadow memory: the record says so rather than inventing a number
+  // (`checks.md`, *What is deliberately not here*).
+  SemaFixture f;
+  f.source("fn i32 at(p: *i32, i: i32) { return p[i]; }\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.accessCount(), 1u);
+  const sema::AccessObligation& access = f.typed().accesses().front();
+  EXPECT_EQ(access.extentKind, sema::ExtentKind::Unknown);
+  EXPECT_EQ(access.extent, 0u);
+}
+
+TEST(AccessTest, ADerefRecordsNoExtent) {
+  SemaFixture f;
+  f.source("fn i32 head(p: *i32) { return *p; }\n"
+           "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(f.build());
+  ASSERT_EQ(f.accessCount(), 1u);
+  EXPECT_EQ(f.typed().accesses().front().extentKind, sema::ExtentKind::Unknown);
 }
 
 TEST(AccessTest, TakingAnAddressRecordsNoAccess) {
@@ -172,6 +231,19 @@ TEST(AccessTest, TheDumpShowsTheAccessRecord) {
   const std::string dump = f.dump();
   EXPECT_TRUE(dump.find("# accesses 1") != std::string::npos) << dump;
   EXPECT_TRUE(dump.find("[access ordinary foreign i32]") != std::string::npos) << dump;
+}
+
+TEST(AccessTest, TheDumpNamesTheExtentItHas) {
+  // The extent is printed only when there is one, and it is the checked build's
+  // reader that wants it in the dump: `a[i]` and `s[i]` are checked against
+  // different things and the record is where that difference is visible.
+  SemaFixture f;
+  f.source("fn i32 main() { let table: [4]i32 = [1, 2, 3, 4]; let i: i32 = 1; "
+           "let view: []i32 = table[..]; return table[i] + view[i]; }\n");
+  ASSERT_TRUE(f.build());
+  const std::string dump = f.dump();
+  EXPECT_TRUE(dump.find("[access ordinary object count 4 i32]") != std::string::npos) << dump;
+  EXPECT_TRUE(dump.find("[access ordinary foreign length i32]") != std::string::npos) << dump;
 }
 
 } // namespace

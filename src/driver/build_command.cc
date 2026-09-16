@@ -208,9 +208,17 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
     ir::LoweringOptions loweringOptions;
     loweringOptions.debugInfo = request.debugInfo;
     loweringOptions.producer = producerString();
+    // The checked build. Read from the request, which is where `-fcheck` and the
+    // `-O0` default were resolved, so this stage has one answer to materialise and
+    // no level to interpret (`checks.md`).
+    loweringOptions.checks = request.checks;
     // The source file the spans index into. Null for a unit that never reached
     // the lowering, which cannot happen here because the front end refused it.
     loweringOptions.source = sources.find(unit.file);
+    // Every file of the compilation, for the guards' site messages: a guard on an
+    // access inside an included header has to name that header, and the unit's own
+    // path would be a true sentence about the wrong file.
+    loweringOptions.sources = &sources;
 
     ir::IRResult lowered =
         ir::lowerUnit(*unit.lowered, unit.resolved->map, unit.typed->typed, frontEnd.sema().types(),
@@ -226,7 +234,10 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
     // module is printed beside the violation so the reader can see what happened
     // -- to stderr, because stdout is where the object is going when `-o -` is
     // the answer.
-    const std::vector<ir::IRDiagnostic> violations = ir::scanModule(lowered.module);
+    // The scan is told how the module was built: an unchecked module is *supposed*
+    // to carry unguarded accesses, and a checked one is not (`ir/invariants.h`).
+    const std::vector<ir::IRDiagnostic> violations =
+        ir::scanModule(lowered.module, ir::ScanOptions{request.checks});
     if (!violations.empty()) {
       renderStageDiagnostics(violations, sources, diag, err);
       ok = false;
@@ -420,6 +431,11 @@ namespace {
   request.errorLimit = options.errorLimit;
   request.kind = *kind;
   request.level = *level;
+  // The checked build: `-fcheck`/`-fno-check` when one was written, and the level
+  // when neither was. It is **one rule and not two** -- `-O0` is the build a
+  // program is developed with, and every optimised level is a build that pays
+  // nothing (`checks.md`) -- and `mincc ir` resolves it the same way.
+  request.checks = options.checkBuild.value_or(*level == backend::OptLevel::O0);
   request.output = options.output;
   request.debugInfo = options.debugInfo;
   request.verbose = options.verbose;

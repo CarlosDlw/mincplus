@@ -844,10 +844,15 @@ warnings inside them are dropped at the report step while errors are not.
   [`architectures/ir.md`](architectures/ir.md) — the LLVM decision, the coercion
   and access records, the runtime contract `sema`'s integer table imposes, the
   **assumption list** the closed set of guarantees the optimiser may be given and
-  the scan that reads it, and the six mechanical rules that make a future node
+  the scan that reads it (including, in a checked module, that no access through a
+  pointer lost its guard), and the six mechanical rules that make a future node
   kind, type kind, operator or callee a compile error instead of a silent gap.
   [`memory.md`](architectures/memory.md) sits under that stage: the object and
-  provenance model whose rules the assumption list is the emitted half of.
+  provenance model whose rules the assumption list is the emitted half of, and
+  [`checks.md`](architectures/checks.md) is the *checked build* — `-fcheck`, and
+  what `-O0` already means: the guards the module can answer (null, alignment, an
+  array's count, a slice's length), the site message each one prints, and the
+  rows that stay for a shadow memory (`src/ir/checks.cc`).
 - **codegen** (`src/backend/llvm`) selects a `TargetMachine` from the
   module's triple, runs LLVM's pass pipeline, and writes an object or an
   assembly listing. It contains no instruction selection, no register allocation
