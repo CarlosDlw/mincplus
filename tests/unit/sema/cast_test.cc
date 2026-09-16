@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include "sema/convert.h"
 #include "sema/sema_error.h"
 #include "sema/sema_fixture.h"
+#include "sema/target.h"
 #include "sema/type.h"
 #include "sema/type_store.h"
 
@@ -104,8 +106,14 @@ const std::vector<CastCase>& castCases() {
       // `u8` does not fit.
       {"*i32", "u64", true, CastKind::PointerToInteger},
       {"*void", "u8", true, CastKind::PointerToInteger, CastLoss::Truncation},
+      // `*void` → `u64` is no loss and `*void` → `u8` loses the address's high
+      // bits. The other direction is **not** the mirror of this one, which is the
+      // bug `ztests` found: `u64` → `*i32` loses nothing, while a `u8` into a
+      // pointer is a `Sign` loss and a `u128` into one truncates.
       {"u64", "*i32", true, CastKind::IntegerToPointer},
-      {"u8", "*void", true, CastKind::IntegerToPointer, CastLoss::Truncation},
+      {"i32", "*u8", true, CastKind::IntegerToPointer, CastLoss::Sign},
+      {"u8", "*void", true, CastKind::IntegerToPointer},
+      {"u128", "*void", true, CastKind::IntegerToPointer, CastLoss::Truncation},
       // --- the bottom type: the conversion is vacuous -------------------------
       {"!", "i32", true, CastKind::Identity},
       {"!", "*i32", true, CastKind::Identity},
@@ -273,11 +281,17 @@ TEST(CastTest, EveryPairOfEveryTypeTheLanguageHasIsAnswered) {
             << what;
         EXPECT_FALSE(sign || precision || range) << what;
         break;
-      case CastKind::IntegerToPointer:
-        EXPECT_EQ(truncation, test::casts::integerWidth(types, from) < types.target().pointerBits)
+      case CastKind::IntegerToPointer: {
+        // Not the mirror of `PointerToInteger`: the wide integer is the one that
+        // truncates, and a narrowed *signed* one has its sign reinterpreted by the
+        // zero-extension.
+        const std::uint16_t width = test::casts::integerWidth(types, from);
+        EXPECT_EQ(truncation, width > types.target().pointerBits) << what;
+        EXPECT_EQ(sign, width < types.target().pointerBits && test::casts::signedType(types, from))
             << what;
-        EXPECT_FALSE(sign || precision || range) << what;
+        EXPECT_FALSE(precision || range) << what;
         break;
+      }
       case CastKind::None:
         EXPECT_EQ(result.loss, CastLoss::None) << what;
         break;
@@ -288,6 +302,36 @@ TEST(CastTest, EveryPairOfEveryTypeTheLanguageHasIsAnswered) {
   // that stops being answered -- or one that starts -- is a line in a diff rather
   // than a suite that quietly covers less.
   EXPECT_EQ(accepted, 388U);
+}
+
+TEST(CastTest, AnIntegerIntoAPointerIsMeasuredAgainstTheTargetsPointer) {
+  // The one row whose answer is a property of the *target* and not of the two
+  // types: `i32` into a pointer is a zero-extension on a 64-bit target (a negative
+  // address becomes a large positive one) and the identity on a 32-bit one, where
+  // the widths are equal and nothing happens at all. A rule written as "the
+  // integer is narrower than the pointer" would answer the second wrong.
+  const std::optional<Triple> wideTriple = parseTriple(kTripleLinuxAmd64);
+  const std::optional<Triple> narrowTriple = parseTriple(kTripleLinuxI386);
+  ASSERT_TRUE(wideTriple.has_value());
+  ASSERT_TRUE(narrowTriple.has_value());
+  const std::optional<TargetInfo> wide = targetInfo(*wideTriple);
+  const std::optional<TargetInfo> narrow = targetInfo(*narrowTriple);
+  ASSERT_TRUE(wide.has_value());
+  ASSERT_TRUE(narrow.has_value());
+
+  TypeStore on64(*wide);
+  const CastResult sixty_four = castResult(on64, kTypeI32, on64.pointerTo(kTypeU8));
+  EXPECT_TRUE(sixty_four.ok);
+  EXPECT_EQ(sixty_four.kind, CastKind::IntegerToPointer);
+  EXPECT_EQ(sixty_four.loss, CastLoss::Sign);
+
+  TypeStore on32(*narrow);
+  const CastResult thirty_two = castResult(on32, kTypeI32, on32.pointerTo(kTypeU8));
+  EXPECT_TRUE(thirty_two.ok);
+  EXPECT_EQ(thirty_two.kind, CastKind::IntegerToPointer);
+  EXPECT_EQ(thirty_two.loss, CastLoss::None);
+  // And the wide integer truncates on both, because 128 bits do not fit either.
+  EXPECT_EQ(castResult(on32, kTypeU128, on32.pointerTo(kTypeU8)).loss, CastLoss::Truncation);
 }
 
 TEST(CastTest, EveryAcceptedPairNamesTheInstructionItNeeds) {

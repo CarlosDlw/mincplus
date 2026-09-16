@@ -137,7 +137,9 @@ enum class CastLoss : std::uint8_t {
   // The destination is narrower, so high bits are dropped.
   Truncation = 1U << 0U,
   // One side is signed and the other is not, at a width that changes what the
-  // same bits mean.
+  // same bits mean: `i32` and `u32` of the same pattern, or a *signed* integer
+  // narrower than the pointer it becomes, whose zero-extension turns a negative
+  // address into a large positive one.
   Sign = 1U << 1U,
   // The destination cannot represent every value of the source's magnitude (the
   // mantissa is smaller than the integer's width, or the float is narrower).

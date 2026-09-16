@@ -222,6 +222,7 @@ type and **one** string type, and `'a'u8` says nothing that `'a' as u8` does not
 | 9 | **Not saturated.** Rust saturates because it has no checked build to fall back on; here a silent `i32::MAX` would be a wrong answer that no flag can find | `1e30 as i32` = `INT_MAX` is a *value*, and a value that is not the mathematical result is a lie the language otherwise refuses to tell |
 | 10 | **Adjacent: `11` and `12c` do not exist; `bool` ↔ integer is explicit; float → `bool` is refused** | `int → bool` is defined (≠ 0) and useful; `float → bool` has NaN, which is neither true nor false, and the sentence sends the reader to `x != 0.0` |
 | 11 | **Pointer ↔ pointer emits nothing**; pointer ↔ integer *is* `expose`/`with_exposed_provenance` and is counted by `-Wprovenance` | `memory.md` decision 7 says the two joins are named operations and never implicit; a cast is the name. Opaque pointers make the pointer-to-pointer case a *type* change with no instruction at all |
+| 11a | **The two joins have different losses, and they are read from the target**: `ptrtoint` truncates when the integer is narrower; `inttoptr` truncates when it is *wider*, and reinterpret a **signed** narrower integer's sign because it zero-extends | The first implementation mirrored one rule into the other, so `u8 → *u8` claimed "bits are dropped" and `u128 → *u8` said nothing. `ztests` is where it surfaced. The widths come from `target().pointerBits`, so `i32 → *u8` is a sign loss on x86_64 and nothing at all on i386 — a rule that cannot be written without the target |
 | 12 | **No reinterpretation in a cast.** `x as i32` on an `f32` is a *value* conversion; the bits are a name of their own, reserved for that item (`bitcast`/`transmute`) | This is C++'s `reinterpret_cast`/`bit_cast` split and Zig's `@bitCast`: the one operation where "convert" and "reinterpret" cannot share a spelling |
 | 13 | **Aggregates are refused, each with the sentence that says what to write** | `[N]T` → `*T` is no decay (arrays.md decision 4) and the workaround is `&a[0]`; a slice → pointer needs the extent, and there is no literal slice (`slices.md`, decision 4) |
 | 14 | **A cast that the language would have done implicitly emits nothing** | A cast is a *statement about the program*, not an instruction: `let x: i64 = a as i64;` is one conversion in the record, and the flag-and-materialiser produce the same code it always did |
@@ -252,7 +253,7 @@ instruction.
 | `*T` → `*U`, `*T` ↔ `*void` | *nothing* | defined | opaque pointers: a pointer cast is a type change. `*void` already converts implicitly |
 | `str` ↔ `*u8` | *nothing* | defined | the *sentinel* is a documented obligation, not a type: `str → *u8` drops the guarantee that the bytes are terminated, `*u8 → str` asserts it |
 | `*T`/`str`/`*void` → integer | `ptrtoint` | defined | `memory.md`'s `expose`: the value is the address, and provenance is recorded as *exposed*. Counted by `-Wprovenance`; `-Wcast: truncation` when the integer is narrower than the pointer |
-| integer → `*T`/`*void`/`str` | `inttoptr` | defined | `memory.md`'s `with_exposed_provenance`: permission over every allocation whose provenance has been exposed, and no other. Counted by `-Wprovenance` |
+| integer → `*T`/`*void`/`str` | `inttoptr` | defined | `memory.md`'s `with_exposed_provenance`: permission over every allocation whose provenance has been exposed, and no other. Counted by `-Wprovenance`. **Not the mirror of the row above**: `-Wcast: truncation` when the integer is *wider* than the pointer (the low bits are kept), and `-Wcast: sign` when it is a **signed** integer *narrower* than it — `inttoptr` zero-extends, so `-1 as *u8` is `0x0000_0000_FFFF_FFFF` on a 64-bit target, measured and not assumed |
 | `!` → anything | *nothing* | defined | the operand never produces a value, so the conversion is vacuous — the rule `never.md` already ships |
 | `[N]T`, `[]T`, a function, `void` → anything | — | **refused** | § below |
 
@@ -434,7 +435,9 @@ Each step is a commit that passes the gates on its own; steps 1–4 are the surf
   rule (`let x = 10u8;` is `u8`, `let y = 10;` is decided by context).
 - **Pointer and integer casts are `expose`.** A test asserts the `-Wprovenance`
   count at each site, and that the implicit assignment still refuses both
-  directions.
+  directions. Their *losses* are pinned per target: `i32 → *u8` is `sign` on
+  x86_64 and nothing on i386, and `u128 → *u8` is `truncation` on both — the pair
+  of answers a rule written as one mirror image gets wrong.
 - **Regression on the ambiguity.** `(x) + 1` for a variable `x`, `(i32)-1`,
   `(u8)(i32)1`, `f((i32)1)` and `(a)(b)` (a call of a parenthesized name) each
   parse to the tree they are supposed to, which is the test C's typedef rule would
@@ -480,6 +483,11 @@ Each step is a commit that passes the gates on its own; steps 1–4 are the surf
 - **`ptrtoint` is the pointer's width**, and `p as i64` on i386 is a zero
   extension; `p as u8` is a truncation the `-Wcast` lint names. Nothing here
   assumes 64 bits.
+- **The same cast has two answers on two targets**, and that is the test
+  `castResult`'s `inttoptr` row ships with: `i32 → *u8` is a sign loss on x86_64
+  (the zero-extension turns `-1` into `0x0000_0000_FFFF_FFFF`) and *no loss at
+  all* on i386, where the two are the same 32 bits. A rule written as "the integer
+  is narrower than the pointer" answers the second one wrong.
 - **`f80` availability is the type's rule, not the suffix's**: `1.5f80` on a target
   whose table has no x87 row is refused by the same sentence `let x: f80` gets.
 - **The guard is `fcmp` + a trap**, both target-independent, and the trap is the

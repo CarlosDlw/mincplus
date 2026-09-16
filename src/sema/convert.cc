@@ -505,8 +505,30 @@ CastResult castResult(const TypeStore& types, TypeId from, TypeId to) {
   if (fromInteger && toAddress) {
     // `with_exposed_provenance`: permission over the allocations whose
     // provenance has been exposed, and no other.
-    const bool loses = integerWidth(types, from) < types.target().pointerBits;
-    return accepted(CastKind::IntegerToPointer, loses ? CastLoss::Truncation : CastLoss::None);
+    //
+    // **This row is not the mirror of the other one**, and writing it as one was
+    // a bug `ztests` found: `i32` into a pointer *zero-extends*, so nothing is
+    // dropped, while a `u128` into one truncates and drops half of itself. The two
+    // losses are:
+    //
+    //   * wider than the pointer: `inttoptr` keeps the low bits, so the high ones
+    //     go -- `truncation`, the same word `ptrtoint` uses for the same cut;
+    //   * **signed** and narrower: the zero-extension turns a negative address into
+    //     a large positive one (`-1 as *u8` is `0x0000_0000_FFFF_FFFF` on a 64-bit
+    //     target, measured, not assumed), so the sign stops meaning what it meant --
+    //     `sign`, and the only moment the reader can hear about it.
+    //
+    // An unsigned integer narrower than the pointer has neither: `u8` into a
+    // pointer is an address in `[0, 256)` and every one of those values is itself.
+    const std::uint16_t width = integerWidth(types, from);
+    const std::uint16_t pointerBits = types.target().pointerBits;
+    if (width > pointerBits) {
+      return accepted(CastKind::IntegerToPointer, CastLoss::Truncation);
+    }
+    if (width < pointerBits && isSigned(types, from)) {
+      return accepted(CastKind::IntegerToPointer, CastLoss::Sign);
+    }
+    return accepted(CastKind::IntegerToPointer);
   }
   if (fromFloat && toAddress) {
     return refused("a float is not an address: expose a pointer with `p as usize` if that is "
