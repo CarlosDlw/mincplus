@@ -1099,6 +1099,18 @@ The ladder, in the order it should be built:
    wrong without any test here noticing, so it is worth the dependency. It is
    extended to `sizeof`/`alignof` for every type in the store, because the
    pointer width is what `isize`, `usize` and every pointer access depend on.
+
+   **Shipped, in two pieces.** The runtime half is `Lowering::layoutOf`, called the
+   first time a type enters a module from `storageType`: it compares
+   `sizeOf`/`alignOf` against `getTypeAllocSize`/`getABITypeAlign` of the shape it
+   built, and a disagreement is an `ir-internal` that names the type, both numbers
+   and the target, with no module emitted. The test half is
+   `tests/unit/ir/layout_test.cc`: one program that uses every scalar, an array of
+   one, an array of `bool`, a slice and -- where the ABI has one -- the x87 format,
+   lowered against all seven named triples, plus a doctored row that proves the
+   refusal fires instead of the module. The test exists because the bug it catches
+   was real: i386 aligns a 64-bit value to four bytes and gives the x87 format a
+   twelve-byte object, where this table said eight and sixteen.
 7. **The access record's enumeration test**, in the shape of `coerce_test.cc`:
    one program per access kind and per provenance kind, an assertion that the
    emitted shape is the recorded one, that `accessAt` answers `nullptr` for a

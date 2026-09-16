@@ -194,8 +194,25 @@ private:
     if (mapped == nullptr) {
       return nullptr;
     }
-    return mapped == boolType() ? byteType() : mapped;
+    llvm::Type* shape = mapped == boolType() ? byteType() : mapped;
+    // **The object's size and alignment, checked against the target's own data
+    // layout the first time this type enters the module.** `memory.md` states the
+    // claim ("`ir` asserts that table against LLVM's own `Triple`/`DataLayout`")
+    // and this is it: `sema::TypeStore` owns the numbers, every emitted
+    // `align N` and every debug record comes from them, and LLVM owns the
+    // authority. The check is here, at the object shape, because that is the
+    // question both answers are about -- and it runs per *mapping*, so a type the
+    // target refuses (`f80` on aarch64) is refused by the mapper with its own
+    // sentence and never reaches this one.
+    if (!layoutOf(id, shape)) {
+      return nullptr;
+    }
+    return shape;
   }
+  // True when the store's size and alignment for `id` are the ones the target's
+  // data layout gives `shape`; records an internal diagnostic and answers false
+  // when they are not, once per type.
+  [[nodiscard]] bool layoutOf(sema::TypeId id, llvm::Type* shape);
   [[nodiscard]] llvm::Type* llvmFunctionType(sema::TypeId id);
   [[nodiscard]] llvm::IntegerType* boolType() {
     return llvm::Type::getInt1Ty(context_);
@@ -534,6 +551,10 @@ private:
   std::unordered_map<std::uint64_t, llvm::GlobalVariable*> globals_;
   std::unordered_map<std::uint64_t, llvm::Function*> functions_;
   std::unordered_map<std::string, llvm::GlobalVariable*> strings_;
+  // Which types have had their layout checked, by `TypeId::index`. A byte per
+  // type and not a set: the question is asked once per mapping of a type, and the
+  // answer is "already known good" for every call after the first.
+  std::vector<std::uint8_t> layoutChecked_;
   // Interned names, so a diagnostic and a symbol can spell one without a scan.
   // Built once in the constructor, because a lookup per `PathExpr` is what keeps
   // a unit's cost linear rather than quadratic -- and built by the *checker's*

@@ -459,10 +459,23 @@ std::size_t TypeStore::sizeOf(TypeId id) const {
     return 1;
   case TypeKind::Int:
     return type.bits / 8U;
-  case TypeKind::Float:
-    // `f80` is stored in 16 bytes on System V: the 10 bytes of value rounded up
-    // to the ABI's 16-byte slot. Anything narrower is its own width.
-    return type.bits <= 64 ? type.bits / 8U : 16;
+  case TypeKind::Float: {
+    // The ABI's slot for the width: the value's bytes rounded up to the
+    // alignment the target states for it. That is the same number as the width
+    // for `f32`, `f64` and `f128` on every target here, and it is the one place
+    // the two questions are not the same: `f80` is ten bytes of value in a
+    // sixteen-byte slot on System V and in a **four**-byte slot on i386, where
+    // the object is twelve bytes (`f80:32`). Answering 16 there would make the
+    // object disagree with the type LLVM emits (`x86_fp80`), and every byte
+    // count taken from this function -- `sizeof`, a debug record, a future
+    // `memcpy` length -- would be four bytes too long.
+    const std::size_t bytes = type.bits / 8U;
+    const std::size_t align = alignOf(id);
+    // An alignment of zero means "this kind has no object", which a float never
+    // is -- the guard is here so the arithmetic cannot divide by it, and so a
+    // reader does not have to hold two kinds in mind to see that it cannot.
+    return align == 0 ? bytes : ((bytes + align - 1U) / align) * align;
+  }
   case TypeKind::Str:
   case TypeKind::Pointer:
     // `*void` included: a pointer to `void` is a pointer, and its size is the
@@ -503,9 +516,22 @@ std::size_t TypeStore::alignOf(TypeId id) const {
   case TypeKind::Char:
     return 1;
   case TypeKind::Int:
-    return type.bits / 8U;
+    // A width is not an alignment on every target: i386's ABI aligns a 64-bit
+    // integer to four bytes (`i64:32:64`), and the number this function answers
+    // is the one every emitted `align N` is built from -- so it has to be the
+    // target's, not the width's.
+    return type.bits == 64 ? target_.int64AlignBits / 8U : type.bits / 8U;
   case TypeKind::Float:
-    return sizeOf(id);
+    switch (type.bits) {
+    case 64:
+      return target_.float64AlignBits / 8U;
+    case 80:
+      return target_.float80AlignBits / 8U;
+    default:
+      // 32 and 128 are aligned to their own size on every target this compiler
+      // names (`f32:32` by default, `f128:128` by default and stated on i386).
+      return type.bits / 8U;
+    }
   case TypeKind::Str:
   case TypeKind::Pointer:
     return target_.pointerBits / 8U;

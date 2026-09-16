@@ -109,6 +109,7 @@ minc_add_executable(minc_unit_tests
     ir/global_test.cc
     ir/debug_test.cc
     ir/invariants_test.cc
+    ir/layout_test.cc
     ir/llvm_isolation_test.cc
     driver/cli_test.cc
     driver/builtins_command_test.cc

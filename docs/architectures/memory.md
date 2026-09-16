@@ -710,6 +710,21 @@ semantics question, so the rules are stated per row and each has a mechanism:
   alignment of every type come from `sema`'s triple table, and `ir` asserts that
   table against LLVM's own `Triple`/`DataLayout` (the test `ir.md` already names).
   There is no host `#ifdef` in this path.
+
+  The assertion is a mechanism and not a sentence: the first time a type is
+  mapped into a module, `Lowering::layoutOf` compares the store's `sizeOf`/`alignOf`
+  against the target's data layout for the shape it just built, and a
+  disagreement is an `ir-internal` naming the type, both numbers and the target --
+  the module is not emitted. It is the same category as a missing access
+  obligation (a bug here, not a statement about the program), and it runs per
+  *mapping*, so a type the target refuses is still refused by the mapper with its
+  own sentence. `tests/unit/ir/layout_test.cc` walks every named triple, and it is
+  the test that was written by the bug it prevents: i386's ABI is
+  `...-i64:32:64-...-f64:32:64-f80:32`, so a 64-bit value there is aligned to four
+  bytes and the x87 format is **twelve** bytes in a four-byte slot -- while this
+  table said 8 and 16, which made every `i64`, `f64` and `f80` object on that
+  target an alignment the scan refused and, for `f80`, a size eight bytes too
+  long for anything that counted bytes.
 - **The address-space-boundary rule is target-dependent in practice.** "No object
   may cross the unsigned address space boundary" is satisfied for free on 64-bit
   and is a real allocator obligation on a 32-bit triple, where a large `alloc`
@@ -782,7 +797,11 @@ Same standard as `ir.md`'s five rules: mechanical, not "be careful".
    (an arena, a pool, a custom one) inherits them and the checked build verifies
    them, rather than each allocator re-deriving the rules.
 7. **Every new target adds a row** to the pointer-width and alignment tables, and
-   `ir`'s data-layout assertion fails until the row is right.
+   `ir`'s data-layout assertion fails until the row is right. The alignment half
+   is three numbers in `TargetInfo` (`int64AlignBits`, `float64AlignBits`,
+   `float80AlignBits`) rather than a rule, because i386 is the worked example of a
+   target whose ABI does not align a value to its own width -- and the assertion
+   in `layoutOf` is what makes a wrong one a refusal instead of an object file.
 
 ## Non-goals
 
@@ -861,7 +880,16 @@ The ladder, in build order:
 6. **A cross-target alignment/width test**: the `DataLayout` assertion `ir.md`
    already names, extended to `sizeof`/`alignof` for every type in the store. It is
    the one place the front end's target model can be wrong with nothing else
-   noticing.
+   noticing. **Shipped** as two halves, both in `tests/unit/ir/layout_test.cc`:
+   `EveryNamedTargetAgreesWithItsDataLayout` lowers one program that uses every
+   scalar, an array of one, an array of `bool`, a slice and (where the ABI has it)
+   the x87 format against all seven named triples, so the *check itself* is the
+   assertion; `EveryNamedTripleIsTheOneLlmParses` compares the architecture, OS and
+   ABI-selecting environment this compiler parsed against LLVM's `Triple`, and the
+   pointer width against the `DataLayout` of the module it built. `sizeof` and
+   `alignof` are not in the assertion yet because they are not in the grammar yet --
+   when they land they read `sizeOf`/`alignOf`, so they are covered by construction
+   rather than by a new test.
 7. **The property tests that are cheap and exhaustive**: pointer arithmetic
    round-trips within an object, `p + n - n == p` for in-object `n`,
    `p1 - p2` consistency, and `p[i]` equal to `*(p + i)` for every type in the

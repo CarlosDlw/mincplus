@@ -298,6 +298,46 @@ TEST(TypeStoreTest, SizesFollowTheTarget) {
   EXPECT_EQ(windows.target().longBits, 32u);
 }
 
+TEST(TypeStoreTest, TheI386AlignmentIsTheAbisAndNotTheWidth) {
+  // i386 is the target whose ABI disagrees with the width, and it disagrees in
+  // both numbers: `i64` and `f64` are aligned to four bytes (`i64:32:64`,
+  // `f64:32:64`), and the x87 format is *twelve* bytes in a four-byte slot
+  // (`f80:32`) rather than the sixteen System V gives it. A store lays a value at
+  // the alignment its type states, and `src/ir` compares that number against
+  // LLVM's own data layout, so "the width" here is not an approximation -- it is
+  // a refusal of a program that is not wrong.
+  const std::optional<TargetInfo> i386Target = targetFromName(kTripleLinuxI386);
+  ASSERT_TRUE(i386Target.has_value());
+  TypeStore i386{*i386Target};
+
+  EXPECT_EQ(i386.sizeOf(kTypeI64), 8u); // the size is still the width
+  EXPECT_EQ(i386.alignOf(kTypeI64), 4u);
+  EXPECT_EQ(i386.alignOf(kTypeF64), 4u);
+  EXPECT_EQ(i386.sizeOf(kTypeF64), 8u);
+  EXPECT_EQ(i386.alignOf(kTypeF80), 4u);
+  EXPECT_EQ(i386.sizeOf(kTypeF80), 12u); // 10 bytes of value in a 4-byte slot
+
+  // The consequences, which is where a wrong number stops being cosmetic: an
+  // array's stride is the element's *complete* size, so `[2]f80` is 24 bytes on
+  // this ABI and 32 on System V -- and a `sizeof` or a copy length taken from
+  // either would be wrong by eight bytes on the other.
+  EXPECT_EQ(i386.sizeOf(i386.arrayOf(kTypeF80, 2)), 24u);
+  EXPECT_EQ(i386.alignOf(i386.arrayOf(kTypeF80, 2)), 4u);
+
+  // A 32-bit pointer is four bytes and aligned to four, so a slice descriptor is
+  // eight and `usize` follows the pointer rather than a constant.
+  EXPECT_EQ(i386.sizeOf(kTypeStr), 4u);
+  EXPECT_EQ(i386.alignOf(i386.sliceOf(kTypeI32)), 4u);
+  EXPECT_EQ(i386.sizeOf(i386.sliceOf(kTypeI32)), 8u);
+
+  // And the four-byte `i128` row is *not* narrowed with them: i386's layout
+  // states `i128:128`, so a 128-bit value is aligned to sixteen there like
+  // everywhere else. One field per width rather than one rule is what keeps that
+  // true.
+  EXPECT_EQ(i386.alignOf(kTypeI128), 16u);
+  EXPECT_EQ(i386.alignOf(kTypeU128), 16u);
+}
+
 TEST(TypeSpecTest, AnArrayTypeReadsInsideOut) {
   TypeStore types;
   TypePart star;

@@ -229,6 +229,42 @@ llvm::Type* Lowering::llvmFunctionType(sema::TypeId id) {
   return llvm::FunctionType::get(result, params, types_.isVariadic(id));
 }
 
+bool Lowering::layoutOf(sema::TypeId id, llvm::Type* shape) {
+  // Once per type: the answer is a property of (type, target, data layout), and
+  // all three are fixed for the lifetime of this lowering. The table is grown to
+  // the store's size because ids are indices into it and a stage may intern a
+  // type the moment it is asked for one.
+  if (id.index >= layoutChecked_.size()) {
+    layoutChecked_.resize(static_cast<std::size_t>(id.index) + 1U, 0);
+  }
+  if (layoutChecked_[id.index] != 0) {
+    return true;
+  }
+  layoutChecked_[id.index] = 1;
+
+  const std::size_t size = types_.sizeOf(id);
+  const std::size_t align = types_.alignOf(id);
+  const std::uint64_t mappedSize = layout_.getTypeAllocSize(shape);
+  const std::uint64_t mappedAlign = layout_.getABITypeAlign(shape).value();
+  if (size == mappedSize && align == mappedAlign) {
+    return true;
+  }
+
+  // A disagreement between the two tables is not a statement about the user's
+  // program, it is a bug in this compiler -- the same category as a missing
+  // access obligation, and reported the same way. The sentence names the type,
+  // both answers and the target, because the fix is a row in one of the two
+  // tables and a reader has to know which numbers disagreed.
+  fatal(support::Span{}, IRDiagnosticCode::Internal,
+        "this compiler states " + std::to_string(size) + " bytes and alignment " +
+            std::to_string(align) + " for `" + types_.spelling(id) + "`, and the data layout of `" +
+            types_.target().name() + "` says " + std::to_string(mappedSize) + " and " +
+            std::to_string(mappedAlign) +
+            "; one of the two tables is wrong, and every size, alignment and debug record "
+            "in this module is built from this one");
+  return false;
+}
+
 std::uint64_t Lowering::alignmentOf(sema::TypeId type) const {
   const std::size_t align = types_.alignOf(type);
   // `Align` requires a power of two and refuses zero. Nothing the language

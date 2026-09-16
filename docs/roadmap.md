@@ -554,6 +554,19 @@ The design record is [`architectures/ir.md`](architectures/ir.md).
       tripped** by `tests/unit/ir/invariants_test.cc` on a module this compiler
       built and then broke by hand — so a row without a test input fails there,
       and a check that stopped running is a failing test rather than a comment
+- [x] The **target layout against LLVM's own**, as a mechanism and not a promise:
+      `Lowering::layoutOf` compares `sema`'s `sizeOf`/`alignOf` against the
+      target's `DataLayout` the first time a type enters a module, and a
+      disagreement is an `ir-internal` naming the type, both numbers and the
+      target, with no module emitted. Written by the bug it prevents: i386 aligns
+      a 64-bit value to four bytes and gives the x87 format a **twelve**-byte
+      object, where the table said eight and sixteen — so every `i64`, `f64` and
+      `f80` on that target carried an alignment the scan refused, and an `f80`
+      object was four bytes longer than the type LLVM emitted. `TargetInfo` now
+      states `int64AlignBits`/`float64AlignBits`/`float80AlignBits` per row, and
+      `tests/unit/ir/layout_test.cc` walks every named triple (plus a doctored row
+      that proves the refusal fires); the same pass fixed `long double` on
+      `x86_64-apple-darwin`, which is the x87 format and not a `double`
 - [ ] The checked build's **module-statable guards** (null dereference,
       misalignment, an `object`-provenance extent) behind `-fcheck`, which `-O0`
       defaults to — explicitly *not* the semantic guards, which belong in every

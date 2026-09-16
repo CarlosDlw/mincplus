@@ -222,6 +222,11 @@ std::optional<TargetInfo> targetInfo(const Triple& triple) {
   case Arch::i386:
     info.pointerBits = 32;
     info.longDoubleBits = 80;
+    // The one architecture whose ABI aligns a 64-bit value to four bytes, and
+    // whose x87 format sits in a four-byte slot (`f64:32:64`, `f80:32`).
+    info.int64AlignBits = 32;
+    info.float64AlignBits = 32;
+    info.float80AlignBits = 32;
     break;
   case Arch::aarch64:
   case Arch::riscv64:
@@ -242,8 +247,11 @@ std::optional<TargetInfo> targetInfo(const Triple& triple) {
     break;
   case OsFamily::darwin:
     info.longBits = info.pointerBits;
-    // `long double` is `double` on Darwin, on both architectures it runs.
-    info.longDoubleBits = 64;
+    // `long double` follows the *architecture* on Darwin, and the two differ: it
+    // is the x87 80-bit format on x86_64 (`sizeof(long double) == 16`, and LLVM's
+    // own layout for that triple carries `f80:128`) and a plain `double` on
+    // aarch64 (`-n32:64`, no `f80` at all).
+    info.longDoubleBits = triple.arch == Arch::x86_64 ? 80 : 64;
     break;
   case OsFamily::linux:
   case OsFamily::freebsd:
@@ -274,7 +282,9 @@ bool sameAbi(const TargetInfo& left, const TargetInfo& right) {
          left.triple.env == right.triple.env && left.pointerBits == right.pointerBits &&
          left.longBits == right.longBits && left.longDoubleBits == right.longDoubleBits &&
          left.shortBits == right.shortBits && left.intBits == right.intBits &&
-         left.charBits == right.charBits;
+         left.charBits == right.charBits && left.int64AlignBits == right.int64AlignBits &&
+         left.float64AlignBits == right.float64AlignBits &&
+         left.float80AlignBits == right.float80AlignBits;
 }
 
 TargetInfo defaultTarget() {

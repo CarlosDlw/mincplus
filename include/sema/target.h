@@ -136,6 +136,31 @@ struct TargetInfo {
   // `char`, `signed char`, `unsigned char`. 8.
   std::uint16_t charBits = 8;
 
+  // --- the alignment of a scalar ----------------------------------------------
+  //
+  // Alignment is the other half of "how big is a `T`", and it is the half that is
+  // *not* a function of the width. The widths above are the same number as their
+  // own size on every target this compiler names except one, and i386 is the
+  // exception: its data layout is `e-m:e-p:32:32-...-i128:128-f64:32:64-f80:32`,
+  // which says a 64-bit value is aligned to **four** bytes (`i64` has no entry
+  // there, which is LLVM's default `i64:32:64`) and that the x87 80-bit format
+  // lives in a four-byte slot -- ten bytes of value rounded up to four is
+  // twelve, not the sixteen System V gives it.
+  //
+  // These are numbers in the row rather than a rule in a function because they
+  // are exactly the facts that differ per target, and the rule a function would
+  // state ("aligned to its own width") is the one i386 breaks. `TypeStore::sizeOf`
+  // and `alignOf` read them, every emitted `align N` comes from there, and
+  // `src/ir` checks the two against the target's *own* `DataLayout` the first time
+  // each type enters a module -- so this table and LLVM answer the same question
+  // with the same number by construction, and a row that drifts is refused rather
+  // than emitted.
+  std::uint16_t int64AlignBits = 64;
+  std::uint16_t float64AlignBits = 64;
+  // The `f80` slot: 128 everywhere the x87 format has an ABI row of its own
+  // (`f80:128`), 32 on i386 (`f80:32`).
+  std::uint16_t float80AlignBits = 128;
+
   // What `codegen` hands to LLVM, and what a diagnostic prints for the target.
   [[nodiscard]] const std::string& name() const {
     return triple.text;

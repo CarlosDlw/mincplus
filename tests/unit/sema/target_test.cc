@@ -165,10 +165,17 @@ TEST(TargetTest, LongFollowsTheRuleAndNotTheName) {
   EXPECT_EQ(mingw.longBits, 32u);
   EXPECT_EQ(mingw.longDoubleBits, 80u);
 
-  // Darwin: LP64, and `long double` is a `double` on both of its architectures.
+  // Darwin: LP64, and `long double` follows the *architecture* there rather than
+  // the OS -- which is the one place in this table where the OS is not enough.
+  // `x86_64-apple-darwin` runs on x87 (`sizeof(long double) == 16`, and LLVM's
+  // layout for that triple carries `f80:128`); Apple silicon has no x87, so it is
+  // a `double` (LLVM's aarch64 layout has no `f80` at all). Reading the first as
+  // 64 refused `f80` on a target whose ABI has it, and read every 80-bit value in
+  // a program compiled for it as an 8-byte `double`.
   const TargetInfo darwin = require(sema::kTripleDarwinAmd64);
   EXPECT_EQ(darwin.longBits, 64u);
-  EXPECT_EQ(darwin.longDoubleBits, 64u);
+  EXPECT_EQ(darwin.longDoubleBits, 80u);
+  EXPECT_EQ(require(sema::kTripleDarwinAarch64).longDoubleBits, 64u);
 
   // AArch64/RISC-V Linux: LP64 with IEEE binary128 `long double`.
   EXPECT_EQ(require(sema::kTripleLinuxAarch64).longDoubleBits, 128u);
@@ -179,6 +186,30 @@ TEST(TargetTest, LongFollowsTheRuleAndNotTheName) {
   EXPECT_EQ(i386.pointerBits, 32u);
   EXPECT_EQ(i386.longBits, 32u);
   EXPECT_EQ(i386.longDoubleBits, 80u);
+}
+
+TEST(TargetTest, TheAlignmentOfAScalarIsTheTargetsAndNotItsWidth) {
+  // The second half of "how big is a `T`", and the one place the width is not the
+  // answer: i386's data layout is `...-i64:32:64-...-f64:32:64-f80:32`, so a
+  // 64-bit value is aligned to four bytes and the x87 format sits in a four-byte
+  // slot (twelve bytes as an object, not sixteen). `TypeStore::alignOf` reads
+  // these, every `align N` in a module comes from there, and `src/ir` compares the
+  // two against LLVM's own `DataLayout`.
+  const TargetInfo i386 = require(sema::kTripleLinuxI386);
+  EXPECT_EQ(i386.int64AlignBits, 32u);
+  EXPECT_EQ(i386.float64AlignBits, 32u);
+  EXPECT_EQ(i386.float80AlignBits, 32u);
+
+  // Every other target this compiler names aligns a scalar to its own width.
+  for (const std::string_view name : kStatedTriples) {
+    const TargetInfo info = require(name);
+    if (info.triple.arch == sema::Arch::i386) {
+      continue;
+    }
+    EXPECT_EQ(info.int64AlignBits, 64u) << name;
+    EXPECT_EQ(info.float64AlignBits, 64u) << name;
+    EXPECT_EQ(info.float80AlignBits, 128u) << name;
+  }
 }
 
 TEST(TargetTest, TheVendorIsCarriedAndDoesNotChangeTheAbi) {
