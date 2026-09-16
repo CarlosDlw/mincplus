@@ -173,11 +173,23 @@ $ printf 'fn i32 f(n: i32) { let p: *i32 = n; return 0; }\n' | mincc check -
                                    ^
 ```
 
-Neither direction converts implicitly, and there is no cast yet. The two
-operations that *do* join them are named in the model — `expose` (pointer to
-integer) and `with_exposed_provenance` (integer to pointer) — and they are the
-only place provenance is lost or regained. They are not in the grammar yet, so
-today the refusal is the whole rule.
+Neither direction converts implicitly: an integer never becomes a pointer on its
+own. The two operations that *do* join them are named in the model — `expose`
+(pointer to integer) and `with_exposed_provenance` (integer to pointer) — and
+they are the only place provenance is lost or regained. **A cast is that name**:
+
+```minc
+let addr: usize = p as usize;   // expose(p)
+let p2: *u8 = addr as *u8;      // with_exposed_provenance(addr)
+let p3: *u8 = (*u8)p;           // the same two lines, spelled C's way
+```
+
+Both are counted by `-Wprovenance`, whose sentence is the model's own: the
+address is defined, and an access through it is defined only for an allocation
+whose provenance has been exposed. A **reinterpretation** between two pointer
+types (`p as *u8`, where the pointee changes and the address does not) is not in
+the provenance pair at all: with opaque pointers it is a type change with no
+instruction behind it. See [Casts](/language/expressions#casts).
 
 ## Provenance, in one paragraph
 
@@ -190,8 +202,8 @@ lifetime, and exactly what happens when an obligation is violated — is
 [the memory model](/language/memory-model).
 
 :::note[Not implemented yet]
-Arrays, pointer-to-array, `restrict`, address spaces, `*const T`, the
-`expose`/`with_exposed_provenance` pair, and the checked build's access guards are
-not implemented. Today a pointer is one address, one pointee type, and the four
-shapes above.
+`restrict`, address spaces, `*const T`, and the checked build's access guards are
+not implemented. Today a pointer is one address, one pointee type, and the shapes
+above — including arrays and a pointer to one (`&a[0]` is a `*i32`, `&a` is a
+`*[4]i32`), which is why there is no decay to lose the bound.
 :::

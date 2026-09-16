@@ -162,7 +162,12 @@ lossless per-file token buffer.
 - [x] Token dump for inspection (`mincc lex <files...>`)
 - [ ] Identifiers interned through `Interner` (`SymId`) — happens where symbols
       are wanted, not in the token
-- [ ] Literal suffixes (`10u`, `1.0f`) and digit separators `[?]`
+- [x] Literal suffixes, as a **closed table** in `support/consteval`: a trailing
+      run of identifier bytes is claimed into the token only when the run is a
+      known suffix, so `10u8` is one token, `10z` is two and `1else` is still `1`
+      and `else`; an unknown suffix adjacent to a literal is
+      `parse-invalid-literal-suffix`
+- [ ] Digit separators (`1_000_000`) `[?]`
 - [ ] String prefixes (`L`, `u8`, `u`, `U`) and raw/multiline strings `[?]`
 - [x] Exhaustive short-input coverage: every 1-byte and 2-byte input, and every
       3-byte combination of the bytes that change scanning
@@ -220,17 +225,21 @@ typed AST view on top.
 - [ ] Golden-file tests (`tests/parse/data/*.mx` with expected tree and errors)
 - [ ] `switch` — when its syntax is decided
 - [ ] `struct`/`union`/`enum`, typedefs, and the full C declarator grammar
-- [ ] Initializers, `sizeof`/`alignof`, casts, and the C-compatible `fn` forms
-- [ ] **Casts designed**, in three spellings with one meaning (`as T`, `(T)x`,
-      and typed literal suffixes): the conversion matrix over every pair the
-      language has, `(T)x` made unambiguous by **reserving the type names**
-      (rather than by a typedef table in the parser), the C-style form delimited
-      by that reserved set — so a future user-defined type is `as`-only — the
-      suffixes C has plus the language's own type names (`10u8`, `12f`, `1.5L`,
-      with `long`/`long double` resolved per target), no reinterpretation in a
-      cast (the bits get a name of their own), and **float → integer as a guarded
-      trap** rather than LLVM's poison or Rust's silent saturation —
-      ([`architectures/casts.md`](architectures/casts.md))
+- [ ] C declarator forms still absent: `sizeof`/`alignof`, and the
+      C-compatible `fn` declaration spellings
+- [x] **Casts**, in three spellings with one meaning (`as T`, `(T)x`, and typed
+      literal suffixes): the conversion matrix over every pair the language has,
+      `(T)x` made unambiguous by **reserving the type names** (rather than by a
+      typedef table in the parser, so a future user-defined type is `as`-only),
+      the suffixes C has plus the language's own type names (`10u8`, `12f`,
+      `1.5L`, with `long`/`long double` resolved per target), no
+      reinterpretation in a cast (the bits get a name of their own), and
+      **float → integer as a guarded trap** rather than LLVM's poison or Rust's
+      silent saturation —
+      ([`architectures/casts.md`](architectures/casts.md)): the grammar, the
+      matrix, the lowering, the flags (`-Wcast`, `-Wprovenance`) and the tests
+      that walk every ordered pair of the type universe are in, and
+      `examples/017_casts.mx` is the runnable page
 - [ ] Generated typed AST layer, once the node count justifies the generator
 - [ ] Reserved syntax kinds for macro calls, token trees, and attributes
 - [ ] Grammar documented next to the code it implements
@@ -313,7 +322,7 @@ the language decisions this stage had to make — `void`, conditions requiring
 
 **Shipped**, for every form the grammar produces today. What is left in this
 section is the type and analysis work the *syntax* does not exist for yet
-(arrays, aggregates, casts, and the checked layer of the memory model). The
+(aggregates, `sizeof`/`alignof`, and the checked layer of the memory model). The
 flow analyses are here and not in the
 IR, and that is a decision and not a convenience: definite assignment,
 reachability and `break`/`continue` context are all answered exactly by the
@@ -367,11 +376,15 @@ which also records the reversal.
 - [x] The example corpus type-checks clean, as a test and through
       `make examples`
 
-- [ ] Type system: qualifiers (`const`/`volatile` on the pointee), arrays, and
-      function-pointer types — the primitive set and the C-compatible spellings
-      are done (`i8`..`i128`, `u8`..`u128`, `f32`/`f64`/`f80`, `bool`, `char`,
-      `str`, `void`, `int`/`long`/`long long int`/… per target ABI, with `char`
-      fixed unsigned rather than inheriting C's sign)
+- [x] Type system: arrays `[N]T`, slices `[]T`, and the cast matrix over every
+      pair the language has are **in** — the layout each one needs (size,
+      alignment, the pointee's stepping) is answered by `TypeStore`, so no
+      second place computes a size
+- [ ] Type system, what is left: qualifiers (`const`/`volatile` on the pointee),
+      function-pointer types, and aggregates — the primitive set and the
+      C-compatible spellings are done (`i8`..`i128`, `u8`..`u128`, `f32`/`f64`/`f80`,
+      `bool`, `char`, `str`, `void`, `int`/`long`/`long long int`/… per target ABI,
+      with `char` fixed unsigned rather than inheriting C's sign)
 - [x] Fixed-size arrays **designed**: `[N]T` with the count in the type, no
       decay (ever), value semantics, no VLA and no zero-length or flexible
       arrays, the context-typed `[...]` and the complete `T{...}` as the two
@@ -446,11 +459,13 @@ which also records the reversal.
       in an expression. `len` is what a view still needs to be usable without
       passing its extent beside it, and `sizeof([]i32)` is how the descriptor's two
       words become askable from a program
-- [ ] The rest of the memory model: int ↔ ptr as named operations (`expose` /
-      `with_exposed_provenance`), casts, `restrict`, `volatile`/`unaligned`
-      accesses, the `slice<T>` / `&T` / `&mut T` layer, and the checked-build
-      traps — the model is **decided**; what is left is the syntax it needs and
-      the `src/ir` that enforces it
+- [ ] The rest of the memory model: `restrict`, `volatile`/`unaligned`
+      accesses, the owning `slice<T>` / `&T` / `&mut T` layer, and the
+      checked-build traps — the model is **decided**; what is left is the syntax
+      it needs and the `src/ir` that enforces it. The `expose` /
+      `with_exposed_provenance` pair **is implemented as the cast that carries its
+      name** (`p as usize`, `addr as *u8`), counted by `-Wprovenance`; whether
+      those two also get a call-like spelling of their own is the open half
 - [x] Control-flow typing: `if`/`while`/`for` conditions must be `bool`, and
       `break`/`continue` outside a loop are `sema-break-outside-loop` /
       `sema-continue-outside-loop`. `terminates()` handles the branch and loop

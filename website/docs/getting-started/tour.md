@@ -272,14 +272,22 @@ The pipeline is complete end to end; what is missing is *surface*. Nothing on
 this list has a decided syntax that is unimplemented — these are features that
 are not there at all:
 
-- arrays, `struct`, `union`, `enum`, and member access
-- casts, `sizeof`, `alignof`, `offsetof`
-- `switch`, `do`/`while`, `goto`, labels on `break`/`continue`
-- `static`, thread-local storage, and `volatile`
-- file-scope bindings (today every item is a function declaration)
+- `struct`, `union`, `enum`, and member access (`.` and `->`)
+- `sizeof`, `alignof`, `offsetof`, and `len`
+- `switch`, `do`/`while`, `goto`, `defer`, labels on `break`/`continue`
+- thread-local storage, `volatile`, and `restrict`
 - defining a variadic function (`va_start` does not exist yet)
+- `extern let` / `extern const` — reading a C global from `.mx`
 - `#include` of C headers — `#include` itself works, on `.mx` headers
 - the standard library, the checked build, and its runtime guards
+
+What *is* there has a page each: [pointers](/language/pointers) and the
+[memory model](/language/memory-model), [arrays](/language/arrays),
+[slices](/language/slices), [casts](/language/expressions#casts),
+[file-scope bindings](/language/variables#file-scope) — including `static` — and
+[`extern fn`](/language/functions), variadics included. Two pages are working
+references rather than prose:
+[the operator table](/reference/operators) and [the grammar](/reference/grammar).
 
 The [feature checklist](/language/features) carries the authoritative list,
 marked *decided* / *planned* / *open*, and `docs/roadmap.md` tracks what is

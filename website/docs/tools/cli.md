@@ -30,13 +30,19 @@ reads — so a page and its parser cannot disagree about a flag's name.
 | `mincc parse <files...>` | the syntax tree of that stream |
 | `mincc resolve <files...>` | the lowered tree, the scopes, and every name's declaration |
 | `mincc ir <files...>` | the LLVM module of the translation unit |
+| `mincc builtins` | the names the language binds, and what each one is |
 
-The first five are views of one pipeline, in order:
+The commands between `lex` and `ir` are **views of one pipeline**, each printing
+the state at its stage and stopping there — nothing is emitted, and no two of
+them run the same stage twice:
 
 ```
 source → lex → preprocess → parse → lower → validate → resolve → check → ir → object → link
    lex     pp           parse                    resolve            check    ir            build
 ```
+
+`builtins` reads no file: it is the compiler's own table, so the list and the
+`/language/builtins` page cannot describe different things.
 
 `-` names a file on standard input, read in binary:
 
@@ -159,6 +165,17 @@ unchanged.
 | `--stats` | one summary line per input |
 | `--types` | the table of types, and nothing else |
 | `--ast` | the typed tree, where every node carries its type |
+| `-Wunused` | warn about a declaration nothing refers to |
+| `-Wshadow` | warn about a declaration that hides another one |
+| `-Wconversion` | warn about an **implicit** conversion that may lose information |
+| `-Wcast` | warn about a **cast** that may lose information (`sema-cast-loses`) |
+| `-Wprovenance` | name every cast between a pointer and an integer (`expose`, `with_exposed_provenance`), since an access through the result is defined only where provenance was exposed |
+| `--target TRIPLE` | the target the C spellings and the layout are read against; a triple the compiler does not state is refused with a reason, never guessed |
+| `-D` / `-U` / `-I` / `-isystem` | the preprocessor's defines, undefines and search list, in the order written |
+
+`-Wconversion` and `-Wcast` are two questions and not one: the first is about a
+conversion the language inserted, the second about a cast the program wrote. A
+cast that merely names what the language would do anyway is reported by neither.
 
 ```console
 $ mincc check --stats examples/002_variables.mx

@@ -80,16 +80,26 @@ let snake_case_name = 3;
 
 ## Keywords
 
-The set is eleven words, and small on purpose. These cannot be used as names:
+The set is thirteen words, and small on purpose. These cannot be used as names:
 
-`break` · `const` · `continue` · `else` · `extern` · `fn` · `for` · `if` ·
-`let` · `return` · `while`
+`as` · `break` · `const` · `continue` · `else` · `extern` · `fn` · `for` · `if` ·
+`let` · `return` · `static` · `while`
+
+A word earns a place in it by changing what the tokens after it mean: `as`
+introduces a type where an expression could have continued, `static` says what a
+declaration's linkage is, and `let` is not a name that could stand where a
+statement starts.
 
 Everything else a reader might expect to be a keyword is not one:
 
-- **Primitive type names are not keywords.** `i32`, `u8`, `bool`, `str`, `int`,
-  `long` and the rest are ordinary names that the type reader understands, which
-  is why `let int = 2;` is a shadowing declaration and not a syntax error.
+- **Primitive type names are not keywords — and they are still reserved.**
+  `i32`, `u8`, `bool`, `str`, `int`, `long` and the rest are ordinary names that
+  the type reader understands, so the lexer has no table for them. What the
+  language does not allow is a *declaration* of one: `let int = 2;` is
+  `resolve-reserved-identifier`, "`int` names a type, and a type name is
+  reserved". That reservation is not tidiness — it is what makes the C-style
+  cast unambiguous, because `(i32) + 1` can then never be a reference to a
+  variable. See [Casts](/language/expressions#casts).
 - **`true`, `false` and `null` are not keywords either.** They are the names the
   language binds before any source is read, so they behave like any other name:
   `let true = 0;` shadows one, and `-Wshadow` says so. That is why `#if`

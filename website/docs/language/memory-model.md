@@ -95,16 +95,21 @@ states in writing" — and the diagnostic vocabulary above is how a reader is to
 ## Where the language is today
 
 The model is implemented in the *surface* it has so far — pointers, `null`,
-`*void`, stepping, comparison, and the refusals that go with them (a pointer is
-not an integer, an integer is not a pointer, `*void` cannot be accessed) — and the
-records the model needs are what `sema` publishes for the lowering to read: the
-access obligation, the alignment, the conversion, the operation type.
+`*void`, stepping, comparison, the two provenance joins as casts (`p as usize`
+is `expose`, `addr as *u8` is `with_exposed_provenance`, both counted by
+`-Wprovenance`), and the refusals that go with them (a pointer is not an integer
+*by conversion*, `*void` cannot be accessed) — and the records the model needs are
+what `sema` publishes for the lowering to read: the access obligation, the
+alignment, the conversion, the operation type.
 
 :::note[Not implemented yet]
-Aggregates and arrays (which need member and element alignment), `restrict`,
-address spaces, `alloc`/`free`, the checked build and its guards, `expose` and
-`with_exposed_provenance`, and `volatile` are not implemented. What exists is the
-model, the reasoning, and the parts of the surface that do not need them.
+Aggregates (`struct`, which needs member alignment), `restrict`, address spaces,
+`alloc`/`free`, the checked build and its guards, the *named* forms `expose` /
+`with_exposed_provenance` (the casts that carry their semantics are implemented —
+see [Casts](/language/expressions#casts)), and `volatile` are not implemented.
+Arrays are: `[N]T` with the count in the type is what makes `&a[0]` and `&a` two
+different, checkable pointers. What exists is the model, the reasoning, and the
+parts of the surface that do not need the rest.
 :::
 
 ## Why it is worth reading even now

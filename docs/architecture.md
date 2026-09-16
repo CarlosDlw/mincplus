@@ -794,7 +794,22 @@ warnings inside them are dropped at the report step while errors are not.
   conversion with a precondition — float to integer, where LLVM's `fptosi` is
   poison out of range — is guarded and traps, exactly as division by zero is.
   [`architectures/casts.md`](architectures/casts.md) is that record: the matrix,
-  the suffixes, the refusals, and the plan.
+  the suffixes, the refusals, and what it deliberately leaves out with the reason.
+
+  Two more type-system records sit beside these, and both are implemented the
+  same way. **Arrays** ([`architectures/arrays.md`](architectures/arrays.md)): the
+  count is part of the type, so `[4]i32` and `[8]i32` are different `TypeId`s and
+  a callee cannot be handed the wrong length; there is **no decay in any
+  position**, which is why `&a[0]` is a `*i32` and `&a` is a `*[4]i32` and why
+  `sizeof a` cannot lie from inside a function; a constant index out of range is a
+  diagnostic rather than a trap; and the layout rule (`N` complete element sizes,
+  the element's own alignment) is the one `p + 1` depends on. **Slices**
+  ([`architectures/slices.md`](architectures/slices.md)): `[]T` is a `{ptr, len}`
+  **view** — taken with `a[l..r]` / `a[l..]` / `a[..r]` / `a[..]`, indexed with
+  its own `0`, written through, passed and returned by value, and refused at an
+  `extern` boundary, where the two words a foreign callee can read are written
+  instead. `len(x)` and `sizeof(x)` are the reading operators a view and an array
+  still want, and each is its own step rather than a gap in the design.
 
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which

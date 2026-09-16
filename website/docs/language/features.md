@@ -67,17 +67,19 @@ first-class types; the examples use the primitive names. See
       is unreachable. The body is checked (a reachable `return`, or a body that
       can reach its end, is an error) and the promise is never inferred. See
       [The bottom type](/language/never)
-- [ ] Pointers — deliberately complete and C-level, see
-      [Pointers and raw memory](#pointers-and-raw-memory)
+- [x] Pointers — deliberately complete and C-level, see
+      [Pointers and raw memory](#pointers-and-raw-memory); stage one of the
+      memory model is what the compiler implements today
 - [x] Fixed-size arrays — `[N]T` with the count part of the type, no decay,
       value semantics, both literal forms (`[1, 2, 3]` typed by its context,
       `[3]i32{1, 2, 3}` complete, `[_]u8{...}` with the count from the elements,
       `[64]u8{0; 64}` as a fill), element access with the constant bounds check,
       the by-value copy, and **file scope** — `const TABLE = [_]i32{1, 2, 3};` is
       a table like any local one. See [Arrays](/language/arrays)
-- [ ] Slices (pointer + length) `[]T` — **reserved**: the spelling parses today and
-      is refused with a sentence, so no `.mx` file can mean something else by it in
-      the meantime (`docs/architectures/arrays.md` decision 17)
+- [x] Slices (pointer + length) `[]T` — a `{ptr, len}` **view** taken from an
+      array with `a[l..r]` / `a[l..]` / `a[..r]` / `a[..]`, indexed with its own
+      `0`, writable through, passed and returned by value, refused at an `extern`
+      boundary. See [Slices](/language/slices)
 - [ ] `struct`
 - [ ] `union`
 - [ ] `enum` constants and tagged unions `[?]`
@@ -158,9 +160,14 @@ as well.
       are one type, so the C spellings are interchangeable rather than merely
       accepted
 - [x] **Narrowing is implicit at assignment** (initializer, assignment,
-      argument, `return`), as in C — there are no casts yet, and a documented
-      example must compile. A `-Wconversion` lint is designed for, off by
-      default
+      argument, `return`), as in C, and a documented example must compile. A
+      `-Wconversion` lint (off by default) reports it; a **cast** is how a
+      program asks for the narrowing on purpose
+- [x] **Casts**, in three spellings with one meaning — `x as T`, `(T)x`, and the
+      literal suffix (`10u8`, `12f`). Pointer to integer and integer to pointer
+      are casts too, and they *are* the model's `expose` /
+      `with_exposed_provenance`, counted by `-Wprovenance`. See
+      [Casts](/language/expressions#casts)
 - [x] **Integer and float literals are context-typed**: `let x: u8 = 255;` is a
       `u8` with no conversion, and `let x = 7;` / `let y = 1.5;` default to
       `i32` / `f64`. A literal that does not fit the type its context gives it is
@@ -239,11 +246,17 @@ Everything below is what lands on top of that model. See
 
 **Conversions and casts**
 
-- [ ] Pointer to integer and integer to pointer, sized by `usize`/`isize`
-- [ ] Explicit reinterpret cast between pointer types
-- [ ] `void*` to and from any object pointer `[?]` (implicit, C style, or cast)
+- [x] Pointer to integer and integer to pointer, sized by `usize`/`isize`. They
+      are **cast-only** (`p as usize`, `addr as *u8`), because that cast *is* the
+      model's `expose` / `with_exposed_provenance`: never implicit, and counted
+      by `-Wprovenance`
+- [x] Reinterpret cast between pointer types (`p as *u8`): with opaque pointers a
+      type change and no instruction at all
+- [x] `*void` to and from any object pointer, **implicit in both directions**
+      (writable as a cast as well)
+- [x] `str` to and from `*u8` by cast, and a byte view over any object
+      (`(*u8)&x`, `(*u8)p`)
 - [ ] Function pointer to and from `void*` `[?]`
-- [ ] `str` to and from `char*`, plus byte views (`u8*`/`i8*`) over any object
 
 **Aliasing, alignment, and optimization**
 
@@ -299,9 +312,11 @@ Everything below is what lands on top of that model. See
       preprocessor is for what must be seen before the grammar (guards,
       conditionals, pasting), a typed constant is for what the type checker must
       see. The design record is `docs/architectures/globals.md`
-- [x] `extern let` / `extern const` — a declaration of storage defined in
+- [ ] `extern let` / `extern const` — a declaration of storage defined in
       another unit, a library, or the C runtime (`extern let environ: *str;`),
-      the same word and meaning as in `extern fn`
+      the same word and meaning as in `extern fn`. **Refused by name today**
+      (`parse-extern-binding`): `extern fn` is the declaration form that exists,
+      and a file-scope binding is defined in this unit
 - [ ] Thread-local storage (a storage-duration question for
       `docs/architectures/memory.md`'s concurrency section)
 - [ ] Aggregate initializers for a file-scope constant (`const t: [4]i32 = ...`)
@@ -373,15 +388,22 @@ See [Expressions](/language/expressions) and the
 - [x] Assignment and compound assignment, with the left side checked to be a
       modifiable place
 - [x] Conditional expression `?:`, with both branches unified to one type
-- [ ] Casts
+- [x] Casts, in three spellings: `x as T`, `(T)x`, and the literal suffix —
+      see [Casts](/language/expressions#casts)
 - [ ] `sizeof`, `alignof`
-- [ ] Address-of and dereference (full set in *Pointers and raw memory*)
-- [ ] Member access and indexing
-- [ ] Slicing syntax `[?]`
-- [x] Literals: integers (bases, suffixes), floats, chars, strings — read by
+- [x] Address-of and dereference (full set in *Pointers and raw memory*)
+- [x] Indexing: `a[i]` on an array, `p[i]` on a pointer, `s[i]` on a slice
+- [x] Slicing: `a[l..r]` / `a[l..]` / `a[..r]` / `a[..]`
+- [ ] Member access (`.` and `->`) — it needs `struct`
+- [x] Literals: integers (bases, **suffixes**), floats, chars, strings — read by
       one shared reader, so the type checker and the preprocessor cannot
-      disagree about what `0x10` or `0755` means
-- [ ] Escape sequences, raw and multiline strings `[?]`
+      disagree about what `0x10`, `0755` or `10u8` means
+- [x] Escape sequences in character and string literals: `\n` `\r` `\t` `\v`
+      `\f` `\b` `\a` `\?` `\"` `\'` `\\`, octal (`\101`), hex (`\x41`), and
+      `\uXXXX` / `\UXXXXXXXX`, with an unknown escape refused by name
+      (`lex-unknown-escape`) rather than passed through as the character
+- [ ] Raw and multiline strings `[?]`, and adjacent literal concatenation
+      (`"a" "b"`)
 - [ ] String interpolation/formatting `[?]`
 
 ## Builtins
@@ -415,7 +437,9 @@ library symbol is a declaration, not a builtin.
 
 ## Memory and lifetime
 
-- [ ] Manual allocation interoperating with C (`malloc` / `free`)
+- [x] Manual allocation interoperating with C: `extern fn *void malloc(n:
+      usize);` and a cast to the object pointer is the whole of it
+- [ ] Owning `alloc` / `free` in the language itself
 - [ ] Allocators/arenas exposed to the language `[?]`
 - [ ] Deterministic cleanup (`defer` or destructors) `[?]`
 - [ ] Move semantics `[?]`
@@ -433,15 +457,19 @@ library symbol is a declaration, not a builtin.
 - [x] C calling convention and ABI — taken from the target's **triple** and
       provided by the LLVM backend rather than written here, so adding a target
       does not add an ABI implementation
-- [ ] Calling C functions from `.mx`
+- [x] Calling C functions from `.mx`, by declaring them: `extern fn i32
+      puts(s: str);` — see `examples/010_extern.mx`
+- [x] **Variadic** C functions (`extern fn i32 printf(fmt: str, ...);`), with
+      the ABI's default argument promotions applied to the arguments past the
+      fixed ones — see `examples/011_variadics.mx`
+- [x] `str` and `*void` at the boundary, and `*u8` byte views over any object
 - [ ] Exporting `.mx` symbols that C can call
 - [ ] Struct layout compatibility, passing and returning aggregates by value
+- [ ] `extern let` / `extern const` — reading a C global from `.mx`
 - [ ] Function pointers interoperating with C callbacks
-- [ ] `char*` / `void*` / C string interop
 - [ ] Opaque C types and forward declarations
 - [ ] Importing C headers `[?]`
 - [ ] Declaring links to libraries from source `[?]`
-- [ ] Variadic C functions
 - [ ] Bitfields `[?]`
 
 ## Standard library surface

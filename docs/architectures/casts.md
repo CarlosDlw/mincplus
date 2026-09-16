@@ -278,7 +278,11 @@ Mechanically:
 
 - **Constant operand.** The compiler folds the conversion; if the value is not
   representable (out of range, or NaN) it is a **diagnostic**
-  (`sema-cast-out-of-range`), naming the value and the range. A constant that *is*
+  (`ir-cast-out-of-range`), naming the value and the range. The code is the
+  *lowering's*, not the checker's, because that is where the fold happens: the
+  checker has no value for `1e30 as i32` and does not guess, so `mincc check`
+  passes a program that `mincc ir` and `mincc build` refuse. One stage decides,
+  and the stage that knows the value is the one that speaks. A constant that *is*
   representable folds to the constant the run-time path would have produced.
 - **Run-time operand.** `lowerOperand` emits a range test (`fcmp` against the
   destination's bounds, NaN included) and the trap path, exactly as the division
@@ -325,16 +329,24 @@ around. Each of these is a named code with a sentence:
 | `arr as *i32` | an array is not a pointer, and it does not decay: write `&arr[0]` for the address of the first element and carry the length beside it |
 | `s as *i32` (a slice) | a view is a pointer *and a length*: `&s[0]` is the address of its first element, and the extent is `s`'s own business |
 | `p as []i32`, `n as []u8` | there is no slice of a pointer without a length, and no literal slice: take the view from an object that has one |
-| `[4]i32 as [4]u8` | an array converts element by element or not at all; the byte-level copy is an operation this language spells (and does not yet have) |
+| `[4]i32 as [4]u8` | an array converts element by element or not at all; the byte-level copy is an operation this language spells (and does not yet have). The sentence the reader actually gets is the array/no-decay one above, because the pointer test is asked first — one refusal, and it already names the fix |
 | `f as bool` | NaN is neither true nor false: write `f != 0.0` |
 | `x as void`, `x as fn(...)` | `void` is the absence of a value and a function type is not an object |
-| `"abc" as u8` | `str` is a pointer: `("abc" as *u8) as u8` if the byte is what was meant |
 | `1.5u` | a float literal cannot have an integer suffix: `(u32)1.5`, or `1.5 as u32` |
 | `10wb` | C23's bit-precise suffix has no type here: use `i64` (or `i128`) |
 
 `(i32)` with no operand is not a cast at all — it is a parenthesized type name,
 and the diagnostic is "a type is not a value; did you mean to cast?" rather than
 "expected an expression".
+
+**`"abc" as u8` is not on that list, and the matrix above is why.** `str` is a
+pointer, and the `*T`/`str`/`*void` → integer row is `expose`: it is a defined
+cast whose result is the address, truncated when the integer is narrower, which
+`-Wcast: truncation` names. An earlier draft refused it and told the reader to
+write `("abc" as *u8) as u8` — two casts where the matrix already defines one,
+and a refusal standing against the row it was meant to serve. The measured
+behaviour is the matrix row: `ptrtoint (ptr @str to i8)` with the truncation
+reported under `-Wcast`.
 
 ## Where it lands in the compiler
 
@@ -350,7 +362,7 @@ and the diagnostic is "a type is not a value; did you mean to cast?" rather than
 | `include/sema/convert.h`, `src/sema/convert.cc` | `enum class CastKind`, `castable(types, from, to)`, `castKindFor(types, from, to)`, `castLoss(...)` | The matrix, as pure functions over types, beside the implicit rules it extends |
 | `src/sema/check_expr.cc` | `checkCast`: the matrix, the constant rule, the refusal sentences, and the record | The checker decides and records; it does not emit |
 | `include/lex/token_kind.h`, `src/resolve/*` | the reserved set (`i8`…`usize`, `bool`, `char`, `str`, `void`, the C spellings) shares the `__builtin_*` machinery | One predicate, two callers — the shape the builtin reserved names already use |
-| `include/sema/sema_error.h` | `CastInvalid`, `CastOutOfRange` | Named codes, in the enumeration the tests sweep |
+| `include/sema/sema_error.h` | `CastInvalid`, `CastLoses`, `ProvenanceCast` | Named codes, in the enumeration the tests sweep. `CastOutOfRange` is **not** here: it is `include/ir/ir.h`'s, because the fold that proves a constant unrepresentable happens in the lowering |
 | `src/ir/types.cc`, `src/ir/expr.cc` | the arms the record newly reaches (`sitofp`, `uitofp`, `fptosi`, `ptrtoint`, `inttoptr`, `icmp ne 0`), the **float → integer guard**, and `bool → float` as `uitofp i1`; a `!` operand converts to a **poison of the consumer's type** with no instruction, and nothing else | It materialises the record; the guard is new because the model forbids poison, and the `!` arm is `never.md`'s rule reaching a value position — one lookup of the record, so no path can be forgotten |
 | `src/ir/invariants.cc` | the row: no `fptosi`/`fptoui` without a range test | The assumption list is closed and scanned, and this is a new assumption-shaped emission |
 | `src/driver` | `-Wcast` (opt-in) and the `-Wprovenance` text | Both are flags over decisions the checker made |

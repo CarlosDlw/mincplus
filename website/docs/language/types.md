@@ -170,10 +170,12 @@ Pointer rules, arithmetic and the untyped pointer are on
 
 ## Conversions
 
-There are no casts yet, so every conversion in the language today is implicit.
-The rules are short, and the type checker **records every one it inserts** —
-which instruction the lowering emits is read from that record and never
-decided a second time.
+A **conversion** is what the language does on its own, and it is silent by
+default. A **[cast](/language/expressions#casts)** is what the program writes,
+and it is the only way to cross a class of number or to join a pointer and an
+integer. The conversion rules are short, and the type checker **records every one
+it inserts** — which instruction the lowering emits is read from that record and
+never decided a second time.
 
 **Arithmetic converts to arithmetic — inside its own class.** An integer
 converts to another integer and a float to another float: `let a: i64 = 1;`,
@@ -198,8 +200,8 @@ This is the one place the arithmetic departs from C, and it departs on purpose: 
 turns `double d = 1;` into a silent widening and `1 + 2.0` into a `double`, both
 values the reader did not write — the second with a rounding the reader cannot
 see. Here the class of a number is the class of its **spelling**: `1` is an
-integer, `1.0` is a float, and crossing between the two is a cast (which the
-language does not have yet), never a conversion.
+integer, `1.0` is a float, and crossing between the two is a **cast** —
+`x as f64`, `(f64)x` — never a conversion.
 
 ```console
 $ printf 'fn i32 main() { let a: f64 = 1; return 0; }\n' | mincc check -
@@ -228,9 +230,10 @@ so `flag + 1` does not compile — that is the C footgun this language does not
 keep. `str` is not an integer either.
 
 **Pointers convert to the same pointee, and to and from `*void`.** Nothing else:
-pointer to integer, or integer to pointer, is not a conversion. The two
-operations that exist for it are `expose` and `with_exposed_provenance`, which
-are named in the memory model and not in the grammar yet.
+pointer to integer, or integer to pointer, is not a conversion. Those two are
+**casts**, and they are the model's `expose` (`p as usize`) and
+`with_exposed_provenance` (`addr as *u8`) — the only place provenance is lost or
+regained, and the reason both are counted by `-Wprovenance`.
 
 **`!` converts to everything.** See [the bottom type](/language/never).
 
@@ -242,8 +245,9 @@ past the fixed ones. That is the one place a promotion happens, and it is the
 call's rule rather than the type's.
 
 :::note[Not implemented yet]
-Casts — the explicit `(T)value` form — are not implemented, and neither are
-`sizeof` and `alignof`. Every conversion today is implicit.
+`sizeof` and `alignof` are not in the grammar yet; the layout they would read is
+defined anyway. Casts are implemented, in three spellings — see
+[Casts](/language/expressions#casts).
 :::
 
 ## What a type decides

@@ -10,7 +10,7 @@ left-associative except assignment, which is right-associative.
 | Precedence | Operators | Associativity | Operands | Result |
 | --- | --- | --- | --- | --- |
 | **1** (tightest) | `f(x)` `p[i]` `x++` `x--` | left | — | — |
-| **2** | `++x` `--x` `+x` `-x` `!x` `~x` `*p` `&x` | right | — | — |
+| **2** | `++x` `--x` `+x` `-x` `!x` `~x` `*p` `&x` `(T)x` `x as T` | see the note | — | the type named, for the cast forms |
 | **3** | `?:` | right | `bool ? T : T` | `T`, unified from both arms |
 | **4** | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | **right** | place, value | the place's type |
 | **5** | `\|\|` | left | `bool`, `bool` | `bool` |
@@ -33,7 +33,8 @@ two calls.
 
 **`+` and `-` do double duty.** With two arithmetic operands they are arithmetic;
 with a pointer and an integer they are pointer stepping, and the offset is
-converted to the pointer's index width. With two pointers, `-` is not defined yet.
+converted to the pointer's index width. With two pointers, `-` is defined and
+gives an `isize` — the element count between them, not a byte count.
 
 **`? :` is not a `bool`.** The condition is a `bool`; both arms unify to one type,
 and an arm of type `!` does not take part in that unification.
@@ -53,6 +54,11 @@ works and `(x += 1)` is a value. Its left side must be a modifiable place.
 commas, and a comma is not an operator in an expression. (This matters for the
 argument-is-the-offset rule in a call: a comma separates.)
 
-**There is no cast.** `(T)value` is a parenthesised expression followed by
-nothing; converting is what [`Types`](/language/types#conversions) describes,
-and every conversion in the language today is implicit.
+**There are two cast forms, and both sit in the unary row.** `(T)value` and
+`value as T` are in precedence 2 because that is the level they are parsed at —
+but within that level the postfix and prefix forms bind tighter: `f(a) as i64` is
+`(f(a)) as i64`, `-a as i64` is `(-a) as i64`, and chains are left to right
+(`a as u8 as i64`). A cast is not a conversion: converting is what
+[`Types`](/language/types#conversions) describes, and it is what the language
+does on its own. The two spellings, the suffixes, what each pair means and what
+each refusal says are on [the expressions page](/language/expressions#casts).
