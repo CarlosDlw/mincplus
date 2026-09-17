@@ -46,6 +46,11 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::ExpectedExpression},
     {"token that cannot start a statement", "fn i32 main() { , }\n",
      ParseErrorCode::ExpectedStatement},
+    // A typed initializer where the `{` is the body of the statement: the one
+    // shape the restriction cannot read, and the reason the sentence exists
+    // (`arrays.md`).
+    {"typed initializer at the head of a condition",
+     "fn i32 main() { if Row{1, 2, 3}[0] > 0 { } }\n", ParseErrorCode::InitializerInCondition},
     // The two halves of a parameter a reader can leave out. `(i32)` gives the
     // type and no name; `(x:)` gives the name and no type. Something that can
     // start neither is reported at the name, because the name is what the one

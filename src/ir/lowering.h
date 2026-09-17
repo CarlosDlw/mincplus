@@ -365,13 +365,20 @@ private:
                                                std::string_view name, ast::AstId at,
                                                unsigned parameterNumber = 0,
                                                const AliasName& alias = {});
-  // The caller's copy of a by-value aggregate argument: the temporary an
-  // aggregate parameter points at (`arrays.md` decision 13). The slot is an
-  // entry-block `alloca` -- the copy's lifetime is the call, and a slot in the
-  // entry block is the one place a frame belongs -- while the store that fills
-  // it happens where the call is, which is why the two seats are separate.
-  [[nodiscard]] llvm::AllocaInst* argumentCopy(sema::TypeId type, const Value& value,
-                                               ast::AstId at);
+  // A **frame copy of a value**: an aggregate that has no address of its own gets
+  // one, so that something can step into it. Two callers, and they are one
+  // question -- "this value needs an object":
+  //
+  //   * a by-value aggregate argument, where the copy is the temporary the
+  //     parameter points at (`arrays.md` decision 13);
+  //   * an **rvalue** aggregate a member read subscripts (`Row{1, 2, 3}[0]`), which
+  //     would otherwise have no object to take an element of.
+  //
+  // The slot is an entry-block `alloca` -- a slot in the entry block is the one
+  // place a frame belongs -- while the store that fills it happens where the
+  // expression is, which is why the two seats are separate.
+  [[nodiscard]] llvm::AllocaInst* valueCopy(sema::TypeId type, const Value& value, ast::AstId at,
+                                            const char* name = "arg.copy");
   [[nodiscard]] std::optional<resolve::DefId> defOfPath(ast::AstId pathExpr) const;
   [[nodiscard]] std::optional<resolve::DefId> defAtName(ast::AstId nameNode) const;
   [[nodiscard]] std::optional<resolve::DefId> defOfPlace(ast::AstId expr) const;

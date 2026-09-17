@@ -120,6 +120,12 @@ enum class ParseErrorCode : std::uint8_t {
   // of `ExpectedTypeGroupClose`: the sentence a reader who left a list open
   // needs, naming the character to type and the list it closes.
   ExpectedTypeArgClose,
+  // A **typed initializer where a body of the statement follows**: `if
+  // Vec<i32>{1, 2, 3}[0] > 0 { }`. A `{` after a word is the body of an `if`,
+  // a `while` or a `for`, so the initializer has to be written inside a group --
+  // and the sentence says so, because the tokens are otherwise two readings of
+  // the same characters (`arrays.md`).
+  InitializerInCondition,
   // A `>` that closes nothing: `A<B>>` written where one `>` is enough, or the
   // `=` of a `>=`/`>>=` where no declaration has an `=` to give.
   //

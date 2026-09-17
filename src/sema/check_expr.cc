@@ -1782,10 +1782,22 @@ TypeId Checker::checkTypedInitializer(ast::AstId expr, ExprInfo& info) {
     return kTypeError;
   }
   if (!types_.isArray(spec.type)) {
-    // A `Type` this node cannot hold. The parser recognizes a typed initializer
-    // when the run opens with a bracket group (`[N]`, `[_]`, `[]`), so the two
-    // shapes that can reach here are handled above and below; anything else is a
-    // tree this stage did not build.
+    // A `Type` this node cannot hold. The bracket form (`[N]T{...}`) can only
+    // reach here with a malformed run the parsers above already reported, but the
+    // **named** form (`i32{1}`, `type Name = i32; Name{1}`) reaches it honestly:
+    // any word can be written in front of a brace, and only an array has elements
+    // to write out. Named rather than left to the next stage, which would be a
+    // silent `kTypeError` and then a second sentence about a value nobody can
+    // type.
+    error(typeNode, SemaErrorCode::InitializerShape,
+          "a typed initializer writes the value of an **array**, and `" +
+              types_.spelling(spec.type) +
+              "` has no elements: put the type of a storeable element in brackets -- "
+              "`[4]" +
+              types_.spelling(spec.type) +
+              "{...}` -- or leave the braces off and write the "
+              "value the type already has");
+    setType(typeNode, kTypeError);
     return kTypeError;
   }
 

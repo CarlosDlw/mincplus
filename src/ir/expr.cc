@@ -414,7 +414,26 @@ Place Lowering::lowerPlace(ast::AstId expr) {
     // to `i1`, which is what keeps the array from being a bitfield
     // (`arrays.md` decision 12).
     if (types_.isArray(typeOf(operands[0]))) {
-      const Place basePlace = lowerPlace(operands[0]);
+      // The base is an *object*, unless the expression that produced it is not a
+      // place: `Row{1, 2, 3}[0]` and `f()[0]` have no object to subscript, and
+      // this stage gives them one. The alternative -- refusing the spelling --
+      // would make the language's own literal unusable in the one position
+      // anybody writes it in, and the checker has already accepted it: "if the
+      // checker lets it pass, it must run" (`arrays.md`).
+      Place basePlace;
+      if (infoOf(operands[0]).isLvalue) {
+        basePlace = lowerPlace(operands[0]);
+      } else {
+        const Value base = lowerExpr(operands[0]);
+        if (base.v == nullptr) {
+          return {};
+        }
+        llvm::AllocaInst* copy = valueCopy(base.type, base, operands[0], "array.tmp");
+        if (copy == nullptr) {
+          return {};
+        }
+        basePlace = Place{copy, base.type};
+      }
       if (basePlace.addr == nullptr) {
         return {};
       }
@@ -1549,7 +1568,7 @@ Value Lowering::lowerCall(ast::AstId expr) {
       // `readonly`, `noalias` or `nocapture` attribute is emitted here).
       const sema::TypeId paramType = index < params.size() ? params[index] : sema::kInvalidType;
       if (byReference(paramType)) {
-        llvm::AllocaInst* copy = argumentCopy(paramType, value, argument);
+        llvm::AllocaInst* copy = valueCopy(paramType, value, argument);
         if (copy == nullptr) {
           return {};
         }

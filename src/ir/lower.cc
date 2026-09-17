@@ -554,10 +554,10 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
   return alloca;
 }
 
-llvm::AllocaInst* Lowering::argumentCopy(sema::TypeId type, const Value& value, ast::AstId at) {
-  // The copy of a by-value aggregate argument is a frame slot like any other, and
-  // it is bounded by the same number for the same reason -- the callee reads it
-  // out of *this* frame.
+llvm::AllocaInst* Lowering::valueCopy(sema::TypeId type, const Value& value, ast::AstId at,
+                                      const char* name) {
+  // The copy is a frame slot like any other, and it is bounded by the same number
+  // for the same reason -- whoever reads it reads it out of *this* frame.
   if (!frameObjectFits(type, at)) {
     return nullptr;
   }
@@ -571,7 +571,7 @@ llvm::AllocaInst* Lowering::argumentCopy(sema::TypeId type, const Value& value, 
     allocaBuilder_.SetInsertPoint(entryBlock_, entryBlock_->begin());
   }
   locate(at);
-  llvm::AllocaInst* copy = allocaBuilder_.CreateAlloca(slotType, nullptr, "arg.copy");
+  llvm::AllocaInst* copy = allocaBuilder_.CreateAlloca(slotType, nullptr, name);
   copy->setAlignment(llvm::Align(alignmentOf(type)));
   // The *store* happens where the call is, and not in the entry block: the copy's
   // value comes from an expression that has to be evaluated in order, and moving

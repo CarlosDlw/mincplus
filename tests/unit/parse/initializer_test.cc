@@ -151,5 +151,62 @@ TEST(InitializerTest, AnInferredCountIsWrittenWithTheSameGrammar) {
   EXPECT_GT(named.errorCount(), 0u);
 }
 
+TEST(InitializerTest, ATypeWrittenAsANameIsAnInitializerToo) {
+  // `Row{1, 2, 3}`: the same node, with the type written as a word instead of
+  // as a bracketed count. The brace is what says the word was a *type*, which is
+  // the whole of the rule -- no symbol table is consulted, and none is needed.
+  const ParseFixture named(fnBody("let a = Row{1, 2, 3};"));
+  expectLossless(named);
+  EXPECT_EQ(initializerOf(named).kind(), SyntaxKind::TypedInitializer);
+
+  const ParseFixture generic(fnBody("let a = Vec<i32>{1, 2, 3, 4};"));
+  expectLossless(generic);
+  EXPECT_EQ(initializerOf(generic).kind(), SyntaxKind::TypedInitializer);
+
+  // And it is a *value*, so every postfix the language has may follow it.
+  const ParseFixture indexed(fnBody("let a = Row{7, 8, 9}[2];"));
+  expectLossless(indexed);
+  EXPECT_EQ(countNodes(indexed.tree().root(), SyntaxKind::TypedInitializer), 1u);
+}
+
+TEST(InitializerTest, AWordInFrontOfABraceIsOnlyATypeOutsideACondition) {
+  // The collision this rule has and no other: in a condition a `{` after a word
+  // is the *body* of the statement, and `if x { }` is by far the common case. The
+  // two inputs below differ in nothing a reader can point at, so the parse that
+  // wins is the condition -- and the shape is reported instead of read.
+  const ParseFixture plain(fnBody("if x { }"));
+  expectLossless(plain);
+  EXPECT_EQ(countNodes(plain.tree().root(), SyntaxKind::TypedInitializer), 0u);
+
+  const ParseFixture false_(fnBody("while false { }"));
+  expectLossless(false_);
+  EXPECT_EQ(countNodes(false_.tree().root(), SyntaxKind::TypedInitializer), 0u);
+
+  // Inside a group the closing token bounds the expression, so the collision
+  // cannot happen and the initializer is read: this is the spelling the language
+  // asks for, and the one the sentence below names.
+  const ParseFixture grouped(fnBody("if (Row{1, 2, 3}[0] > 0) { }"));
+  expectLossless(grouped);
+  EXPECT_EQ(countNodes(grouped.tree().root(), SyntaxKind::TypedInitializer), 1u);
+
+  // The forbidden shape: one sentence, and the *body* is still read as the body
+  // (the initializer is read first, so the `{ ... }` that closes the statement is
+  // the block it was written as).
+  const ParseFixture forbidden(fnBody("if Row{1, 2, 3}[0] > 0 { return 1; }"));
+  EXPECT_EQ(forbidden.errorCount(), 1u) << forbidden.errorMessages();
+  EXPECT_EQ(countNodes(forbidden.tree().root(), SyntaxKind::TypedInitializer), 1u);
+  EXPECT_EQ(countNodes(forbidden.tree().root(), SyntaxKind::Block), 2u);
+  EXPECT_EQ(countNodes(forbidden.tree().root(), SyntaxKind::IfStmt), 1u);
+  // The tree is still the source, byte for byte: the report is about the *shape*,
+  // and nothing was consumed twice or dropped while it was made.
+  EXPECT_EQ(forbidden.reconstruct(), forbidden.source());
+  EXPECT_TRUE(forbidden.tree().stats().lossless);
+
+  // And the same for the form with a type argument list, whose `<...>` is what
+  // tells the two readings apart without any lookahead into the braces.
+  const ParseFixture listed(fnBody("if Vec<i32>{1, 2, 3, 4}[0] > 0 { }"));
+  EXPECT_EQ(listed.errorCount(), 1u) << listed.errorMessages();
+}
+
 } // namespace
 } // namespace minc::parse

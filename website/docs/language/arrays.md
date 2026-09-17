@@ -41,6 +41,49 @@ let digits = [_]u8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 let zeros = [64]u8{0; 64};
 ```
 
+### The type can be a name
+
+Brackets are not the only way to spell the type a value has. Type it once and
+the literal can use the name — including a generic name, with its own
+arguments:
+
+```minc
+type Row = [3]i32;
+type Vec<T> = [4]T;
+
+let a = Row{1, 2, 3};            // exactly `[3]i32{1, 2, 3}`
+let b = Vec<i32>{1, 2, 3, 4};    // exactly `[4]i32{1, 2, 3, 4}`
+let c: Row = [7, 8, 9];          // the context form still says the type once
+```
+
+Nothing is looked up to read this: the `{` is what says the word before it was a
+type. It is a value like any other, so it can be an argument, a returned value, a
+file-scope table, and the base of a subscript — and the last one works even when
+nothing named the temporary:
+
+```minc
+let m = Row{7, 8, 9}[1];         // 8, and no binding was needed
+let n = Vec<i32>{1, 2, 3, 4}[3]; // 4
+```
+
+:::warning In a condition, write the parentheses
+
+After `if`, `while` or a `for` clause, a `{` following a word is the **body** of
+the statement — `if x { }` — so when the first thing in the condition is a typed
+initializer, the initializer goes inside a group:
+
+```minc
+if (Row{1, 2, 3}[0] > 0) { }     // ok: the parentheses bound the condition
+if Row{1, 2, 3}[0] > 0 { }       // error: `{` here is the body
+```
+
+The second spelling is reported by name (`parse-initializer-in-condition`), once,
+rather than as a cascade that starts at the brace. Inside **any** group — a
+parenthesised expression, an index, an argument list — the initializer reads
+normally, because the closing token bounds the expression.
+
+:::
+
 Five rules, and each one exists to kill a mistake:
 
 - **The length is exact.** `[4]i32{1, 2, 3}` is an error, not a zero-filled array
@@ -120,7 +163,9 @@ may be written above the constant it uses.
 
 What cannot be there is anything with no value before the program starts, and each
 one is refused with the sentence that says *what* it was: a call, an indexed
-access (which reads memory), a dereference, a `let`, and the address of an object.### Two limits, and why they are not surprises
+access (which reads memory), a dereference, a `let`, and the address of an object.
+
+### Two limits, and why they are not surprises
 
 - **A frame object may be at most 16 MiB.** `let a: [16777217]u8;` is storage in
   a frame, and a frame is a subtraction from the stack pointer. The refusal is
@@ -164,9 +209,10 @@ extern fn i32 takes(p: *[4]i32);  // fine
 - **`sizeof`/`alignof`** are not in the grammar yet. The layout is defined and
   testable — including the view's, which is two words — but the operator that
   exposes it arrives with a type in an expression.
-- **Braces on a scalar or a `struct` name** (`i32{1}`, `Point{...}`) are not a
-  typed initializer: today a typed initializer is recognized by the bracket its
-  type starts with, and the type has to be an array to hold one. `[]i32{1, 2, 3}`
-  is read and refused with a sentence of its own: a view has no literal, because a
-  literal would live in a temporary and a view of a temporary is the dangling this
-  language does not hand out.
+- **Braces on a scalar, a pointer or a `void`** (`i32{1}`, `*i32{...}`) are read
+  and refused: the brace belongs to a *type*, and the type has to be an array to
+  hold a value written out in full. `[]i32{1, 2, 3}` is the same story one page
+  over: a view has no literal, because a literal would live in a temporary and a
+  view of a temporary is the dangling this language does not hand out.
+  When `struct` lands, `Point{1, 2}` is a *different* question with a different
+  answer, and the reading above is what it will arrive on.

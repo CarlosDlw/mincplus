@@ -92,14 +92,21 @@ void Parser::parseStmt() {
 // parenthesised *expression*, and a `{` cannot continue an expression, so the
 // condition simply stops there and the block follows -- which is what makes
 // both `if (x) { }` and `if x { }` parse, and `if (a) && b { }` parse as the
-// reader expects. A language with struct literals has to add a rule forbidding
-// one at the head of a condition; this one has nothing to forbid, because `{`
-// is never an expression here.
+// reader expects.
+//
+// The one thing that has to be *unread* here is a typed initializer: `{` after a
+// word is the body of the statement, so `if Vec<i32>{1,2}[0] > 0 { }` would be
+// the condition `Vec<i32>` and a body starting with `1`. The restriction turns
+// the read off for the condition and the shape is reported by name
+// (`InitializerRestriction`, and `arrays.md` for the rule).
 void Parser::parseIfStmt() {
   Marker stmt = start();
   bump(); // `if`
 
-  parseExpr();
+  {
+    InitializerRestriction restrict(*this, true);
+    parseExpr();
+  }
   parseBlock();
 
   if (at(lex::TokenKind::KwElse)) {
@@ -122,7 +129,10 @@ void Parser::parseIfStmt() {
 void Parser::parseWhileStmt() {
   Marker stmt = start();
   bump(); // `while`
-  parseExpr();
+  {
+    InitializerRestriction restrict(*this, true);
+    parseExpr();
+  }
   parseBlock();
   stmt.complete(SyntaxKind::WhileStmt);
 }
@@ -184,6 +194,9 @@ void Parser::parseForClause(SyntaxKind wrapper) {
   // condition?" is a child count and not a guess.
   if (!at(lex::TokenKind::Semicolon) && !at(lex::TokenKind::RParen) &&
       !at(lex::TokenKind::LBrace) && !atEnd() && !bailedOut_) {
+    // The step is followed by the body, so it is the same collision a condition
+    // has, one clause later: `for ; ; i = Row{1,2}[0] { ... }`.
+    InitializerRestriction restrict(*this, true);
     parseExpr();
   }
   clause.complete(wrapper);

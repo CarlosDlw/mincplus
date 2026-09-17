@@ -361,6 +361,10 @@ CompletedMarker Parser::parsePostfix() {
       // tell them apart would not be a dump of the source.
       Marker index = expr.precede();
       bump(); // `[`
+      // The brackets bound the expressions inside them, so a `{` after a word in
+      // here can only be the brace of a typed initializer -- even in a condition
+      // (`arrays.md`).
+      InitializerRestriction lifted(*this, false);
       // Three cases, and each one is a *complete* tree: the operand before the
       // `..`, the operand after it, or the index that makes this an `IndexExpr`.
       // Nothing is left half-consumed, so the single `]` below closes whichever
@@ -492,6 +496,30 @@ CompletedMarker Parser::parsePrimary() {
     return literal.complete(SyntaxKind::LiteralExpr);
   }
   case lex::TokenKind::Identifier: {
+    // A type written out in front of its value: `Row{1, 2, 3}`,
+    // `Vec<i32>{...}`. The brace is what says the word was a *type*, which is the
+    // same statement the bracket form makes and the reason neither needs a
+    // symbol table (`arrays.md`).
+    const InitializerRead read = initializerRead();
+    if (read != InitializerRead::No) {
+      // A **condition** is where the shape has two readings and the other one is
+      // the common case: `{` after a word there is the *body* of the statement
+      // (`if x { ... }`). So the node is read only when the text says the body is
+      // not it -- a `<...>` list (a comparison has no list) or braces no block can
+      // hold (`bracesHoldTopLevelComma`). Otherwise the shape earns one sentence
+      // that names the fix, and the initializer is read anyway so that the body
+      // after it is still read as the body.
+      if (!noNamedInitializer_ || read == InitializerRead::GenericWord ||
+          bracesHoldTopLevelComma()) {
+        if (noNamedInitializer_) {
+          error("a typed initializer cannot stand at the head of a condition: this `{` would be "
+                "the body of the statement. Write it inside a group, as in `if (Row{1, 2, 3}[0] > "
+                "0) { ... }`",
+                ParseErrorCode::InitializerInCondition);
+        }
+        return parseTypedInitializer();
+      }
+    }
     // `true`, `false`, and every type name land here: none of them is a
     // keyword yet, and the parser does not need them to be.
     Marker path = start();
@@ -521,6 +549,10 @@ CompletedMarker Parser::parsePrimary() {
     }
     Marker group = start();
     bump(); // `(`
+    // A group is bounded by its own `)`, so the collision a condition has cannot
+    // happen inside one: `if (Row{1, 2, 3}[0] > 0) { }` is the spelling, and the
+    // parentheses are exactly what makes it one (`arrays.md`).
+    InitializerRestriction lifted(*this, false);
     parseExpr();
     if (at(lex::TokenKind::Comma)) {
       return parseTupleLiteral(group);
@@ -633,6 +665,76 @@ bool Parser::atTypedInitializer() const {
   return nth(i) == lex::TokenKind::LBrace;
 }
 
+InitializerRead Parser::initializerRead() const {
+  // Precondition: the current token is a word.
+  //
+  // One word and its `<...>` list, then `{`. The scan is the **cast** policy's,
+  // and for the same reason: after a word a `<` may be a comparison, and only a
+  // list that closes with type-shaped contents inside it is a list.
+  //
+  // **One word and no more**, which is not a shortcut: a type this node can
+  // write is a *name* or a reserved type word, and a name is one word. The
+  // multi-word spellings (`unsigned long long int`) are not names, and the
+  // bracket form already spells them where they make sense -- `[4]long int{...}`
+  // is `atTypedInitializer`'s, which walks a whole run.
+  if (current() != lex::TokenKind::Identifier) {
+    return InitializerRead::No;
+  }
+  const TypeRunScan run = scanTypeRun(*this, RunKind::Cast);
+  if (run.tokens == 0 || run.words != 1 || run.lastWordIsGroup || run.nameStart != 0) {
+    return InitializerRead::No;
+  }
+  if (nth(run.tokens) != lex::TokenKind::LBrace) {
+    return InitializerRead::No;
+  }
+  return run.tokens == 1 ? InitializerRead::Word : InitializerRead::GenericWord;
+}
+
+bool Parser::bracesHoldTopLevelComma() const {
+  // Precondition: the current token is `{`, and the caller is in a condition.
+  //
+  // One question, asked to tell a **body** from a **value**: does the group hold
+  // a `,` at its own level before anything ends a statement? No block of this
+  // grammar can: every statement inside one ends with `;` or `}`, and a comma is
+  // not a statement token, so a comma at the top level of a brace group is text
+  // only an initializer can produce.
+  //
+  // Three ways to stop, and all three are a "no": a top-level `;` (the group is
+  // a list of statements), the group's own `}`, and the end of the file. That
+  // also bounds the walk: a body answers on its first statement, so this costs a
+  // handful of tokens per condition rather than the body's length (`arrays.md`).
+  std::uint32_t depth = 0;
+  for (std::uint32_t i = 0;; ++i) {
+    const lex::TokenKind kind = nth(i);
+    switch (kind) {
+    case lex::TokenKind::EndOfFile:
+    case lex::TokenKind::Semicolon:
+    case lex::TokenKind::RBrace:
+      return false;
+    case lex::TokenKind::LBrace:
+      ++depth;
+      break;
+    case lex::TokenKind::Comma:
+      if (depth == 1) {
+        return true;
+      }
+      break;
+    case lex::TokenKind::LParen:
+    case lex::TokenKind::LBracket:
+      ++depth;
+      break;
+    case lex::TokenKind::RParen:
+    case lex::TokenKind::RBracket:
+      if (depth > 0) {
+        --depth;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+}
+
 void Parser::parseInitializerElements(lex::TokenKind closer) {
   // The elements of `{...}` or `[...]`: a list separated by `,`, with a trailing
   // comma allowed, or `value ; count`, the fill. The `;` is the only thing that
@@ -722,6 +824,10 @@ void Parser::parseArgList() {
   if (at(lex::TokenKind::RParen)) {
     return;
   }
+  // An argument sits between the call's parentheses, which bound it: the
+  // restriction a condition may have set does not reach in here (`f(Row{1, 2})`
+  // is legal in a condition, and `f(Row{1, 2}) { }` is the statement's body).
+  InitializerRestriction lifted(*this, false);
   Marker args = start();
   parseExpr();
   while (at(lex::TokenKind::Comma) && !bailedOut_) {

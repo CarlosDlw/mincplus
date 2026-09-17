@@ -37,6 +37,7 @@ constexpr auto kParseErrorCodeInfos = std::to_array<ParseErrorCodeInfo>({
     {ParseErrorCode::ExpectedArrayCount, "parse-expected-array-count"},
     {ParseErrorCode::ExpectedArrayCountClose, "parse-expected-array-count-close"},
     {ParseErrorCode::BraceWithoutType, "parse-brace-without-type"},
+    {ParseErrorCode::InitializerInCondition, "parse-initializer-in-condition"},
     {ParseErrorCode::ExpectedTypeGroupClose, "parse-expected-type-group-close"},
     {ParseErrorCode::LeadingPointNumber, "parse-leading-point-number"},
     {ParseErrorCode::CastToProduct, "parse-cast-to-product"},

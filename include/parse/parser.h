@@ -64,6 +64,26 @@ struct ListClose {
   }
 };
 
+// The three readings a word in front of `{` has. A *type* written in front of
+// its value is the reading the language added (`arrays.md`), and the two shapes
+// it comes in differ in one thing: whether the word carried a `<...>` list, which
+// is what a reader can point at without knowing any names.
+//
+//   * `No` -- no brace, or not one word: an ordinary expression;
+//   * `Word` -- `Row{...}`: a type outside a condition, and the *body* of the
+//     statement inside one, where the two are the same tokens (`if x { }`);
+//   * `GenericWord` -- `Vec<i32>{...}`: a type anywhere, because a comparison
+//     cannot have a type argument list in front of it.
+//
+// The distinction is not a convenience: it is the whole of what decides whether
+// a program is read as a condition and its body or as a value, and it is decided
+// by tokens because the parser has no names (`InitializerRestriction`).
+enum class InitializerRead : std::uint8_t {
+  No,
+  Word,
+  GenericWord,
+};
+
 class Parser;
 class CompletedMarker;
 
@@ -146,6 +166,16 @@ public:
   // initializer and not the start of a list. Defined in expression.cc, where
   // the rule that decides it lives.
   [[nodiscard]] bool atTypedInitializer() const;
+  // The **named** form of the same node: `Row{1, 2, 3}`, `Vec<i32>{...}`. A word
+  // (with its `<...>` list, when it has one) followed straight by `{` is a type
+  // position -- the brace is what proves it, and no symbol table is needed to
+  // see it (`arrays.md`).
+  [[nodiscard]] InitializerRead initializerRead() const;
+  // Whether the brace group at the current token holds a `,` at its own level
+  // before anything ends a statement -- text no *block* of this grammar can
+  // produce, and the second fact that tells a value from a body inside a
+  // condition.
+  [[nodiscard]] bool bracesHoldTopLevelComma() const;
 
   // -- input ----------------------------------------------------------------
   [[nodiscard]] lex::TokenKind current() const {
@@ -410,6 +440,7 @@ private:
   friend class CompletedMarker;
   friend class DepthGuard;
   friend class TokenBound;
+  friend class InitializerRestriction;
 
   // True when a `TokenBound` stops the read at the current token.
   [[nodiscard]] bool bounded() const {
@@ -429,6 +460,9 @@ private:
   TokenSource& source_;
   std::vector<Event> events_;
   std::vector<ParseError> errors_;
+  // True while a `{` after a word is a *block* and not the brace of a typed
+  // initializer. Set only by `InitializerRestriction`.
+  bool noNamedInitializer_ = false;
   std::uint32_t bound_ = kNoBound;
   std::uint32_t depth_ = 0;
   bool bailedOut_ = false;
@@ -468,6 +502,44 @@ private:
   Parser& parser_;
   std::uint32_t previous_;
   std::uint32_t end_;
+};
+
+// RAII for **the one position where a `{` after a word cannot be read as an
+// initializer**: a condition. `if x { }` is by far the common case and the `{`
+// there is the body of the statement, so the read is off for as long as a body
+// can follow -- and the shape it forbids is then *reported in words* rather than
+// read, which is what keeps one mistake one sentence instead of a cascade that
+// starts at the brace and ends at the closing one.
+//
+// Rust solves the same collision with a parser restriction plus a name lookup
+// (`NO_STRUCT_LITERAL`: `if A { x: 1 }.y { }` is an error, `if x { }` is not).
+// This grammar has no symbol table to look a path up in, so the restriction is
+// the whole of the rule and it is decided in one place: a `<...>` list is the
+// spelling that tells the two apart lexically, and a bare name is read as the
+// condition it is (`arrays.md`).
+//
+// The other half of the rule is what a **group** does to it: `(...)`, `[...]`
+// and an argument list bound the expression with a closing token, so inside one
+// there is nothing for a `{` to be but the brace of an initializer. The guard is
+// therefore a *scope* with a value, and the two callers differ in one word:
+// `blocked` in a condition, and `false` -- the restriction lifted -- inside a
+// group.
+class InitializerRestriction {
+public:
+  InitializerRestriction(Parser& parser, bool blocked)
+      : parser_(parser), previous_(parser.noNamedInitializer_) {
+    parser_.noNamedInitializer_ = blocked;
+  }
+  ~InitializerRestriction() {
+    parser_.noNamedInitializer_ = previous_;
+  }
+
+  InitializerRestriction(const InitializerRestriction&) = delete;
+  InitializerRestriction& operator=(const InitializerRestriction&) = delete;
+
+private:
+  Parser& parser_;
+  bool previous_;
 };
 
 // RAII for the recursion limit. Construction succeeds only while there is room:
