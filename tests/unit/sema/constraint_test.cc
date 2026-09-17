@@ -174,17 +174,46 @@ std::string valueFor(std::string_view type) {
   return "1";
 }
 
+// One member of a class, and a value of it, in the order the table wrote them. The
+// two travel together because the target filter below can drop one, and a value left
+// behind for its type is a value of the wrong type at the call.
+struct MemberValue {
+  std::string type;
+  std::string value;
+};
+
+// The members as **this target** states them.
+//
+// `f80` is a member of `Float` on every machine with the x87 format, and on one
+// without it the *type name* is refused before a class is ever asked
+// (`sema-malformed-type`, from the type-specifier reader). So a table that
+// instantiated `f80` unconditionally is a test that passes on x86_64 and fails on
+// the CI's AArch64 macOS runner -- which is exactly what it did. The table keeps the
+// row, because the table is the language's; this drops it where the reader would.
+[[nodiscard]] std::vector<MemberValue> membersFor(const ClassCase& one,
+                                                  const sema::TargetInfo& target) {
+  std::vector<MemberValue> out;
+  out.reserve(one.members.size());
+  for (std::size_t i = 0; i < one.members.size(); ++i) {
+    if (one.members[i] == "f80" && !target.hasFloat80()) {
+      continue;
+    }
+    out.push_back(MemberValue{.type = one.members[i], .value = one.memberValues[i]});
+  }
+  return out;
+}
+
 // The program a case needs: a helper with the binder and a body that uses it, a
 // `probe` for `&probe`, and a `main` that instantiates the helper **once per member**,
 // because the satisfaction check runs at the instantiation and not at the declaration.
-std::string programFor(const ClassCase& one, std::span<const std::string> types) {
+std::string programFor(const ClassCase& one, std::span<const MemberValue> members) {
   std::string out = "let probe: i32 = 7;\n\n";
   out += "fn " + one.result + " use<T: " + std::string(one.klass) + ">(x: T, y: T) {\n";
   out += one.body;
   out += "\n}\n\nfn i32 main() {\n";
-  for (std::size_t i = 0; i < types.size(); ++i) {
-    const std::string& type = types[i];
-    out += "  let a" + std::to_string(i) + ": " + type + " = " + one.memberValues[i] + ";\n";
+  for (std::size_t i = 0; i < members.size(); ++i) {
+    const std::string& type = members[i].type;
+    out += "  let a" + std::to_string(i) + ": " + type + " = " + members[i].value + ";\n";
     out += "  let r" + std::to_string(i) + " = use::<" + type + ">(a" + std::to_string(i) + ", a" +
            std::to_string(i) + ");\n";
   }
@@ -201,16 +230,17 @@ TEST(ConstraintTest, EveryClassGrantsEveryOperationItsMembersAdmit) {
   // for the member that does not admit it (`Number` granting `%` fails at `f64`), and
   // one that granted too few would fail at the declaration.
   for (const ClassCase& one : classCases()) {
+    const std::vector<MemberValue> members = membersFor(one, sema::defaultTarget());
     SemaFixture fixture;
-    fixture.source(programFor(one, one.members));
+    fixture.source(programFor(one, members));
     ASSERT_TRUE(fixture.build()) << one.klass;
     EXPECT_EQ(fixture.errorCount(), 0u)
         << one.klass << ": " << (fixture.errorCount() > 0 ? fixture.firstError().message : "")
         << "\n"
-        << programFor(one, one.members);
+        << programFor(one, members);
     // One instance per member, so the acceptance above is a statement about
     // instantiations and not only about the abstract body.
-    EXPECT_EQ(fixture.instanceCount(), one.members.size()) << one.klass;
+    EXPECT_EQ(fixture.instanceCount(), members.size()) << one.klass;
   }
 }
 

@@ -215,6 +215,38 @@ TEST(CheckCommandTest, EveryExampleChecks) {
   EXPECT_EQ(summaries, files.size());
 }
 
+// The examples are the compiler's end-to-end test, and they are read on more than
+// one machine: the CI's macOS runner is AArch64, where the x87 format does not
+// exist, and its Windows job is LLP64, where `long` is 32 bits. An example that
+// names a type the *target* refuses is an example that only passes where it was
+// written -- which is what happened with `023_constraints.mx` and `f80`, caught by
+// the macOS job and invisible to the Linux one.
+//
+// So every example is checked against a triple this host is not, and the list
+// covers the three facts that decide a type: x87 absent, x87 present at another
+// width, and an LLP64 `long`.
+TEST(CheckCommandTest, EveryExampleAlsoChecksForATargetThatIsNotTheHost) {
+  namespace fs = std::filesystem;
+  std::vector<std::string> files;
+  std::error_code ec;
+  for (const fs::directory_entry& entry : fs::directory_iterator(test::kExamplesDir, ec)) {
+    if (entry.is_regular_file(ec) && entry.path().extension() == ".mx") {
+      files.push_back(entry.path().string());
+    }
+  }
+  ASSERT_FALSE(files.empty()) << "examples/ is missing files";
+
+  for (const std::string_view name :
+       {"aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "i386-unknown-linux-gnu"}) {
+    const std::optional<sema::TargetInfo> target = sema::targetFromName(name);
+    ASSERT_TRUE(target.has_value()) << name;
+    const CheckRun result =
+        run(files, /*showAst=*/false, /*showTypes=*/false, /*stats=*/true, *target);
+    EXPECT_EQ(result.code, exitCode(ExitCode::Ok)) << name << ": " << result.err;
+    EXPECT_EQ(result.err.find("error["), std::string::npos) << name << ": " << result.err;
+  }
+}
+
 TEST(CheckCommandTest, TheErrorLimitStopsTheRenderingAndKeepsTheExitCode) {
   // Two errors in one file, and a limit of one: the second is counted and not
   // shown. The exit code is the *compile's* answer and not the rendering's -- a

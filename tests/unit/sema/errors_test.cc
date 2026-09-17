@@ -159,6 +159,9 @@ TEST(ErrorsTest, BoolAndStrAreNotArithmetic) {
   }
 }
 
+// A comparison does not chain, and the sentence says so: `a < b > c` is a shape
+// refusal and not an operand one, so the reader is told which reading was taken
+// and how to write the other (`casts.md`, decision 20).
 TEST(ErrorsTest, AComparisonDoesNotChain) {
   {
     // The chain, and the sentence names both the reading and the fix. It is the
@@ -196,26 +199,12 @@ TEST(ErrorsTest, AComparisonDoesNotChain) {
   }
 }
 
-// Equality is defined for arithmetic values and for two `bool`s, and for nothing
-// else. A `str` is refused, and the refusal is the *same* rule that refuses
-// ordering one: `==` on two `str`s would be C's `s1 == s2`, an address
-// comparison, and a reader who writes it is asking about the bytes (`sema.md`,
-// decision 8; `tuples.md`, decision 17 cites this refusal when it explains why a
-// product has no equality either).
-TEST(ErrorsTest, EqualityIsNotDefinedForAStr) {
+TEST(ErrorsTest, EqualityIsDefinedForArithmeticBoolAndStr) {
   {
     SemaFixture f;
     f.source("fn i32 main() { let a: str = \"x\"; let b: bool = a == a; return 0; }\n");
     ASSERT_TRUE(f.build());
-    ASSERT_TRUE(f.hasError("sema-invalid-operands"));
-    EXPECT_NE(f.firstError().message.find("addresses, not contents"), std::string::npos)
-        << f.firstError().message;
-  }
-  {
-    SemaFixture f;
-    f.source("fn i32 main() { let a: str = \"x\"; let b: bool = a != a; return 0; }\n");
-    ASSERT_TRUE(f.build());
-    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+    EXPECT_FALSE(f.hasError("sema-invalid-operands"));
   }
   {
     SemaFixture f;

@@ -18,7 +18,7 @@ left-associative except assignment, which is right-associative.
 | **7** | `\|` | left | integer | integer |
 | **8** | `^` | left | integer | integer |
 | **9** | `&` | left | integer | integer |
-| **10** | `==` `!=` | left | arithmetic, or two `bool`s | `bool` |
+| **10** | `==` `!=` | left | arithmetic, or two `bool`/two `str` | `bool` |
 | **11** | `<` `<=` `>` `>=` | left | arithmetic | `bool` |
 | **12** | `<<` `>>` | left | integer | the left operand's promoted type |
 | **13** | `+` `-` | left | arithmetic, or a pointer and an integer | the wider type, or the pointer |
@@ -30,13 +30,6 @@ order of function calls is a grammar whose meaning moves when someone reorders
 two calls.
 
 ## Notes that are not in the table
-
-**`==` and `!=` take arithmetic values or two `bool`s, and nothing else.** A
-`str` is refused: the operator would be C's `s1 == s2`, an address comparison,
-and a program that writes it meant the contents. Comparing bytes is a library
-call, and the refusal says so. Two products are refused for the same kind of
-reason — `==` on a tuple would have to mean "every member `==`", which is a rule
-the language gives per type through a declared interface rather than a built-in.
 
 **`+` and `-` do double duty.** With two arithmetic operands they are arithmetic;
 with a pointer and an integer they are pointer stepping, and the offset is

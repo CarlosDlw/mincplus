@@ -218,7 +218,11 @@ fn i32 main() {
   let stepped: u8 = bump(2);
   let halved: f32 = halve(3.0);
   let mixedValue: i64 = mixed(13, 5);
-  let floatMean: f80 = mean(1.0, 3.0);
+  // `f64` and not `f80`: the example is run on every host this compiler is built
+  // on, and `f80` is x86's format -- a target without x87 refuses the type name
+  // (`sema-malformed-type`), so an example that named it would be an example that
+  // fails on a Mac. The class admits it where the machine has it.
+  let floatMean: f64 = mean(1.0, 3.0);
 
   // The two comparison classes, at three kinds of type.
   let equalWord: bool = same("a", "a");

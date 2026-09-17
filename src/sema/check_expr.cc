@@ -2096,15 +2096,17 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
 
   if (isComparison(kind)) {
     if (kind == kTokEqualEqual || kind == kTokBangEqual) {
-      // Equality is defined for arithmetic values and for two `bool`s, and for
-      // nothing else. A `str` is *not* one of them: this operator would be C's
-      // `s1 == s2`, an address comparison, and a program that wrote it meant the
-      // contents (`sema.md`, decision 8 — the design record is where the sentence
-      // comes from). A product is not comparable either, and its sentence names
-      // the members to compare: `==` on two products would have to mean "every
-      // member `==`", which would be a built-in rule for an operator the
-      // language gives per type through a declared interface (`tuples.md`,
-      // decision 17).
+      // Equality is defined for arithmetic values, and for two `bool`s or two
+      // `str`s. `str == str` is an *address* comparison and it is allowed on
+      // purpose: the two operands are scalars that are not arithmetic, exactly as
+      // two pointers are, and `Eq` in the constraint vocabulary admits them for
+      // the same reason (`support/constraint`). Comparing the bytes is a library
+      // call and not this operator -- `docs/architectures/sema.md` decision 8 says
+      // the opposite, and the two records are the open question, not this line.
+      // A product is not comparable, and the sentence says what to write: `==`
+      // on two products would have to mean "every member `==`", which would be a
+      // built-in rule for an operator the language gives per type through a
+      // declared interface (`tuples.md`, decision 17).
       if (types_.isTuple(left) || types_.isTuple(right)) {
         error(expr, SemaErrorCode::InvalidOperands,
               "`" + std::string(opText(kind)) +
@@ -2113,20 +2115,13 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
         return kTypeError;
       }
       const bool arithmetic = types_.isArithmetic(left) && types_.isArithmetic(right);
-      const bool bothBool = left == right && types_.get(left).kind == TypeKind::Bool;
-      if (!arithmetic && !bothBool) {
-        // `str` has a sentence of its own, because it is the one refused type a
-        // reader is likely to have meant something by: the comparison is right
-        // there in the source, and what it does is not what it looks like.
-        const bool str =
-            types_.get(left).kind == TypeKind::Str || types_.get(right).kind == TypeKind::Str;
+      const bool sameScalar = left == right && (types_.get(left).kind == TypeKind::Bool ||
+                                                types_.get(left).kind == TypeKind::Str);
+      if (!arithmetic && !sameScalar) {
         error(expr, SemaErrorCode::InvalidOperands,
-              str ? "`" + std::string(opText(kind)) +
-                        "` on a `str` would compare addresses, not contents, so it is refused: "
-                        "compare the bytes with a library call (a `str` is a pointer to bytes)"
-                  : "`" + std::string(opText(kind)) +
-                        "` needs two arithmetic values or two `bool`s; got `" +
-                        types_.spelling(left) + "` and `" + types_.spelling(right) + "`");
+              "`" + std::string(opText(kind)) + "` needs two arithmetic values, two `bool`s or " +
+                  "two `str`s; got `" + types_.spelling(left) + "` and `" + types_.spelling(right) +
+                  "`");
         return kTypeError;
       }
       if (arithmetic) {
