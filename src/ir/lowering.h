@@ -42,6 +42,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 
+#include "alias_name.h"
 #include "ast/ast.h"
 #include "ir/ir.h"
 #include "lex/token_kind.h"
@@ -317,9 +318,16 @@ private:
   // spill slot: the slot is where a debugger reads the argument from *after* the
   // prologue, and the number is what says the binding is an argument rather than
   // a variable (`debug.h`).
+  // The name a type position was written as, when it was written as one: what a
+  // binding's debug record needs to say `Arr` instead of `[8]u8` (`type_alias.md`,
+  // decision 8). The *position* says it -- `sema` recorded it there and nowhere
+  // else -- so this asks the node and not the type, which is the whole reason the
+  // alias is transparent in the type store.
+  [[nodiscard]] AliasName aliasNameAt(ast::AstId typeNode) const;
   [[nodiscard]] llvm::AllocaInst* declareLocal(resolve::DefId def, sema::TypeId type,
                                                std::string_view name, ast::AstId at,
-                                               unsigned parameterNumber = 0);
+                                               unsigned parameterNumber = 0,
+                                               const AliasName& alias = {});
   // The caller's copy of a by-value aggregate argument: the temporary an
   // aggregate parameter points at (`arrays.md` decision 13). The slot is an
   // entry-block `alloca` -- the copy's lifetime is the call, and a slot in the

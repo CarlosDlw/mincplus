@@ -168,6 +168,12 @@ public:
   // child token when it was written, which is where `resolve` reads the linkage
   // from.
   void parseFileBinding(bool isConst, bool isStatic);
+  // `type Name = T;`. One caller today: `parseItem`, because a type name is a
+  // *unit-level* name and a block-scope one is refused where the block is read
+  // (`statement.cc`). Type parameters have a slot between the name and the `=`
+  // when the language grows them, which is why the name is read as its own node
+  // and not folded into the `=`'s lookahead.
+  void parseTypeAlias();
   // The part after the closing `)`: a block for a definition, `;` for an
   // `extern` declaration, and a diagnostic for either of the two wrong
   // combinations.

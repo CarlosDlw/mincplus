@@ -71,6 +71,14 @@ void Parser::parseStmt() {
   case lex::TokenKind::LBrace:
     parseBlock();
     return;
+  case lex::TokenKind::KwType:
+    // The same declaration the file scope parses, and the same node: a `type`
+    // among the statements is a name whose *scope* is the block, which is a
+    // resolver and checker rule and not a second grammar (`type_alias.md`,
+    // decision 5). One production, so a form added to the type grammar -- an
+    // array, a pointer, `!` -- is in both places at once.
+    parseTypeAlias();
+    return;
   default:
     break;
   }

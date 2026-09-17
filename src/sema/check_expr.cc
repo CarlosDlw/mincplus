@@ -1382,11 +1382,17 @@ TypeId Checker::checkTypedInitializer(ast::AstId expr, ExprInfo& info) {
     inferredCount = static_cast<std::uint64_t>(elements.size());
   }
 
-  const TypeSpecResult spec = readType(parts, types_, inferredCount);
+  const TypeSpecResult spec = readType(parts, types_, aliasNames_, inferredCount);
   if (!spec.ok) {
     error(typeNode,
           spec.unknownWord.empty() ? SemaErrorCode::MalformedType : SemaErrorCode::UnknownType,
           spec.message);
+    setType(typeNode, kTypeError);
+    return kTypeError;
+  }
+  if (spec.brokenName) {
+    // A name whose expansion already failed, reported where it failed: the same
+    // rule `resolveTypeNode` applies, for the same reason (`type_alias.md`).
     setType(typeNode, kTypeError);
     return kTypeError;
   }

@@ -72,6 +72,11 @@ constexpr CodeCase kCases[] = {
     {"`static` before nothing that declares", "static x: i32;\n", ParseErrorCode::StaticPosition},
     {"`static` and `extern` on one declaration", "static extern fn i32 f();\n",
      ParseErrorCode::ConflictingLinkage},
+    // Neither linker word has anything to say about a name for a type: the name
+    // never reaches a linker, so there is no symbol to make internal and no
+    // definition to say is elsewhere.
+    {"`extern` on a type name", "extern type T = i32;\n", ParseErrorCode::TypeAliasLinkage},
+    {"`static` on a type name", "static type T = i32;\n", ParseErrorCode::TypeAliasLinkage},
     // The two ways an `[N]` group is malformed. The count is a literal number, so
     // a name or an expression there is the first; a group with no `]` is the
     // second. `[]` -- nothing between the brackets -- is deliberately neither: it

@@ -818,7 +818,17 @@ warnings inside them are dropped at the report step while errors are not.
   for the bottom type: `fn ! name(...)` returns no value *and* never comes back,
   `!` converts into every other type because there is no value to be incompatible
   with, and the one thing a type cannot check — a body that promises to diverge —
-  is proved rather than believed.
+  is proved rather than believed. **Type aliases** (`type Name = T;`) are the one
+  addition to the surface that changes nothing here: a name for an existing type
+  is the same `TypeId`, so the alias is a *definition* the resolver and the dumps
+  publish and never an entry in the type table. It is implemented in both
+  positions — the file scope, decided in dependency order, and a block, read top to
+  bottom, where a name may hide an outer one of the same spelling and is gone when
+  the block ends — a cycle is refused with the chain printed, and `-g` emits one
+  `DW_TAG_typedef` per declaration with the binding that wrote the name pointing at
+  it. [`architectures/type_alias.md`](architectures/type_alias.md) records the rule,
+  the cycle it forbids and why, and the seams it keeps open for `struct`, for
+  modules and for generic parameters.
 - **ir** (`src/ir`) lowers the typed tree into an `llvm::Module`. It is
   the first stage that may include `llvm/*`, and the boundary that moves with it
   is the pipeline's own: everything up to and including `sema` stays LLVM-free,

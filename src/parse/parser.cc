@@ -119,10 +119,14 @@ void Parser::tooDeep() {
 // A *binding* is an item: `let`/`const` at the top of a unit is the same
 // production a block-scope binding uses, and `static` is a prefix on either
 // form, which is why the prefix is here beside the two words that follow it.
+//
+// `type` is an item and only an item: a type name is a unit-level name, so the
+// block position refuses the word by name (`statement.cc`) rather than reading a
+// declaration whose meaning would depend on where in a body it was written.
 [[nodiscard]] static bool isItemStart(const Parser& parser) {
   return parser.at(lex::TokenKind::KwFn) || parser.at(lex::TokenKind::KwExtern) ||
          parser.at(lex::TokenKind::KwStatic) || parser.at(lex::TokenKind::KwLet) ||
-         parser.at(lex::TokenKind::KwConst);
+         parser.at(lex::TokenKind::KwConst) || parser.at(lex::TokenKind::KwType);
 }
 
 void Parser::parseFile() {
@@ -176,6 +180,29 @@ void Parser::parseItem() {
     return;
   }
 
+  // `extern` in front of a type name. Refused by name for the same reason as the
+  // binding above: `extern type A = i32;` is not a typo of anything this
+  // grammar has, and "expected `fn`" would be a sentence about a declaration the
+  // reader did not write.
+  if (leader == lex::TokenKind::KwExtern && nth(1) == lex::TokenKind::KwType) {
+    error("`extern` says a definition is elsewhere; a `type` declaration carries no definition -- "
+          "it gives a type that already exists a name in this unit",
+          ParseErrorCode::TypeAliasLinkage);
+    recoverItem();
+    return;
+  }
+
+  // `static` in front of a type name. Also refused by name, and for a reason
+  // worth a sentence of its own: `static` is about linkage, and a name for a
+  // type is never seen by a linker -- there is no symbol to make internal.
+  if (isStatic && leader == lex::TokenKind::KwType) {
+    error("`static` is about linkage and a `type` declaration produces no symbol: a name for a "
+          "type is this unit's to read, and nothing about it reaches a linker",
+          ParseErrorCode::TypeAliasLinkage);
+    recoverItem();
+    return;
+  }
+
   // `static` in front of something that is not a declaration. Reported here, and
   // the recovery consumes the word, so the file loop always makes progress.
   if (isStatic && leader != lex::TokenKind::KwFn && leader != lex::TokenKind::KwExtern &&
@@ -197,6 +224,9 @@ void Parser::parseItem() {
   case lex::TokenKind::KwLet:
   case lex::TokenKind::KwConst:
     parseFileBinding(/*isConst=*/leader == lex::TokenKind::KwConst, isStatic);
+    return;
+  case lex::TokenKind::KwType:
+    parseTypeAlias();
     return;
   default:
     break;

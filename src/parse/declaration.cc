@@ -364,6 +364,36 @@ void Parser::parseArrayCount() {
   error("expected `]` to close the array count", ParseErrorCode::ExpectedArrayCountClose);
 }
 
+// `type Name = T;` -- a name for a type that already exists (`type_alias.md`).
+//
+// The right-hand side is `parseType`, which is the *only* reader of a type in
+// this grammar: every type form the language has (a primitive, a C spelling, a
+// pointer, an array, a slice, and every composition of them) is already spelled
+// here, so an alias adds no type syntax and cannot accept a type no signature
+// accepts. The `=` is required and so is the `;`, both by `expect`, because the
+// shape is the whole declaration -- `type A i32;` has no reading that means
+// something else.
+void Parser::parseTypeAlias() {
+  Marker decl = start();
+  bump(); // `type`
+
+  Marker name = start();
+  if (at(lex::TokenKind::Identifier)) {
+    bump();
+  } else {
+    error("expected a name for the type", ParseErrorCode::ExpectedName);
+  }
+  name.complete(SyntaxKind::Name);
+
+  expect(lex::TokenKind::Equal);
+  // The type is read even when the `=` was missing: one mistake, one sentence,
+  // and the tree keeps the shape a reader wrote so nothing below has to guess at
+  // what was meant.
+  parseType();
+  expect(lex::TokenKind::Semicolon);
+  decl.complete(SyntaxKind::TypeAliasDecl);
+}
+
 void Parser::parseType() {
   Marker type = start();
   if (typeRunLength(*this) == 0) {

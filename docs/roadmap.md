@@ -885,7 +885,23 @@ the two cannot disagree about what the pipeline means.
       [`architectures/modules.md`](architectures/modules.md) — written *before*
       the feature on purpose, because C++20 modules changed every exported
       function's mangled symbol and that is not a detail a parser decides late
-- [ ] Top-level types: `struct`, `enum`, and type aliases, with **nominal**
+- [x] **Type aliases** `type Name = T;`: a *name* for an existing type, never a
+      new one. The name is a real `Def` in the `Tag` namespace and **not** an entry
+      in the type store, so every consumer accepts either spelling with no code of
+      its own: assignment, a call, `as`, an array element, a pointee, a slice.
+      File scope is order-independent and a block is read in order, where a name may
+      hide an outer one and is gone when the block ends; a cycle is refused with the
+      chain printed (`type P = *P;` too, because an abbreviation that contains
+      itself has no expansion); a diagnostic prints the written name and expands it
+      (`Arr (aka `[8]u8`)`); and `-g` makes one `DW_TAG_typedef` per declaration,
+      which a binding that wrote the name points at — so `whatis` answers with the
+      programmer's word, a step past what clang emits. The design, the market
+      evidence (C's `typedef`, Go's `=`, Rust's namespace rule), the cycle rule and
+      every seam it keeps open are in
+      [`architectures/type_alias.md`](architectures/type_alias.md). It was the
+      first slice of the item below on purpose: it needs nothing from the type
+      store, which is what the aggregate types do need
+- [ ] Top-level types: `struct`, `enum`, and `union`, with **nominal**
       identity across modules (`architectures/modules.md`, seam S4 — the type
       store interns by structure today, which is right for scalars and wrong for
       an aggregate two modules each define)

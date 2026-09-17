@@ -257,6 +257,24 @@ private:
 
   // --- types -----------------------------------------------------------------
 
+  // --- type names -------------------------------------------------------------
+
+  // `type Name = T;`, in dependency order, before anything reads a type: a
+  // signature may be written with a name declared below it (`type_alias.md`,
+  // decision 5). The pass publishes the alias table, builds `aliasNames_` for the
+  // reader, and reports a cycle with the path that closed it.
+  void runAliases();
+  // The *other* half of the rule, and the small one: a `type` among the statements
+  // of a block, where the name is visible from the declaration to the end of the
+  // block. Checked as the block is walked, in order, and published on the same
+  // stack the file scope uses -- so an inner name hides an outer one of the same
+  // spelling for exactly as long as its block is being checked.
+  void checkBlockAlias(ast::AstId decl);
+  // The file-scope `type` declarations of the unit, in source order, with the def
+  // each was declared as -- so the pass can ask "is this word one of mine?"
+  // without re-deriving it from the tree per word.
+  void collectAliases();
+  //
   // The parts of a `Type` node, in source order: its `*` tokens and its words.
   [[nodiscard]] std::vector<TypePart> typeParts(ast::AstId typeNode) const;
   [[nodiscard]] TypeId resolveTypeNode(ast::AstId typeNode);
@@ -267,8 +285,20 @@ private:
   // Anything else comes back unchanged; the assignment conversion is separate.
   [[nodiscard]] TypeId adaptTo(TypeId type, TypeId expected, ast::AstId at, const ExprInfo& info);
   // The assignment conversion, reported with the code of the context that asked.
+  //
+  // `expectedAt` is the `Type` node the expectation was written on, when the
+  // caller has it: it is what lets a message name the type the way the source did
+  // (`typeAsWritten`). Optional, because some expectations come from a type that
+  // was written nowhere in particular -- a builtin's signature, an element of a
+  // literal -- and a message that guessed a position would be worse than one that
+  // expands the type.
   void checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCode code,
-                       std::string_view what);
+                       std::string_view what, ast::AstId expectedAt = ast::AstId{});
+  // A type as the source spelled it: the name the position wrote, with the type
+  // it stands for in parentheses, or just the type when the position names
+  // nothing. The pair is the whole point -- identity is the expansion, and the
+  // reader repairs the word they wrote (`type_alias.md`, decision 8).
+  [[nodiscard]] std::string typeAsWritten(TypeId type, ast::AstId typeNode) const;
   [[nodiscard]] std::string suggestTypeName(std::string_view word) const;
   // The sentence for an integer and a float, which is the one pair of arithmetic
   // types that does not convert. Two callers ask for it -- `checkAssignable` and
@@ -537,6 +567,31 @@ private:
     std::string reason;
   };
 
+  // One `type Name = T;`, while the pass is deciding it: what was declared, and
+  // what its name stands for. The name is a *def* here -- the resolver's, with its
+  // scope, origin and shadowing rules -- and never an entry in the type store
+  // (`type_alias.md`, decision 2). One row per declaration of the unit, file scope
+  // and block scopes alike.
+  struct AliasBinding {
+    ast::AstId decl;
+    ast::AstId nameNode;
+    // The `Type` node the name stands for, and the only place the expansion can
+    // come from: a name has no other definition to read.
+    ast::AstId target;
+    resolve::DefId def;
+    TypeId type = kInvalidType;
+  };
+
+  // What a declaration's name stands for: reads the target with the names in scope
+  // and reports what the reader said about it. Shared by the two scopes, because
+  // what a name *means* does not depend on where it was declared. `false` when the
+  // name is one the language keeps, which must not be published.
+  bool decideAlias(AliasBinding& binding);
+  // One entry in the published table (`TypedFile::aliases()`), which is what a
+  // dump, an editor, and the debug info read. The index it lands at is the index
+  // the row published for that name carries, so the two cannot disagree.
+  void publishAlias(const AliasBinding& binding);
+
   // One file-scope binding, as the pass walks it. `value` is filled in by
   // `checkGlobal`, which is why a read of a binding can be answered by a lookup
   // and not by a second evaluation of its initializer.
@@ -631,6 +686,29 @@ private:
   TypeStore& types_;
   SemaOptions options_;
   SemaOutput out_;
+
+  // The type names in scope, in the order they were decided, for the type reader.
+  // Data and not a lookup the reader performs, so `typespec` stays a table plus a
+  // function with no knowledge of scopes, definitions or modules
+  // (`type_alias.md`, decision 10). Empty for a unit that declares none, which is
+  // what makes the reader's answer for `i32` cost nothing.
+  //
+  // **It is a stack.** The last row for a spelling is the name in scope, and a
+  // block drops the rows it pushed when it ends -- which is the whole of the
+  // shadowing rule, and the reason the reader searches backwards.
+  std::vector<TypeName> aliasNames_;
+  // Every `type` declaration this unit checked, in the order they were decided:
+  // the file scope's first, in source order, then each block's as it is walked.
+  // One entry per declaration is what makes `TypedFile::aliasAt` an index, and
+  // the table is append-only -- indices are handed out by `publishAlias` and never
+  // move, even when a block's names leave the scope.
+  std::vector<AliasBinding> aliases_;
+  // The **file-scope** declarations by the spelling they declared, which is the
+  // question the dependency walk asks of every word of a type: "is this one of
+  // mine, and is it decided yet?" (`sym` is not enough: the words of a type arrive
+  // as text, and the reader compares text). A block needs no such map -- it is
+  // checked top to bottom, so nothing below the line is in scope yet.
+  std::unordered_map<std::string_view, std::size_t> aliasIndexBySpelling_;
 
   // The file scope: one entry per binding, in source order, filled by
   // `checkGlobals` and empty outside it. `globalIndexByDef_` is the def -> entry

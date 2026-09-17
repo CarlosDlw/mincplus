@@ -275,7 +275,7 @@ private:
   // the same node kind and cannot drift.
   [[nodiscard]] static bool isItemNode(parse::SyntaxKind kind) {
     return kind == parse::SyntaxKind::FnDecl || kind == parse::SyntaxKind::LetStmt ||
-           kind == parse::SyntaxKind::ConstStmt;
+           kind == parse::SyntaxKind::ConstStmt || kind == parse::SyntaxKind::TypeAliasDecl;
   }
 
   void collectItems(AstId root) {
@@ -318,6 +318,13 @@ private:
         item.variadic = childOfKind(params, parse::SyntaxKind::VariadicParam).valid();
       }
       body = childOfKind(decl, parse::SyntaxKind::Block);
+    } else if (node.kind == parse::SyntaxKind::TypeAliasDecl) {
+      // What a type name's signature stops short of is the type it names: the
+      // declaration's first half is `type Name =`, and editing the type it points
+      // at is what an editor's "did this declaration's interface change?"
+      // question is about -- the same question a binding's initializer and a
+      // function's body answer for the other two forms.
+      body = childOfKind(decl, parse::SyntaxKind::Type);
     } else {
       body = bindingInitializer(decl);
     }

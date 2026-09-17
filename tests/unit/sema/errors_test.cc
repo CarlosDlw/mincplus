@@ -615,6 +615,13 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
        /*warnCast=*/true},
       {"fn i32 main() { let x: i32 = 1; let p: *i32 = &x; let a = p as usize; return 0; }\n",
        /*warnConversion=*/false, /*warnCast=*/false, /*warnProvenance=*/true},
+      // The one code `type` adds: a name defined in terms of itself. Two inputs,
+      // because the two scopes reach it by different roads -- the file scope from
+      // the dependency walk, which can close a circle as long as the chain is, and
+      // a block from the order it is read in, where only a mention of the name
+      // being declared can be a circle at all (`type_alias.md`).
+      {"type A = B;\ntype B = A;\nfn i32 main() { return 0; }\n", false},
+      {"fn i32 main() { type A = *[4]A; return 0; }\n", false},
   };
 
   for (const Case& one : cases) {

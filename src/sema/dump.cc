@@ -135,6 +135,22 @@ std::string dumpTypedFile(const ast::LoweredFile& file, const TypedFile& typed,
     return out;
   }
 
+  // The type names first, before the tree: `type Bytes = [8]u8;` says what every
+  // later `Bytes` in the file means, and a reader of the dump needs that before
+  // the lines that use it. One line per declaration, in source order, with the
+  // expansion -- which is the whole point of the feature: the name and the type
+  // it stands for, side by side (`type_alias.md`).
+  if (!typed.aliases().empty()) {
+    out += "# type names " + std::to_string(typed.aliases().size()) + "\n";
+    for (const TypeAliasInfo& alias : typed.aliases()) {
+      out += "  #" + std::to_string(alias.decl.index) + "  ";
+      out += file.spellingOf(alias.nameNode);
+      out += " = ";
+      out += types.spelling(alias.type);
+      out += '\n';
+    }
+  }
+
   // The conversions, before the tree: they are a short list that says what the
   // tree will do between an operand and its consumer, and a reader looking for
   // "where does a conversion happen" should not have to read every node for it.

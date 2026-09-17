@@ -50,6 +50,11 @@ enum class SyntaxKind : std::uint16_t {
 
   // Declarations.
   FnDecl,
+  // `type Name = T;`: a *name* for a type that already exists. Children are the
+  // `type` token, a `Name`, the `=` and a `Type` -- and the `Type` is the same
+  // node every other type position builds, so the declaration adds no grammar of
+  // its own (`type_alias.md`).
+  TypeAliasDecl,
   ParamList,
   Param,
   // The `...` of a parameter list, as a node rather than as a loose token, so

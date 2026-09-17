@@ -355,13 +355,13 @@ TEST(TypeSpecTest, AnArrayTypeReadsInsideOut) {
 
   // `[4]i32` is the element type under the count, and the count is a *value*.
   const TypePart one[] = {four, word};
-  const TypeSpecResult array = readType(one, types);
+  const TypeSpecResult array = readType(one, types, {});
   ASSERT_TRUE(array.ok) << array.message;
   EXPECT_EQ(array.type, types.arrayOf(kTypeI32, 4));
 
   // `*[4]i32`: the array is one object and the pointer points at all of it.
   const TypePart pointerToArray[] = {star, four, word};
-  const TypeSpecResult pointer = readType(pointerToArray, types);
+  const TypeSpecResult pointer = readType(pointerToArray, types, {});
   ASSERT_TRUE(pointer.ok) << pointer.message;
   EXPECT_EQ(pointer.type, types.pointerTo(types.arrayOf(kTypeI32, 4)));
   EXPECT_EQ(types.spelling(pointer.type), "*[4]i32");
@@ -369,7 +369,7 @@ TEST(TypeSpecTest, AnArrayTypeReadsInsideOut) {
   // `[4]*i32`: four pointers. One `*` moved across the count is the difference,
   // and it is the difference C's declarator syntax is famous for losing.
   const TypePart arrayOfPointers[] = {four, star, word};
-  const TypeSpecResult pointers = readType(arrayOfPointers, types);
+  const TypeSpecResult pointers = readType(arrayOfPointers, types, {});
   ASSERT_TRUE(pointers.ok) << pointers.message;
   EXPECT_EQ(pointers.type, types.arrayOf(types.pointerTo(kTypeI32), 4));
   EXPECT_EQ(types.spelling(pointers.type), "[4]*i32");
@@ -378,7 +378,7 @@ TEST(TypeSpecTest, AnArrayTypeReadsInsideOut) {
   // Nesting: the part nearest the words is the innermost, so `[2][3]i32` is two
   // arrays of three and the size is the product.
   const TypePart nested[] = {two, three, word};
-  const TypeSpecResult grid = readType(nested, types);
+  const TypeSpecResult grid = readType(nested, types, {});
   ASSERT_TRUE(grid.ok) << grid.message;
   EXPECT_EQ(types.spelling(grid.type), "[2][3]i32");
   EXPECT_EQ(types.sizeOf(grid.type), 24u);
@@ -387,7 +387,7 @@ TEST(TypeSpecTest, AnArrayTypeReadsInsideOut) {
   // names the side it belongs on -- the same refusal a `*i32` after the type
   // earns, one part over.
   const TypePart after[] = {word, four};
-  const TypeSpecResult wrongSide = readType(after, types);
+  const TypeSpecResult wrongSide = readType(after, types, {});
   EXPECT_FALSE(wrongSide.ok);
   EXPECT_NE(wrongSide.message.find("`[N]` before the element type"), std::string::npos)
       << wrongSide.message;
@@ -396,12 +396,12 @@ TEST(TypeSpecTest, AnArrayTypeReadsInsideOut) {
   // reporting "expected a type name" about a position the reader can see is a
   // pointer or an array.
   const TypePart noElement[] = {four};
-  const TypeSpecResult bare = readType(noElement, types);
+  const TypeSpecResult bare = readType(noElement, types, {});
   EXPECT_FALSE(bare.ok);
   EXPECT_NE(bare.message.find("expected the element type of the array"), std::string::npos)
       << bare.message;
   const TypePart noPointee[] = {star};
-  const TypeSpecResult bareStar = readType(noPointee, types);
+  const TypeSpecResult bareStar = readType(noPointee, types, {});
   EXPECT_FALSE(bareStar.ok);
   EXPECT_NE(bareStar.message.find("expected the type the pointer points to"), std::string::npos)
       << bareStar.message;
@@ -420,14 +420,14 @@ TEST(TypeSpecTest, EachArrayRefusalNamesWhatToWrite) {
   // count rules apply on the way to it. One element rule does, and it is the
   // only one that can still refuse.
   const TypePart slice[] = {group, word};
-  const TypeSpecResult view = readType(slice, types);
+  const TypeSpecResult view = readType(slice, types, {});
   ASSERT_TRUE(view.ok) << view.message;
   EXPECT_TRUE(view.type.valid());
   EXPECT_TRUE(types.isSlice(view.type));
   EXPECT_EQ(types.spelling(view.type), "[]i32");
 
   const TypePart suffix[] = {group, letters};
-  const TypeSpecResult ofVoidSlice = readType(suffix, types);
+  const TypeSpecResult ofVoidSlice = readType(suffix, types, {});
   EXPECT_FALSE(ofVoidSlice.ok);
   EXPECT_NE(ofVoidSlice.message.find("cannot be a slice element"), std::string::npos)
       << ofVoidSlice.message;
@@ -438,7 +438,7 @@ TEST(TypeSpecTest, EachArrayRefusalNamesWhatToWrite) {
   zero.hasCount = true;
   zero.count = 0;
   const TypePart emptyArray[] = {zero, word};
-  const TypeSpecResult none = readType(emptyArray, types);
+  const TypeSpecResult none = readType(emptyArray, types, {});
   EXPECT_FALSE(none.ok);
   EXPECT_NE(none.message.find("count of an array type is at least 1"), std::string::npos)
       << none.message;
@@ -449,7 +449,7 @@ TEST(TypeSpecTest, EachArrayRefusalNamesWhatToWrite) {
   huge.hasCount = true;
   huge.countOverflow = true;
   const TypePart tooBig[] = {huge, word};
-  const TypeSpecResult wide = readType(tooBig, types);
+  const TypeSpecResult wide = readType(tooBig, types, {});
   EXPECT_FALSE(wide.ok);
   EXPECT_NE(wide.message.find("has to be a number that fits in 64 bits"), std::string::npos)
       << wide.message;
@@ -460,7 +460,7 @@ TEST(TypeSpecTest, EachArrayRefusalNamesWhatToWrite) {
   four.hasCount = true;
   four.count = 4;
   const TypePart ofVoid[] = {four, letters};
-  const TypeSpecResult element = readType(ofVoid, types);
+  const TypeSpecResult element = readType(ofVoid, types, {});
   EXPECT_FALSE(element.ok);
   EXPECT_NE(element.message.find("cannot be an array element"), std::string::npos)
       << element.message;
@@ -473,7 +473,7 @@ TEST(TypeSpecTest, EachArrayRefusalNamesWhatToWrite) {
   TypePart wide64;
   wide64.word = "i64";
   const TypePart impossible[] = {everything, wide64};
-  const TypeSpecResult hugeArray = readType(impossible, types);
+  const TypeSpecResult hugeArray = readType(impossible, types, {});
   EXPECT_FALSE(hugeArray.ok);
   EXPECT_NE(hugeArray.message.find("larger than this target can address"), std::string::npos)
       << hugeArray.message;
@@ -485,7 +485,7 @@ TEST(TypeSpecTest, TheBottomTypeIsAWholeRunOfItsOwn) {
   bang.isBang = true;
   // Alone, it is a type: `fn ! f()` is a return type like any other, and the
   // reader's answer is the one the rest of the pipeline keys on.
-  const TypeSpecResult alone = readType(std::span<const TypePart>(&bang, 1), types);
+  const TypeSpecResult alone = readType(std::span<const TypePart>(&bang, 1), types, {});
   ASSERT_TRUE(alone.ok) << alone.message;
   EXPECT_EQ(alone.type, kTypeNever);
 
@@ -495,7 +495,7 @@ TEST(TypeSpecTest, TheBottomTypeIsAWholeRunOfItsOwn) {
   TypePart star;
   star.isStar = true;
   const TypePart combined[] = {star, bang};
-  const TypeSpecResult bad = readType(combined, types);
+  const TypeSpecResult bad = readType(combined, types, {});
   EXPECT_FALSE(bad.ok);
   // No `unknownWord`: both tokens are understood, and `!` is not a misspelling
   // of anything to suggest.

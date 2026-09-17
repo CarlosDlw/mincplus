@@ -36,6 +36,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 
+#include "alias_name.h"
 #include "sema/type.h"
 #include "sema/type_store.h"
 #include "support/source/source_file.h"
@@ -103,7 +104,8 @@ public:
   // answers "No arguments" for every frame (see `checks.md` for the survey of
   // what a debugger asks for).
   void declareBinding(llvm::AllocaInst& alloca, std::string_view name, const sema::TypeStore& types,
-                      sema::TypeId type, support::Span span, unsigned parameterNumber = 0);
+                      sema::TypeId type, support::Span span, unsigned parameterNumber = 0,
+                      const AliasName& alias = {});
 
   // The same, for a binding whose storage is the *value it arrived as*: an
   // aggregate parameter, whose storage is the pointer to the caller's copy
@@ -113,7 +115,8 @@ public:
   // sits.
   void declareParameterBinding(llvm::Argument& storage, std::string_view name,
                                const sema::TypeStore& types, sema::TypeId type, support::Span span,
-                               unsigned parameterNumber, llvm::BasicBlock::iterator where);
+                               unsigned parameterNumber, llvm::BasicBlock::iterator where,
+                               const AliasName& alias = {});
 
   // A file-scope object. `DIGlobalVariableExpression` is the only form of global
   // debug information LLVM has: a `GlobalVariable` with no expression is a symbol
@@ -122,7 +125,8 @@ public:
   // writes. It is attached to the object here and not collected later, because
   // the object already exists by the time this runs.
   void declareGlobal(llvm::GlobalVariable& global, std::string_view name,
-                     const sema::TypeStore& types, sema::TypeId type, support::Span span);
+                     const sema::TypeStore& types, sema::TypeId type, support::Span span,
+                     const AliasName& alias = {});
 
   // Resolves every temporary node and the compile unit's arrays. Must run before
   // the module is verified, printed or handed to `codegen`: a module with
@@ -141,7 +145,13 @@ private:
   // the parameter question is asked.
   void declareAt(llvm::Value& storage, std::string_view name, const sema::TypeStore& types,
                  sema::TypeId type, support::Span span, unsigned parameterNumber,
-                 llvm::BasicBlock::iterator where);
+                 llvm::BasicBlock::iterator where, const AliasName& alias);
+  // The type a *binding* is described with: the `DW_TAG_typedef` for the name the
+  // source wrote at the position, or the underlying type when the position wrote a
+  // type. One DIE per declaration, cached, so a name used at ten positions is one
+  // node -- which is what makes `ptype` answer the name and not a copy of it.
+  [[nodiscard]] llvm::DIType* aliasType(const sema::TypeStore& types, sema::TypeId type,
+                                        const AliasName& alias);
   // The element list of a `DISubroutineType`: element 0 is the return type, the
   // rest are the parameters, and a variadic function ends with a null entry --
   // DWARF's marker for `...`. One function because two call sites build it (a
@@ -155,6 +165,12 @@ private:
   // debug map can have it would put this stage's convenience into a type the
   // whole pipeline shares.
   std::unordered_map<std::uint32_t, llvm::DIType*> types_;
+  // One typedef DIE per `type` declaration, keyed on the declaration's index in
+  // `TypedFile::aliases()`. Keyed on the declaration and not on the spelling: two
+  // declarations may not share a spelling (`resolve` refuses it), and a *block's*
+  // name may hide a file's -- so the index is the only key that says which name a
+  // position meant.
+  std::unordered_map<std::uint32_t, llvm::DIType*> aliases_;
 
   llvm::Module& module_;
   const support::SourceFile& source_;

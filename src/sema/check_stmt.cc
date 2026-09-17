@@ -406,14 +406,21 @@ TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
     return kTypeError;
   }
   const std::vector<TypePart> parts = typeParts(typeNode);
-  const TypeSpecResult spec = readType(parts, types_);
+  const TypeSpecResult spec = readType(parts, types_, aliasNames_);
   if (!spec.ok) {
     if (spec.unknownWord.empty()) {
       error(typeNode, SemaErrorCode::MalformedType, spec.message);
     } else {
       error(typeNode, SemaErrorCode::UnknownType, spec.message);
       const std::string suggestion = suggestTypeName(spec.unknownWord);
-      if (!suggestion.empty()) {
+      // "did you mean `T`?" about `T` is not a suggestion. It happens when the
+      // name *is* declared in this unit and this use is above it -- legal at file
+      // scope, where every name is decided before anything is read, and not in a
+      // block, which is read top to bottom (`type_alias.md`, decision 5). The
+      // message stays the unknown-name one; a note that says "declared below"
+      // would be the next improvement, and it needs the position of the
+      // declaration this use is *before*, which is a reader this does not have.
+      if (!suggestion.empty() && suggestion != spec.unknownWord) {
         // Point the note at the word that was wrong, not at the whole run.
         support::Span wordSpan = origin(typeNode);
         for (const ast::AstId child : file_.childrenOf(typeNode)) {
@@ -428,12 +435,35 @@ TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
     setType(typeNode, kTypeError);
     return kTypeError;
   }
+  if (spec.brokenName) {
+    // The run is a name of this unit whose expansion already failed, and that was
+    // reported at the declaration. Blaming this position would print the same
+    // mistake twice, so the type is error and the range stays silent.
+    setType(typeNode, kTypeError);
+    return kTypeError;
+  }
   if (!spec.type.valid()) {
     reportLimit(typeNode);
     setType(typeNode, kTypeError);
     return kTypeError;
   }
   setType(typeNode, spec.type);
+  // Record the alias a position *is*, when it is one -- not when it is built out
+  // of one (`*MyInt` is a pointer, and there is no name on the position to point
+  // at). This is the fact the debug info needs to name a variable's type the way
+  // the source did, and the fact an editor's hover needs; recording it where it is
+  // decided is what keeps either of them from re-deriving it (`type_alias.md`).
+  if (parts.size() == 1 && !parts.front().isStar && !parts.front().isArray &&
+      !parts.front().isBang) {
+    // The *row that answered*, not a second lookup by spelling: the table is a
+    // stack, so a block's name and a file's name of the same spelling are two
+    // rows, and the one that decided this position's type is the one this points
+    // at (`type_alias.md`, decision 5).
+    if (const TypeName* const row = findTypeName(aliasNames_, parts.front().word);
+        row != nullptr && row->alias != kNoAliasRow) {
+      out_.typed.setAliasAt(typeNode, row->alias);
+    }
+  }
   return spec.type;
 }
 
@@ -505,17 +535,45 @@ std::string Checker::mixingAdvice(TypeId from) const {
   return rule + " -- write the value in the class you want, as in `1.0` for a float";
 }
 
+std::string Checker::typeAsWritten(TypeId type, ast::AstId typeNode) const {
+  // The name the source used, when the source used one, and what it stands for:
+  // `B2 (aka [8]u8)`. Measured from clang, and the reason to copy the shape is
+  // that expanding a name is right for *identity* and wrong for *reading* -- a
+  // reader repairs a message about a word they wrote, not about a type they may
+  // never have spelled out (`type_alias.md`, decision 8).
+  const std::uint32_t index = out_.typed.aliasAt(typeNode);
+  if (index == TypedFile::kNoAlias || index >= out_.typed.aliases().size()) {
+    return types_.spelling(type);
+  }
+  const TypeAliasInfo& alias = out_.typed.aliases()[index];
+  if (!alias.nameNode.valid()) {
+    return types_.spelling(type);
+  }
+  const std::string name(spelling(alias.nameNode));
+  if (name.empty()) {
+    return types_.spelling(type);
+  }
+  // Not `const`: the equal case returns it, and a const local would force a copy
+  // where the move is the point (`performance-no-automatic-move`).
+  std::string expansion = types_.spelling(type);
+  if (name == expansion) {
+    return expansion;
+  }
+  return name + " (aka `" + expansion + "`)";
+}
+
 void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCode code,
-                              std::string_view what) {
+                              std::string_view what, ast::AstId expectedAt) {
   if (types_.isError(from) || types_.isError(to)) {
     return;
   }
+  const std::string target = typeAsWritten(to, expectedAt);
   // An integer and a float, before the general rule: this is not a narrowing to
   // be warned about, it is a conversion the language does not have, and the
   // sentence has to say what to write instead.
   if (mixedNumberPair(types_, from, to)) {
     error(at, code,
-          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) + "`" +
+          "`" + types_.spelling(from) + "` does not convert to `" + target + "`" +
               std::string(what) + ": " + mixingAdvice(from));
     return;
   }
@@ -527,7 +585,7 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   // compiler being able to refuse `a[10]`; the cost here is two characters.
   if (types_.isArray(from) && types_.isPointer(to)) {
     error(at, code,
-          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) + "`" +
+          "`" + types_.spelling(from) + "` does not convert to `" + target + "`" +
               std::string(what) +
               ": an array does not decay to a pointer -- write `&a[0]` for a pointer "
               "to its first element, or `&a` for the whole array");
@@ -556,8 +614,8 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
     // node, not the text the reader wrote -- so it shows the *shape* of the fix
     // instead of a placeholder with a hole in it.
     error(at, code,
-          "`" + types_.spelling(from) + "` does not convert to `bool`" + std::string(what) +
-              ": write the comparison you mean, as in `value != 0`");
+          "`" + types_.spelling(from) + "` does not convert to `" + target + "`" +
+              std::string(what) + ": write the comparison you mean, as in `value != 0`");
     return;
   }
   // A pointer and a non-pointer, in either direction. The message is its own
@@ -567,7 +625,7 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   // counted. Until they are in the grammar, the refusal is the whole rule.
   if (types_.isPointer(from) != types_.isPointer(to)) {
     error(at, SemaErrorCode::PointerInteger,
-          "`" + types_.spelling(from) + "` does not convert to `" + types_.spelling(to) + "`" +
+          "`" + types_.spelling(from) + "` does not convert to `" + target + "`" +
               std::string(what) +
               ": a pointer is not an integer, and the language has no implicit conversion "
               "between the two");
@@ -581,15 +639,13 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   // rather than on one the source wrote.
   if (types_.isPointer(from) && types_.isPointer(to)) {
     error(at, SemaErrorCode::PointerMismatch,
-          "`" + types_.spelling(from) + "` cannot be used as `" + types_.spelling(to) + "`" +
-              std::string(what) +
+          "`" + types_.spelling(from) + "` cannot be used as `" + target + "`" + std::string(what) +
               ": pointers convert implicitly only to the same pointee type, or through "
               "`*void`");
     return;
   }
   error(at, code,
-        "`" + types_.spelling(from) + "` cannot be used as `" + types_.spelling(to) + "`" +
-            std::string(what));
+        "`" + types_.spelling(from) + "` cannot be used as `" + target + "`" + std::string(what));
 }
 
 // --- the unit ----------------------------------------------------------------
@@ -598,6 +654,11 @@ SemaOutput Checker::run() {
   out_.typed.typeTable.assign(file_.nodeCount(), kTypeError);
   out_.typed.exprFacts.assign(file_.nodeCount(), ExprInfo{});
 
+  // The unit's type names first, before anything that reads a type: a signature
+  // may be written with a name declared below it, and a pass that ran after the
+  // signatures would have to make them all wait for it (`type_alias.md`,
+  // decision 5).
+  runAliases();
   runSignatures();
   // The file scope next, and before any body, for the reason the signature pass
   // comes first: it is decided once, in dependency order, and everything that
@@ -1213,6 +1274,13 @@ void Checker::checkBody(ast::AstId block, TypeId returnType) {
 }
 
 void Checker::checkBlock(ast::AstId block, TypeId returnType) {
+  // A block is a scope for *names of types* as well as for values: a `type` among
+  // the statements is visible from where it is written to the end of the block, and
+  // gone when the block ends. The published name table is a stack, so entering is
+  // one size and leaving is one resize -- and a name the file already has is
+  // hidden for exactly as long as this block is being checked, because the row in
+  // scope is the last one (`type_alias.md`, decision 5).
+  const std::size_t namesBefore = aliasNames_.size();
   bool terminated = false;
   bool reported = false;
   for (const ast::AstId stmt : operandsOf(block)) {
@@ -1230,6 +1298,7 @@ void Checker::checkBlock(ast::AstId block, TypeId returnType) {
       terminated = true;
     }
   }
+  aliasNames_.resize(namesBefore);
 }
 
 void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
@@ -1237,6 +1306,11 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
     return;
   }
   switch (kindOf(stmt)) {
+  case ast::NodeKind::TypeAliasDecl:
+    // The in-order half of the alias rule, and the only statement that declares a
+    // *name for a type* (`type_alias.md`, decision 5).
+    checkBlockAlias(stmt);
+    return;
   case ast::NodeKind::LetStmt:
   case ast::NodeKind::ConstStmt: {
     const bool isConst = kindOf(stmt) == ast::NodeKind::ConstStmt;
@@ -1272,8 +1346,10 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
     if (declared.valid()) {
       binding = declared;
       if (init.valid() && initType.valid()) {
+        // The annotation's own node, so the message can name the type the way the
+        // source did (`typeAsWritten`).
         checkAssignable(initType, declared, init, SemaErrorCode::InvalidAssignment,
-                        " in this initializer");
+                        " in this initializer", typeNode);
       }
     } else if (initType.valid() && !voidDeclared) {
       // A binding whose type is *inferred* can still turn out to be value-less:

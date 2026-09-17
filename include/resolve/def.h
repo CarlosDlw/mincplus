@@ -37,6 +37,12 @@ enum class DefKind : std::uint8_t {
   Variable,  // `let`
   Constant,  // `const`
   Parameter, // a function parameter
+  // `type Name = T;` -- a *name* for a type that already exists, in the `Tag`
+  // namespace. It is a definition here and not a type-store entry: the IDE wants
+  // to jump to it, `-Wshadow` wants to warn about it, and the checker wants to
+  // expand it, while the type it names has one identity with or without the name
+  // (`type_alias.md`, decisions 2 and 11).
+  TypeAlias,
 };
 
 [[nodiscard]] std::string_view toString(DefKind value);

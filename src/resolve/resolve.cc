@@ -50,9 +50,21 @@ using ast::NodeKind;
     return DefKind::Variable;
   case NodeKind::ConstStmt:
     return DefKind::Constant;
+  case NodeKind::TypeAliasDecl:
+    return DefKind::TypeAlias;
   default:
     return std::nullopt;
   }
+}
+
+// The namespace a declaration puts its name in. Everything a *program* names is
+// ordinary -- a function, a binding, a parameter -- while a name for a **type**
+// goes in `Tag`, which is where the two can never be confused because the
+// grammar already decides by position which one a name is (`type_alias.md`,
+// decision 3). C puts a `typedef` in the ordinary namespace, which is why C needs
+// `typedef struct T T;` to have one name in each; this language does not.
+[[nodiscard]] Namespace namespaceOf(DefKind kind) {
+  return kind == DefKind::TypeAlias ? Namespace::Tag : Namespace::Ordinary;
 }
 
 // One unit of work for the body walk. `Visit` looks at a node; `Declare`
@@ -260,7 +272,11 @@ private:
       return kInvalidDef;
     }
 
-    if (options_.warnShadow && ns == Namespace::Ordinary && scope.parent.valid()) {
+    // The ordinary namespace *and* the type one: a name that hides a type is as
+    // confusing as one that hides a value, and the rule is one rule
+    // (`type_alias.md`, decision 3).
+    if (options_.warnShadow && (ns == Namespace::Ordinary || ns == Namespace::Tag) &&
+        scope.parent.valid()) {
       if (const std::optional<DefId> outer = lookup(map_, scope.parent, ns, name)) {
         warnings_.push_back(
             ResolveError{nameSpan,
@@ -318,7 +334,7 @@ private:
       // lookup and does not rewrite this field.
       const Linkage linkage = item.isStatic ? Linkage::Internal : Linkage::External;
       reportReservedName(item.nameSpan, item.name);
-      map_.itemDefs[i] = insertDef(map_.fileScope, Namespace::Ordinary, item.name, item.span,
+      map_.itemDefs[i] = insertDef(map_.fileScope, namespaceOf(*kind), item.name, item.span,
                                    item.nameSpan, nameUnit, *kind, linkage, node.inError);
     }
   }
@@ -394,6 +410,13 @@ private:
       }
       if (item.kind == NodeKind::FnDecl) {
         resolveFunctionBody(item, i);
+        continue;
+      }
+      // A type name has no body to resolve: its right-hand side is a `Type` node,
+      // and the words of a type are read by the checker, which owns the type
+      // vocabulary -- a name in a type position is not an expression and must not
+      // be looked up as one (`type_alias.md`, decision 10).
+      if (item.kind == NodeKind::TypeAliasDecl) {
         continue;
       }
       // A file-scope binding's initializer is resolved in the **file scope**, and
@@ -532,6 +555,17 @@ private:
       stack.push_back(Step{Step::Op::Declare, node, scope});
       pushInitializers(node, scope, stack);
       return;
+    case NodeKind::TypeAliasDecl:
+      // `type T = ...;` among the statements. Its name is visible from the
+      // declaration to the end of the block and not before it, which is the same
+      // shape as the two bindings above and for the same reason: a block is read
+      // top to bottom. The name goes in the *type* namespace (`namespaceOf`), so
+      // the same statement may take an ordinary name already in scope -- and the
+      // target may see a name the declaration is about to hide, which is why the
+      // declare step is pushed under the target's children.
+      stack.push_back(Step{Step::Op::Declare, node, scope});
+      pushChildren(node, scope, stack);
+      return;
     default:
       pushChildren(node, scope, stack);
       return;
@@ -574,10 +608,16 @@ private:
     if (name.name == support::kInvalidSym) {
       return; // the parser reported the missing name
     }
-    const DefKind kind = self.kind == NodeKind::ConstStmt ? DefKind::Constant : DefKind::Variable;
+    // What this statement declares, from the one table that says -- so a form
+    // added to it is bound here without a second list to keep in sync. A
+    // statement that declares nothing has nothing to insert.
+    const std::optional<DefKind> kind = defKindOf(self.kind);
+    if (!kind.has_value()) {
+      return;
+    }
     reportReservedName(name.origin, name.name);
-    (void)insertDef(scope, Namespace::Ordinary, name.name, self.origin, name.origin, name.unit,
-                    kind, Linkage::None, self.inError);
+    (void)insertDef(scope, namespaceOf(*kind), name.name, self.origin, name.origin, name.unit,
+                    *kind, Linkage::None, self.inError);
   }
 
   void resolveName(AstId path, ScopeId scope) {
@@ -622,29 +662,57 @@ private:
     // declaration the reader probably meant, which is more useful than the same
     // words on the line that is already wrong.
     //
-    // A *type name* is the one case with a better sentence than "unknown": it is
-    // not a name that could be declared and was not, it is a name that may not be
-    // declared at all, so the mistake is using a type where a value belongs --
-    // `x = (i32);` -- and the fix is the cast the reader was reaching for.
+    // A *type name* is the one case with a better sentence than "unknown", and it
+    // comes in two spellings that get one answer: a word of the language (`x =
+    // (i32);`) and a name this unit declared with `type` (`let x = Bytes;`).
+    // Neither is a name that could have been declared and was not -- the second
+    // *is* declared, in the other namespace -- so "unknown name" would send the
+    // reader looking for a typo that is not there. The mistake is using a type
+    // where a value belongs, the fix is the cast or the value they meant, and when
+    // the declaration exists the note points at it.
+    //
+    // This is the whole of why the two namespaces are visible to each other here:
+    // the *lookup* is the ordinary one and stays that way, and only the sentence
+    // that reports its failure asks the type namespace a question.
     std::string message;
+    std::string note;
+    support::Span noteSpan = self.origin;
+    support::SymId suggestion = support::kInvalidSym;
     if (support::isTypeNameWord(nameOf(self.name))) {
       const std::string spelling(nameOf(self.name));
       message = "'" + spelling + "' names a type, and a type is not a value; write a cast -- `(" +
                 spelling + ")value` or `value as " + spelling + "`";
+    } else if (const std::optional<DefId> declared =
+                   lookup(map_, scope, Namespace::Tag, self.name)) {
+      const std::string spelling(nameOf(self.name));
+      message = "'" + spelling + "' names a type, so it has no value; write a value of type `" +
+                spelling + "` here, or a cast to it";
+      if (declared->index < map_.defs.size()) {
+        const Def& def = map_.defs[declared->index];
+        noteSpan = def.nameSpan;
+        note = def.inError ? std::string{} : "declared as a name for a type here";
+        // **Not counted as a use of it.** The name resolved to nothing, and
+        // giving the type def a reference would tell `-Wunused` and the checker
+        // that a value read it -- the one thing this use did not do.
+      }
+      // The use is still recorded, with the *reason* reserved for exactly this: a
+      // name that exists in another namespace. A consumer that asks why a name did
+      // not resolve gets "wrong namespace" rather than "not found".
+      record(self, kInvalidDef, UnresolvedReason::WrongNamespace, support::kInvalidSym);
+      errors_.push_back(ResolveError{self.origin, message, ResolveErrorCode::UnknownName,
+                                     std::move(note), noteSpan});
+      return;
     } else {
       message = "unknown name '" + std::string(nameOf(self.name)) + "'";
-    }
-    const support::SymId suggestion =
-        suggestName(map_, scope, Namespace::Ordinary, self.name, symbols_,
-                    options_.maxSuggestionCandidates, options_.maxSuggestionDistance);
-    std::string note;
-    support::Span noteSpan = self.origin;
-    if (suggestion != support::kInvalidSym) {
-      note = "did you mean '" + nameOf(suggestion) + "'?";
-      if (const std::optional<DefId> candidate =
-              lookup(map_, scope, Namespace::Ordinary, suggestion)) {
-        if (candidate->index < map_.defs.size()) {
-          noteSpan = map_.defs[candidate->index].nameSpan;
+      suggestion = suggestName(map_, scope, Namespace::Ordinary, self.name, symbols_,
+                               options_.maxSuggestionCandidates, options_.maxSuggestionDistance);
+      if (suggestion != support::kInvalidSym) {
+        note = "did you mean '" + nameOf(suggestion) + "'?";
+        if (const std::optional<DefId> candidate =
+                lookup(map_, scope, Namespace::Ordinary, suggestion)) {
+          if (candidate->index < map_.defs.size()) {
+            noteSpan = map_.defs[candidate->index].nameSpan;
+          }
         }
       }
     }

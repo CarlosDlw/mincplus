@@ -62,6 +62,12 @@ enum class TokenKind : std::uint8_t {
   KwFn,
   KwExtern,
   KwStatic,
+  // `type`, the declaration that gives a type a name. A keyword for `extern`'s
+  // reason and not for the type system's: the parser decides what a declaration
+  // *is* from its first token -- `parseItem` and `parseStmt` both dispatch on it
+  // -- and it may not ask a later stage. What the name denotes is `sema`'s
+  // question, and this kind says only that the word starts a declaration.
+  KwType,
   // `as`, the cast operator. A keyword because it changes what the following
   // tokens mean -- a *complete type run* follows it, which is the same test
   // `let` passes -- and because a postfix operator has to be recognised where an

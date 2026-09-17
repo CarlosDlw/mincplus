@@ -24,6 +24,7 @@ minc_add_library(minc_sema
     builtins.cc
     check_flow.cc
     global.cc
+    alias.cc
     sema_error.cc
     dump.cc
   DEPS minc_ast minc_builtins minc_resolve minc_intern minc_span minc_text minc_consteval

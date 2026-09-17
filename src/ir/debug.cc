@@ -374,28 +374,55 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
 
 void DebugInfo::declareBinding(llvm::AllocaInst& alloca, std::string_view name,
                                const sema::TypeStore& types, sema::TypeId type, support::Span span,
-                               unsigned parameterNumber) {
+                               unsigned parameterNumber, const AliasName& alias) {
   // Right after the slot. `getIterator()` is `end()` when the alloca is the last
   // instruction in the entry block, and `InsertPosition` accepts that: it is the
   // position that means "trailing records of this block", which is a well-defined
   // place in LLVM's new debug format and is where the record belongs.
-  declareAt(alloca, name, types, type, span, parameterNumber, std::next(alloca.getIterator()));
+  declareAt(alloca, name, types, type, span, parameterNumber, std::next(alloca.getIterator()),
+            alias);
 }
 
 void DebugInfo::declareParameterBinding(llvm::Argument& storage, std::string_view name,
                                         const sema::TypeStore& types, sema::TypeId type,
                                         support::Span span, unsigned parameterNumber,
-                                        llvm::BasicBlock::iterator where) {
-  declareAt(storage, name, types, type, span, parameterNumber, where);
+                                        llvm::BasicBlock::iterator where, const AliasName& alias) {
+  declareAt(storage, name, types, type, span, parameterNumber, where, alias);
+}
+
+llvm::DIType* DebugInfo::aliasType(const sema::TypeStore& types, sema::TypeId type,
+                                   const AliasName& alias) {
+  llvm::DIType* const underlying = debugType(types, type);
+  if (underlying == nullptr || alias.index == sema::TypedFile::kNoAlias || alias.spelling.empty()) {
+    return underlying;
+  }
+  if (const auto found = aliases_.find(alias.index); found != aliases_.end()) {
+    return found->second;
+  }
+  const support::LineCol position = alias.span.valid() && alias.span.file == source_.id
+                                        ? positionOf(source_, alias.span.begin)
+                                        : support::LineCol{1, 1};
+  // The scope is the compile unit and not the current block: a name for a type is
+  // visible over a region of *text*, not over a region of instructions, and a
+  // typedef DIE nested in whichever block happened to declare a variable first
+  // would appear and disappear as the lowering walked. `DW_AT_decl_file` and
+  // `DW_AT_decl_line` are what a debugger reports, and they are the declaration's.
+  llvm::DIType* const node =
+      builder_.createTypedef(underlying, std::string(alias.spelling), file_, position.line, unit_);
+  aliases_.emplace(alias.index, node);
+  return node;
 }
 
 void DebugInfo::declareAt(llvm::Value& storage, std::string_view name, const sema::TypeStore& types,
                           sema::TypeId type, support::Span span, unsigned parameterNumber,
-                          llvm::BasicBlock::iterator where) {
+                          llvm::BasicBlock::iterator where, const AliasName& alias) {
   if (subprogram_ == nullptr || name.empty()) {
     return;
   }
-  llvm::DIType* const debugTypeNode = debugType(types, type);
+  // The name the source wrote, when it wrote one (`aliasType`), and the type it
+  // stands for otherwise. Every binding of the unit goes through here, which is
+  // what makes `let a: Arr` *and* `let b: Arr` point at one typedef DIE.
+  llvm::DIType* const debugTypeNode = aliasType(types, type, alias);
   if (debugTypeNode == nullptr) {
     return;
   }
@@ -439,11 +466,12 @@ void DebugInfo::declareAt(llvm::Value& storage, std::string_view name, const sem
 }
 
 void DebugInfo::declareGlobal(llvm::GlobalVariable& global, std::string_view name,
-                              const sema::TypeStore& types, sema::TypeId type, support::Span span) {
+                              const sema::TypeStore& types, sema::TypeId type, support::Span span,
+                              const AliasName& alias) {
   if (unit_ == nullptr || name.empty()) {
     return;
   }
-  llvm::DIType* const debugTypeNode = debugType(types, type);
+  llvm::DIType* const debugTypeNode = aliasType(types, type, alias);
   if (debugTypeNode == nullptr) {
     return;
   }

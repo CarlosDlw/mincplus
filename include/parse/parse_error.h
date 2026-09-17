@@ -56,6 +56,14 @@ enum class ParseErrorCode : std::uint8_t {
   // `static` somewhere other than in front of a declaration. It is a declaration
   // word, not a statement one: a function-local `static` is a different feature.
   StaticPosition,
+  // `static` or `extern` in front of a `type` declaration. Both words are about
+  // *symbols* -- one makes a definition internal, the other says the definition
+  // is elsewhere -- and a name for a type produces neither: it never reaches a
+  // linker, so there is nothing for either word to say (`type_alias.md`).
+  TypeAliasLinkage,
+  // There is deliberately no code for `type` inside a block: the declaration is
+  // the same production in both positions, and *where* its name is visible is a
+  // scope rule the resolver and checker own (`type_alias.md`, decision 5).
   // `...` in a function that has a body. *Reading* a variadic argument needs
   // `va_start`, which the language does not have, so only a declaration may be
   // variadic -- the marker in a definition would be a function nobody can write.

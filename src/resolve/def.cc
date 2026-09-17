@@ -32,6 +32,8 @@ std::string_view toString(DefKind value) {
     return "const";
   case DefKind::Parameter:
     return "param";
+  case DefKind::TypeAlias:
+    return "type";
   }
   return "unknown";
 }

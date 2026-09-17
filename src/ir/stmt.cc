@@ -95,6 +95,15 @@ void Lowering::lowerStatement(ast::AstId stmt) {
     }
     return;
   case ast::NodeKind::EmptyStmt:
+  case ast::NodeKind::TypeAliasDecl:
+    // A name for a type is **not storage and not an instruction**: it is a word the
+    // checker resolved to a `TypeId`, and by the time the lowering runs there is
+    // nothing left of it but that id -- which is the whole of `type_alias.md`
+    // decision 2, seen from here. The `-g` half of the declaration (its
+    // `DW_TAG_typedef`) is built from the *positions* that wrote the name and not
+    // from a walk of the declarations, so a declaration that no position used
+    // produces no metadata at all, and one that did produces it where it was
+    // needed.
     return;
   default:
     fatal(spanOf(stmt), IRDiagnosticCode::UnsupportedNode,
@@ -122,7 +131,12 @@ void Lowering::lowerBinding(ast::AstId stmt) {
   if (def->index < defs_.defs.size() && defs_.defs[def->index].name != support::kInvalidSym) {
     name = symbols_.lookup(defs_.defs[def->index].name);
   }
-  llvm::AllocaInst* slot = declareLocal(*def, type, name, stmt);
+  // The annotation's own node travels with the binding: it is where `sema`
+  // recorded the name this position was written with, and a debug record for `Rec`
+  // that said `[8]u8` would be a debugger reporting a type the source never wrote
+  // (`type_alias.md`, decision 8).
+  llvm::AllocaInst* slot =
+      declareLocal(*def, type, name, stmt, 0, aliasNameAt(childOf(stmt, ast::NodeKind::Type)));
   if (slot == nullptr) {
     // The binding's type could not be mapped, and the refusal is already
     // recorded. Nothing is stored: there is no object to store into.

@@ -336,6 +336,25 @@ struct GlobalInfo {
   bool negated = false;
 };
 
+// One `type Name = T;` of the unit, and what its name stands for.
+//
+// The *name* is not a type and never becomes one (`type_alias.md`, decision 2):
+// this record exists so the name survives to the places that print it -- a
+// diagnostic, a debugger, the dump, an editor -- while every question about the
+// type itself is answered by `type` above.
+struct TypeAliasInfo {
+  // The `TypeAliasDecl`.
+  ast::AstId decl;
+  // Its `Name`, for the note in a diagnostic about the name.
+  ast::AstId nameNode;
+  // Its `Type`, for a go-to-definition on the right-hand side.
+  ast::AstId target;
+  // What the name stands for. `kInvalidType` when the expansion failed, which is
+  // the unit's errors and not this table's problem -- a fault is reported once,
+  // where it happened.
+  TypeId type = kInvalidType;
+};
+
 struct TypedFile {
   TypedFile() = default;
 
@@ -388,6 +407,46 @@ struct TypedFile {
   void addGlobal(const GlobalInfo& info) {
     globalTable.push_back(info);
   }
+
+  // The unit's type names, in source order. Deterministic, like every other
+  // published table, so a dump and a test compare the same way twice.
+  [[nodiscard]] std::span<const TypeAliasInfo> aliases() const {
+    return aliasTable;
+  }
+
+  // The alias a type position *is*, or `kNoAlias` when it is anything else --
+  // a primitive, a C spelling, or a type built out of constructors. Only a
+  // position written as the name itself has a name to point at, and this is what
+  // the debug info and the language server ask (`type_alias.md`).
+  [[nodiscard]] std::uint32_t aliasAt(ast::AstId typeNode) const {
+    if (!typeNode.valid() || typeNode.index >= aliasAtNode.size()) {
+      return kNoAlias;
+    }
+    return aliasAtNode[typeNode.index];
+  }
+
+  void addAlias(const TypeAliasInfo& info) {
+    aliasTable.push_back(info);
+  }
+  // Records that the type position `typeNode` was written as the alias at
+  // `aliasIndex` of `aliases()`.
+  void setAliasAt(ast::AstId typeNode, std::uint32_t aliasIndex) {
+    if (!typeNode.valid()) {
+      return;
+    }
+    if (aliasAtNode.size() <= typeNode.index) {
+      aliasAtNode.resize(typeNode.index + 1, kNoAlias);
+    }
+    aliasAtNode[typeNode.index] = aliasIndex;
+  }
+
+  // No alias: the answer for a type position, because a position is far more
+  // often a built-in type than a name for one.
+  static constexpr std::uint32_t kNoAlias = 0xFFFFFFFFu;
+
+  std::vector<TypeAliasInfo> aliasTable;
+  // One slot per `Type` node that was written as a name, sparse by index.
+  std::vector<std::uint32_t> aliasAtNode;
 
   [[nodiscard]] std::span<const TypeId> types() const {
     return typeTable;

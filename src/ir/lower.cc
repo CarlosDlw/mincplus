@@ -447,9 +447,35 @@ bool Lowering::frameObjectFits(sema::TypeId type, ast::AstId at) {
   return false;
 }
 
+AliasName Lowering::aliasNameAt(ast::AstId typeNode) const {
+  AliasName alias;
+  // Free without `-g`, because there is no DIE to name: the record is the only
+  // consumer of a name at a position, and the empty answer is what a caller that
+  // has no alias to give passes anyway.
+  if (!debugEnabled() || !typeNode.valid()) {
+    return alias;
+  }
+  const std::uint32_t index = typed_.aliasAt(typeNode);
+  if (index == sema::TypedFile::kNoAlias || index >= typed_.aliases().size()) {
+    return alias;
+  }
+  const sema::TypeAliasInfo& info = typed_.aliases()[index];
+  if (!info.nameNode.valid()) {
+    return alias;
+  }
+  const std::string_view written = file_.spellingOf(info.nameNode);
+  if (written.empty()) {
+    return alias;
+  }
+  alias.spelling = written;
+  alias.span = spanOf(info.decl);
+  alias.index = index;
+  return alias;
+}
+
 llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
                                          std::string_view name, ast::AstId at,
-                                         unsigned parameterNumber) {
+                                         unsigned parameterNumber, const AliasName& alias) {
   const std::uint64_t key = defKey(def);
   const auto existing = locals_.find(key);
   if (existing != locals_.end()) {
@@ -495,7 +521,7 @@ llvm::AllocaInst* Lowering::declareLocal(resolve::DefId def, sema::TypeId type,
   alloca->setAlignment(llvm::Align(alignmentOf(type)));
   locals_.emplace(key, alloca);
   if (debug_ != nullptr && at.valid()) {
-    debug_->declareBinding(*alloca, name, types_, type, spanOf(at), parameterNumber);
+    debug_->declareBinding(*alloca, name, types_, type, spanOf(at), parameterNumber, alias);
   }
   return alloca;
 }

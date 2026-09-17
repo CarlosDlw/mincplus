@@ -79,6 +79,81 @@ on AArch64 Linux, a plain `f64` under MSVC. Where the exact precision matters
 across platforms, `f64` is the choice that means the same thing everywhere.
 :::
 
+## Type aliases
+
+`type Name = T;` gives a type a second name:
+
+```minc
+// The file scope: order does not matter, because a name for a type is not storage.
+type Pair = *Word;
+type Word = u32;
+type Table = [4]Word;
+type Meters = f64;
+
+fn Word add(a: Word, b: Word) {
+  // The name is visible in a block too, and there it is read top to bottom.
+  type Sum = Word;
+  let total: Sum = a + b;
+  return total;
+}
+```
+
+**An alias is a name and not a type.** `Meters` and `f64` are the same type with
+two spellings, so no rule anywhere knows the difference: assignment, argument
+passing, `return`, a cast, an array element, a pointee, a slice — all of them
+accept either. There is nothing to convert and nothing to unwrap, and `mincc` never
+introduces a type of its own to represent the name.
+
+**Two scopes, two orders.**
+
+- **File scope is order-independent.** `type Pair = *Word;` may come before the
+  line that declares `Word`, exactly as file-scope constants may refer to a later
+  one. Nothing needs to be declared before it is named.
+- **A block is read top to bottom.** A `type` among statements is visible from its
+declaration to the end of the block, and gone after it:
+
+```minc
+fn i32 main() {
+  type S = i32;
+  let a: S = 1;          // i32
+  {
+    type S = f64;        // hides the outer S while this block is read
+    let b: S = 1.5;      // f64
+  }
+  let c: S = 3;          // i32 again
+  return a + c;
+}
+```
+
+**A name may not be defined in terms of itself.** An alias is an abbreviation, and
+an abbreviation that contains itself has no expansion:
+
+```console
+$ mincc check cycle.mx
+cycle.mx:2:10: error[sema-type-alias-cycle]: the type `A` is defined in terms of itself: `A` -> `B` -> `A`. A name for a type is an abbreviation, and an abbreviation that contains itself has no expansion: recursion needs a type that names *itself*, and a name that stands for another type never does
+  type B = A;
+           ^
+```
+
+That includes `type P = *P;`. Recursion needs a type that names *itself* — a
+`struct`, when it arrives — and a name that stands for another type never does.
+
+**The name survives in messages and in the debugger.** A diagnostic prints what
+you wrote and expands it,`Arr (aka `[8]u8`)`, and `mincc build -g` emits one
+`DW_TAG_typedef` per declaration and points every binding that wrote the name at
+it:
+
+```console
+$ gdb -batch -ex 'break main' -ex run -ex 'whatis d' prog.bin
+type = Meters         ← `let d: Meters`, an alias of f64
+```
+
+Two rules worth knowing, because they are the deliberate ones: **a type word may
+not be renamed** (`type i32 = i64;` is refused — a name for a type is a name the
+unit chooses, and `i32` belongs to the language), and **one name is one
+declaration per scope** (a repeated alias is a redeclaration, as it would be for a
+`let`).
+
 ## `bool`
 
 `true` and `false` are the two values. A condition expects a `bool` — an

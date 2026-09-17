@@ -1,0 +1,87 @@
+// A name for a type -- `type Name = T;`.
+//
+// The declaration is an **abbreviation and not a type** (`type_alias.md`, decision
+// 2). `Meters` and `f64` are the same type with two spellings, so everything works
+// on either without a rule of its own: assignment, a call, `as`, an array element,
+// a pointer's pointee. Nothing here is a conversion and nothing is a
+// wrapper -- the two names are one `TypeId`, which is why a program that mixes them
+// compiles, and why `mincc build -g` then answers `whatis` with the name the source
+// wrote.
+//
+// Two scopes, two rules:
+//
+//   * At the **file scope** order does not matter. `type Pair = *Word;` may come
+//     before the line that declares `Word`, because a name for a type is not
+//     storage and there is no initializer to evaluate first -- the same rule
+//     file-scope `const` already follows.
+//   * In a **block** the file is read top to bottom. A name is visible from its
+//     declaration to the end of the block, it may hide a file-scope name of the
+//     same spelling while its block is being read, and it is gone when the block
+//     ends.
+//
+// A name may not be defined in terms of itself. `type P = *P;` is refused with the
+// chain printed, because an abbreviation that contains itself has no expansion:
+// recursion needs a type that names *itself*.
+
+// The file scope, out of order: `Pair` uses `Word` two lines before it is declared.
+type Pair = *Word;
+type Word = u32;
+type Table = [4]Word;
+type Meters = f64;
+
+// A name for a function's type, so the same name can be a parameter's and a local's.
+type Scale = f64;
+
+const SIZE: usize = 4;
+
+// A signature may be written with a file-scope name wherever a type goes.
+fn Word add(a: Word, b: Word) {
+  let sum: Word = a + b;
+  return sum;
+}
+
+fn Table fill(seed: Word) {
+  let row: Table = [seed, seed + 1, seed + 2, seed + 3];
+  return row;
+}
+
+fn i32 main() {
+  // The same type, two spellings: `Word` and `u32` are interchangeable in every
+  // position, including the initializer of a binding annotated with the other one.
+  let count: Word = 7;
+  let other: u32 = count;
+  let sum: Word = add(other, 1);
+
+  let row: Table = fill(sum);
+  let p: Pair = &row[0];
+
+  // `Meters`, and the pointer arithmetic an alias of a scalar does nothing to.
+  let distance: Meters = 1.5;
+  let twice: f64 = distance * 2.0;
+
+  // The block scope: a name declared here is visible to the end of the block and
+  // hides the file's `Word` while the block is being read -- so `Local` is a `f64`
+  // and the file's `Word` is untouched afterwards.
+  {
+    type Local = Word;
+    let inside: Local = 10;
+    sum = add(sum, inside);
+  }
+
+  {
+    type Word = f64;
+    let shadowed: Word = 2.5;
+    twice = twice + shadowed;
+  }
+
+  // Back to the file's `Word`, which is why this binding is an integer again.
+  let final: Word = sum;
+
+  // Arithmetic on the alias is arithmetic on the type, and so is an index into a
+  // pointer whose pointee was named by one.
+  let words: usize = SIZE;
+  let more: usize = words + 1;
+  let last: Word = p[3];
+
+  return 0;
+}

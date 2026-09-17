@@ -27,6 +27,49 @@
 
 namespace minc::sema {
 
+// One name a unit gave a type: the spelling that was written, and the type it
+// stands for. A *span of these* is what the reader is handed, because the unit's
+// vocabulary is data the caller owns -- the reader knows the language's words and
+// nothing about scopes, definitions or modules (`type_alias.md`, decision 10).
+//
+// A `TypeId` that is not valid is a name whose expansion failed; an error was
+// reported where the failure happened, and the reader answers "understood, no
+// type" so one mistake stays one diagnostic.
+// No declaration behind a row. Every row is published by one today, so this is
+// the "cannot happen" value spelled rather than assumed -- a caller that reads a
+// row never dereferences a wrong index.
+inline constexpr std::uint32_t kNoAliasRow = 0xFFFFFFFFu;
+
+// The unit's own name for a type, as the reader consumes it. **The table is a
+// stack and the last row wins**: a block may declare a name the file already has
+// (`type_alias.md`, decision 5), and while that block is being checked the inner
+// name is the one in scope. Rows are dropped when their block ends, which is what
+// makes the rule hold outside it as well. The order the *file* scope publishes in
+// is dependency order, which is not source order -- and cannot be observed as a
+// difference, because one spelling published twice is a redeclaration, which
+// `resolve` has already refused.
+struct TypeName {
+  std::string_view spelling;
+  TypeId type;
+  // Which declaration this row came from: the index into `TypedFile::aliases()`
+  // of the `type` that published it. A type position written as this name points
+  // at that declaration (`TypedFile::aliasAt`), which is what the debug info and
+  // an editor's hover read.
+  std::uint32_t alias = kNoAliasRow;
+};
+
+// The row that answers a word, or `nullptr` when the word is no name of this
+// unit. Returning the *row* and not the `TypeId` is what keeps "this is not a name
+// I know" apart from "this is a name whose expansion failed": the second has
+// already been reported, and answering it twice would be two diagnostics for one
+// mistake. It is also what lets the caller record *which* declaration answered a
+// type position, which is the difference between a block's name and a file's name
+// of the same spelling.
+//
+// Backwards, because the table is a stack: the last row for a spelling is the name
+// in scope (see `TypeName`).
+[[nodiscard]] const TypeName* findTypeName(std::span<const TypeName> names, std::string_view word);
+
 struct TypeSpecResult {
   // `kInvalidType` when `ok` is false.
   TypeId type;
@@ -37,6 +80,12 @@ struct TypeSpecResult {
   // the caller suggests a near miss. Empty for every other failure, whose fix is
   // not a different spelling.
   std::string_view unknownWord;
+  // `ok` with an invalid `type` has two reasons, and they are not the same
+  // sentence. The *store* refusing the run is the type budget, and the caller owns
+  // that diagnostic; this flag is the other one -- the run is a name this unit
+  // declared whose expansion already failed, reported where it failed. A use of a
+  // broken name must stay silent, or one mistake prints twice.
+  bool brokenName = false;
 };
 
 // Reads the words of a type run, in source order. An empty run is an error
@@ -46,9 +95,11 @@ struct TypeSpecResult {
 // This is the *base* reader: the words of a type, with no pointer prefix. It
 // stays public because it is the whole of the C-specifier grammar and a caller
 // that has only words (a test, a future `#if` type query) should not have to
-// build a `TypePart` array to ask about one.
-[[nodiscard]] TypeSpecResult readTypeSpec(std::span<const std::string_view> words,
-                                          TypeStore& types);
+// build a `TypePart` array to ask about one.// The base reader, over the words alone. `names`
+// defaults to empty because the tests below are about the vocabulary this compiler *has*, and a
+// test that wants a unit's name passes one.
+[[nodiscard]] TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& types,
+                                          std::span<const TypeName> names = {});
 
 // One element of a type position, in source order: a `*`, an `[N]`, or a word.
 //
@@ -112,7 +163,12 @@ struct TypePart {
 // belongs to. A `_` with nothing here is refused, which is why the default is the
 // *safe* one -- a call site that knows nothing about initializers gets the
 // sentence, not a count of zero.
+// `names` is the unit's own type names and is **not** defaulted: a call site that
+// forgot it would accept `i32` and refuse a name the unit declared, which is the
+// kind of silence this project does not ship. A caller with no names -- a test, a
+// reader used by itself -- passes an empty span and says so.
 [[nodiscard]] TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
+                                      std::span<const TypeName> names,
                                       std::optional<std::uint64_t> inferredCount = std::nullopt);
 
 // Every spelling the reader accepts, for a "did you mean ...?" suggestion.

@@ -84,7 +84,11 @@ first-class types; the examples use the primitive names. See
 - [ ] `union`
 - [ ] `enum` constants and tagged unions `[?]`
 - [ ] Function types and function pointers
-- [ ] Type aliases
+- [x] Type aliases `type Name = T;` — a name for an existing type, in both
+      positions (file scope, where order does not matter, and a block, where it
+      does). The name is transparent: `Meters` and `f64` are one type, so no rule
+      anywhere knows the difference, and `-g` still answers `whatis` with the name
+      the source wrote. See [Types](/language/types#type-aliases)
 - [x] `const` bindings (see *Syntax and files*); immutability is a binding
       property, not a type qualifier yet
 - [ ] Optional/nullable types and null safety `[?]`

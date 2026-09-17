@@ -114,11 +114,37 @@ constexpr Alias kAliases[] = {
   return result;
 }
 
+// The run was understood and names a type that is *already reported broken*: a
+// name this unit declared whose own expansion failed. `ok` because nothing is
+// wrong with the spelling, no type because there is none to hand over, and the
+// flag because the caller's silence is the point -- the declaration is the fault.
+[[nodiscard]] TypeSpecResult brokenName() {
+  TypeSpecResult result;
+  result.type = kInvalidType;
+  result.ok = true;
+  result.brokenName = true;
+  return result;
+}
+
 [[nodiscard]] std::string quoted(std::string_view word) {
   return "`" + std::string(word) + "`";
 }
 
 } // namespace
+
+const TypeName* findTypeName(std::span<const TypeName> names, std::string_view word) {
+  // **Backwards, because the table is a stack.** A block may declare a name the
+  // file has already spent, and the row that answers a use inside that block is
+  // the one the block published -- the latest. A block drops the rows it pushed
+  // when it ends, so the same lookup is right outside it too, and the direction of
+  // this loop is the whole of the shadowing rule (`type_alias.md`, decision 5).
+  for (auto row = names.rbegin(); row != names.rend(); ++row) {
+    if (row->spelling == word) {
+      return &*row;
+    }
+  }
+  return nullptr;
+}
 
 std::span<const std::string_view> typeNames() {
   static const std::vector<std::string_view> names = [] {
@@ -149,6 +175,7 @@ bool typeNameOnTarget(std::string_view name, const TargetInfo& target) {
 }
 
 TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
+                        std::span<const TypeName> names,
                         std::optional<std::uint64_t> inferredCount) {
   // `!` first, because it is the one accepted spelling that is not a run of
   // words under some stars: it is a whole type on its own, and anything beside
@@ -206,12 +233,18 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
 
   // Not `const`: the failure path returns it, and a const local would force a
   // copy where the move is the point (`performance-no-automatic-move`).
-  TypeSpecResult base = readTypeSpec(words, types);
+  TypeSpecResult base = readTypeSpec(words, types, names);
   if (!base.ok) {
     return base;
   }
   if (!base.type.valid()) {
-    return ok(kInvalidType);
+    // `ok` with no type, and the two reasons are different sentences the caller
+    // owns: the store refusing the run is the type budget, while a name whose
+    // expansion already failed was reported where it failed. **The flag travels
+    // through here**, and this line is why: answering a fresh `ok(kInvalidType)`
+    // would turn every use of a broken name into "too many distinct types", which
+    // is a lie about a program that has three.
+    return base.brokenName ? base : ok(kInvalidType);
   }
   // Applied inside out: the constructor nearest the words is the innermost, so the
   // list is walked in reverse. `**i32` is a pointer to a pointer to `i32`, and
@@ -294,7 +327,8 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
   return ok(result);
 }
 
-TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& types) {
+TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& types,
+                            std::span<const TypeName> names) {
   const TargetInfo& target = types.target();
   if (words.empty()) {
     return fail("expected a type name");
@@ -334,6 +368,25 @@ TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& 
     i += aliasLength(*matched);
   }
   words = std::span<const std::string_view>(expanded.data(), expanded.size());
+
+  // **The unit's own names, and only in the one shape a name has.** A type name is
+  // a *single* word -- the constructors around it were stripped by `readType`, and
+  // no C spelling has ever been a name for something else -- so this is a lookup
+  // and not a third reader. It sits before the C state machine below because that
+  // machine is the fallback for everything left, and a name the unit declared is
+  // not an unknown word.
+  //
+  // The refusal to *declare* one of the language's type words is what keeps the
+  // two tables from ever holding the same spelling -- `resolve` reports it from
+  // `support::isTypeNameWord`, the same table this asks -- so the order of these
+  // two questions cannot matter, which is the property that makes adding a name
+  // here safe rather than a tie to be arbitrated. A name in the table whose
+  // expansion failed answers `brokenName`: understood, no type, caller silent.
+  if (words.size() == 1) {
+    if (const TypeName* const named = findTypeName(names, words.front()); named != nullptr) {
+      return named->type.valid() ? ok(named->type) : brokenName();
+    }
+  }
 
   // A run made only of C specifier words is a C sequence, and the state machine
   // below owns it. This has to be decided *before* the primitive scan, because
@@ -441,6 +494,18 @@ TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& 
       base = word;
     } else if (isCSpecifier(word)) {
       return fail(quoted(word) + " cannot be repeated here", word);
+    } else if (findTypeName(names, word) != nullptr) {
+      // A name cannot be combined with a specifier either, and it is the same
+      // mistake as `unsigned i32` -- `unsigned` applies to a C base type, and a
+      // name for a type is a *complete* type (`type_alias.md`).
+      for (const std::string_view other : words) {
+        if (other != word) {
+          return fail(quoted(word) + " is a name for a type and cannot be combined with " +
+                          quoted(other),
+                      word);
+        }
+      }
+      return fail(quoted(word) + " is a name for a type and cannot be combined");
     } else {
       return fail(quoted(word) + " is not a type", word);
     }

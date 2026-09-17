@@ -134,11 +134,13 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
             // argument and not an instruction, so there is nothing to sit behind,
             // and "before the body runs" is where an `alloca`'s record sits too.
             debug_->declareParameterBinding(*argument, name, types_, paramType, spanOf(paramAt),
-                                            parameterNumber, entry->begin());
+                                            parameterNumber, entry->begin(),
+                                            aliasNameAt(childOf(param, ast::NodeKind::Type)));
           }
         } else {
           llvm::AllocaInst* slot =
-              declareLocal(*paramDef, paramType, name, paramAt, parameterNumber);
+              declareLocal(*paramDef, paramType, name, paramAt, parameterNumber,
+                           aliasNameAt(childOf(param, ast::NodeKind::Type)));
           // The spill is the ABI's arrival and not a statement, so it carries no
           // line: a location here is what puts a debugger's `break <function>` on
           // the declaration instead of on the first statement (`NoLocation`).

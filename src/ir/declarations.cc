@@ -214,7 +214,8 @@ void Lowering::declareGlobals() {
       globals_.emplace(defKey(*def), global);
     }
     if (debug_ != nullptr) {
-      debug_->declareGlobal(*global, name, types_, info.type, spanOf(info.decl));
+      debug_->declareGlobal(*global, name, types_, info.type, spanOf(info.decl),
+                            aliasNameAt(childOf(info.decl, ast::NodeKind::Type)));
     }
   }
 }

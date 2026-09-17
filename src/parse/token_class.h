@@ -121,6 +121,7 @@ inline constexpr std::size_t kBinaryOpCount = sizeof(kBinaryOps) / sizeof(kBinar
   switch (kind) {
   case lex::TokenKind::KwLet:
   case lex::TokenKind::KwConst:
+  case lex::TokenKind::KwType:
   case lex::TokenKind::KwReturn:
   case lex::TokenKind::Semicolon:
   case lex::TokenKind::LBrace:

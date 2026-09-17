@@ -35,6 +35,17 @@ enum class SemaErrorCode : std::uint8_t {
   // `UnknownType`'s machinery is for a word nobody recognizes: telling a reader
   // who wrote `f80` that they may have meant `i8` is advice nobody can use.
   MalformedType,
+  // A `type` name that is defined, directly or through other names, in terms of
+  // itself. Every one is refused -- including `type P = *P;`, which a nominal
+  // type would break -- because a name for a type is an abbreviation, and an
+  // abbreviation that contains itself has no expansion (`type_alias.md`,
+  // decision 6). The message carries the path.
+  TypeAliasCycle,
+  // There is deliberately no code for `type i32 = i64;`: a type word is a
+  // *reserved* name, and the reserved class reports from `resolve`, which owns
+  // that sentence for every declaration (`type_alias.md`, decision 4). This pass
+  // asks the same table (`support::isTypeNameWord`) and only makes sure the name
+  // does not become usable -- one fault, one diagnostic.
   // A non-value type where a value is required (`void` as an object's type).
   TypeNotValue,
   // An integer literal does not fit the type its context gave it.
