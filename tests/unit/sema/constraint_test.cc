@@ -292,6 +292,32 @@ TEST(ConstraintTest, TheRefusalNamesTheClassTheOperationNeeds) {
   }
 }
 
+TEST(ConstraintTest, AdviceToWidenIsNotGivenWhenTheTwoClassesShareNoMember) {
+  // `%` is granted by `Integer` and refused for a `Float` binder, and the tidy advice
+  // -- "widen the class" -- would be the opposite of a repair here: `Float` and
+  // `Integer` share no member, so the widened declaration would have every call
+  // refused. One error must not become one error per use, so the sentence says what
+  // is true instead: there is no class to widen to.
+  SemaFixture fixture;
+  fixture.source("fn bool even<T: Float>(x: T) {\n  return x % 2.0 == 0.0;\n}\n"
+                 "fn i32 main() { return 0; }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.hasError("sema-generic-operation"));
+  const std::string& message = fixture.firstError().message;
+  EXPECT_NE(message.find("Integer"), std::string::npos) << message;
+  EXPECT_EQ(message.find("Widen"), std::string::npos) << message;
+  EXPECT_NE(message.find("no type is in both classes"), std::string::npos) << message;
+
+  // And the pairs that *do* share members keep the advice, because there it is a
+  // repair: `Ordered`'s members are `Number`'s, and `Number`'s are `Integer`'s.
+  SemaFixture ordered;
+  ordered.source("fn T f<T: Ordered>(x: T) {\n  return x + x;\n}\nfn i32 main() { return 0; }\n");
+  ASSERT_TRUE(ordered.build());
+  ASSERT_TRUE(ordered.hasError("sema-generic-operation"));
+  EXPECT_NE(ordered.firstError().message.find("Widen the class to `Number`"), std::string::npos)
+      << ordered.firstError().message;
+}
+
 TEST(ConstraintTest, ABinderWithNoConstraintIsToldWhichClassToWrite) {
   SemaFixture fixture;
   fixture.source("fn T twice<T>(x: T) {\n  return x + x;\n}\nfn i32 main() { return 0; }\n");

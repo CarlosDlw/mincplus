@@ -446,6 +446,12 @@ Two rules, and they are the two halves of soundness:
    arithmetic it never uses. This is Go's rule, stated in its design document:
    *'Generic functions may only use operations supported by all the types
    permitted by the constraint.'*
+
+   The advice is **checked before it is given**: `%` on a `Float` binder is told
+   that no class can be widened to, because `Float` and `Integer` share no member
+   and following "widen to `Integer`" would make every call fail. A refusal whose
+   repair is worse than the mistake is not a refusal, and `classesOverlap` — asked
+   over one witness per kind — is what keeps the sentence honest.
 2. **Satisfying a constraint is checked at the instantiation**, and then the
    instance needs no re-checking. That is the payoff of checking the body once,
    and it is why the lowering can substitute and emit with confidence.
@@ -791,7 +797,7 @@ The whole of it: the **parser**, the **alias**, the **generic function** and the
 | `parse` | Two new codes, and only two: `parse-expected-type-arg-close` (a list with no `>`) and `parse-stray-type-arg-close` (a `>`/`=` that closes nothing). The `:` of a constraint reads a `Constraint` node holding a `Name` — the same shape a `type` use has, so `resolve` treats the word as a language word and not as a user binding, and no stage has to special-case it. `parse-constraint-not-read` refused `<T: Ordered>` while the checker could not read it; the code is **retired** with the stage that made it temporary |
 | `support` | `support/constraint`: the class table, one row per class — the name, the member predicate *named* rather than encoded, the grant bit set, and the literal class. `constraintForOperation` answers the refusal's "write this one", and it picks the **least powerful** class that grants the operation |
 | `sema` | the class on a `Param`: `BinderRow` carries the spelling, the `Param` and the class, read **once** per declaration by `readBinderRows`, so the two passes over a signature (signature, then body) cannot produce two classes for one binder or two sentences for one fault. A `Param`'s class is *not* part of its identity — `equalFields` compares the explicit field list — so `T` under two constraints is one `Param` |
-| `sema` | the **body check**: `refuseOperation`, called at every site where an operation is about to be allowed (binary, unary, the step operators, and the condition of a control statement), refuses a binder whose class does not grant it and names the class to write. A binder is granted the *operation*, and the concrete rules below it are skipped — there is no width to promote to |
+| `sema` | the **body check**: `refuseOperation`, called at every site where an operation is about to be allowed (binary, unary, the step operators, and the condition of a control statement), refuses a binder whose class does not grant it and names the class to write — or says there is none, when the two classes share no member (`classesOverlap`, one witness per kind). A binder is granted the *operation*, and the concrete rules below it are skipped: the class is the promise and there is no width to promote to |
 | `sema` | the **satisfaction check** at the instantiation and not at the call: `satisfies` answers each class with the operation rule's own predicate, and `internInstance` asks it before the substitution, so an inadmissible argument produces no instance. One sentence per *(node, argument list)* — a call inside a generic body is expanded once per instance of the enclosing declaration, and two expansions of one call are one fact about the source |
 | `sema` | the **literal rule** in one place: `support::literalAdmittedBy` decides and `Checker::refuseLiteralInBinder` reports, asked by `decideAt`, `checkAssignable` and the binary case. The literal is **decided as the binder**, so one body gives the right value per instance |
 | `sema` | the class of a binder reaches the **type reader** through the name row: `TypeName::rows` carries the declaration's `BinderRow`s (one struct, `typespec.h`, so the checker's table and the reader's input cannot disagree), and a use of a generic *alias* is checked against them where the substitution happens — `Vec<bool>` is refused, `Vec<i32>` is not. The predicate mapping moved to `TypeStore::satisfies`, which is where the predicates it names already live |

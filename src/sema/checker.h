@@ -439,6 +439,19 @@ private:
   // use, and everything else is the type position itself.
   [[nodiscard]] static SemaErrorCode codeOf(const TypeSpecResult& spec);
 
+  // Do the two classes share a type? The **advice** in a refusal depends on it:
+  // "widen the class to `Integer`" is a repair only when an `Integer` is what the
+  // declaration already accepts, and for a `Float` binder it is the opposite of one
+  // -- `Float` and `Integer` share no member, so following it makes every call fail.
+  //
+  // Asked over **one witness per kind** (an integer, a float, a `bool`, a `str`, a
+  // pointer), which is exhaustive for these predicates: a class admits a type or it
+  // does not, and every class in the table is a predicate over the kind. A product,
+  // a slice, a function type and `void` belong to no class at all, so none of them
+  // can be the type two classes share.
+  [[nodiscard]] bool classesOverlap(support::ConstraintClass left,
+                                    support::ConstraintClass right) const;
+
   // The `Param` of the `binder`-th binder of `owner`, already interned by the
   // declaration's own read. `kInvalidType` for an unsound binder -- one `resolve`
   // refused -- and for an index past the list.

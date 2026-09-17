@@ -29,6 +29,7 @@
 // operation and admits every type -- so `<T>` means exactly what it meant before
 // classes existed, and every refusal that used to say "constraints are the next
 // stage" now says which word to write.
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -284,10 +285,39 @@ bool Checker::refuseOperation(ast::AstId at, TypeId type, support::Operation op,
               std::string(opText));
     return true;
   }
+  // The **advice**, which is only advice when the class it names could be the
+  // declaration's: `Float` and `Integer` share no member, so a `Float` binder told
+  // to widen to `Integer` would be a declaration every call fails against -- the
+  // refusal would trade one error for one per use, which is the shape this compiler
+  // refuses (`generics.md`, § 6).
+  if (!classesOverlap(klass, needed)) {
+    error(at, SemaErrorCode::GenericOperation,
+          std::string(opText) + " on a binder: `" + std::string(binder) + "` is constrained to `" +
+              klassName + "`, and " + std::string(opText) + " is granted by `" + neededName +
+              "` -- and no type is in both classes, so there is no class to widen to. Write the "
+              "operation another way, or take the value as one of the types `" +
+              neededName + "` admits");
+    return true;
+  }
   error(at, SemaErrorCode::GenericOperation,
         std::string(opText) + " on a binder: `" + std::string(binder) + "` is constrained to `" +
             klassName + "`, which does not allow it. Widen the class to `" + neededName + "`");
   return true;
+}
+
+bool Checker::classesOverlap(support::ConstraintClass left, support::ConstraintClass right) const {
+  // The five witnesses, one per kind a class can be a predicate over. Built here
+  // rather than stored: two of them are pre-registered ids and the pointer is one
+  // interned type the store already has, so this costs an array and five predicate
+  // reads -- and it is asked only where a diagnostic is already being written.
+  const TypeId pointer = types_.pointerTo(kTypeI64);
+  const std::array<TypeId, 5> witnesses = {kTypeI64, kTypeF64, kTypeBool, kTypeStr, pointer};
+  for (const TypeId witness : witnesses) {
+    if (types_.satisfies(left, witness) && types_.satisfies(right, witness)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void Checker::refuseLiteralInBinder(ast::AstId at, TypeId binder, TypeId literal) {

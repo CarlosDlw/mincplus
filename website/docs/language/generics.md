@@ -158,8 +158,8 @@ An argument outside the class is refused at the call, and no function is emitted
 for it:
 
 ```minc
-fn i32 sum<T: Number>(x: T) { return x; }
-sum::<bool>(true);
+fn T add<T: Number>(a: T, b: T) { return a + b; }
+let x = add::<bool>(true, true);
 // `bool` does not satisfy the constraint on `T`: this declaration says that binder
 // is `Number`, and a type argument has to be one of the types that class admits --
 // otherwise the body, which is checked once against the class, would mean something

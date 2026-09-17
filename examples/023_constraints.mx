@@ -162,8 +162,14 @@ fn T halve<T: Float>(x: T) {
 //     which does not allow it. Widen the class to `Integer`
 //
 //   fn bool even<T: Float>(x: T) { return x % 2.0 == 0.0; }
-//     `%` under `Float`: widen to `Integer`, which no float belongs to, so the call is
-//     what is refused: `f64` does not satisfy the constraint on `T`
+//     error[sema-generic-operation]: `%` on a binder: `T` is constrained to `Float`,
+//     and `%` is granted by `Integer` -- and no type is in both classes, so there is
+//     no class to widen to. Write the operation another way, or take the value as one
+//     of the types `Integer` admits
+//
+//     Note what it does *not* say, and why: "widen the class to `Integer`" would be
+//     advice that turns one error into one per call, because no float is an
+//     `Integer`. A refusal from this compiler is a repair or it is not a refusal
 //
 //   fn T zero<T: Number>() { return 1; }
 //     error[sema-generic-operation]: this integer literal cannot be stored in `T`:
@@ -172,9 +178,9 @@ fn T halve<T: Float>(x: T) {
 //     and the body is checked **once**
 //
 //   fn i32 odd<T>(x: T) { if x { return 1; } return 0; }
-//     error[sema-generic-operation]: `if` on a binder: `T` is a type parameter and no
-//     class allows this, because it is defined for `bool` and nothing else. A value
-//     that must be a `bool` is written `bool`, not a binder
+//     error[sema-generic-operation]: the condition of `if` on a binder: `T` is a type
+//     parameter and no class allows this, because it is defined for `bool` and nothing
+//     else. A value that must be a `bool` is written `bool`, not a binder
 //
 //   fn T step<T: Pointer>(p: T) { return p + 1; }
 //     error[sema-generic-operation]: `+` on a binder: `T` is a pointer, and the only
@@ -183,13 +189,15 @@ fn T halve<T: Float>(x: T) {
 //     or write the comparison
 //
 //   fn i32 pick<T: i32>() { return 0; }
-//     error[sema-generic-operation]: `i32` is not a class; a class says which
-//     operations a body may use, and a class whose members are one type is the type
+//     error[sema-constraint-not-a-class]: `i32` is not a class a binder can be
+//     constrained to: a binder is constrained to one of the classes the language
+//     knows, because a class is what decides which operations the body may perform.
+//     The classes are Any, Eq, Ordered, Number, Integer, Float and Pointer
 //
 // And the other half of the rule, at the call:
 //
-//   fn i32 sum<T: Number>(x: T) { return x; }
-//   sum::<bool>(true);
+//   fn T add<T: Number>(a: T, b: T) { return a + b; }
+//   let x = add::<bool>(true, true);
 //     error[sema-constraint-unsatisfied]: `bool` does not satisfy the constraint on `T`:
 //     this declaration says that binder is `Number`, and a type argument has to be one
 //     of the types that class admits -- otherwise the body, which is checked once
