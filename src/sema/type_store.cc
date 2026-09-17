@@ -106,6 +106,12 @@ std::uint64_t TypeStore::hashOf(const Type& type, std::span<const TypeId> parts)
   // one call site (`sema/type.h`).
   hash = mix(hash, type.variadic ? 1U : 0U);
   hash = mix(hash, type.name);
+  // A type parameter's identity is `(owner, binder)` and not its structure, so
+  // both are mixed: two declarations that each call their binder `T` must not
+  // land in one bucket, and `spelling` is deliberately left out because it is a
+  // third fact about the type and not part of what makes two of them the same.
+  hash = mix(hash, type.owner);
+  hash = mix(hash, type.binder);
   // The member sequence is part of the structure; without it every `fn f(a)` and
   // `fn f(b)` would be one type, and so would `(i32, bool)` and `(bool, i32)`.
   for (const TypeId part : parts) {
@@ -117,7 +123,8 @@ std::uint64_t TypeStore::hashOf(const Type& type, std::span<const TypeId> parts)
 bool TypeStore::equalFields(const Type& a, const Type& b) const {
   return a.kind == b.kind && a.isSigned == b.isSigned && a.bits == b.bits &&
          a.pointee == b.pointee && a.count == b.count && a.returnType == b.returnType &&
-         a.name == b.name && a.variadic == b.variadic && a.paramCount == b.paramCount;
+         a.name == b.name && a.variadic == b.variadic && a.paramCount == b.paramCount &&
+         a.owner == b.owner && a.binder == b.binder;
 }
 
 bool TypeStore::equalParts(const Type& type, std::span<const TypeId> parts) const {
@@ -211,7 +218,16 @@ TypeId TypeStore::arrayOf(TypeId element, std::uint64_t count) {
   // enters the store: a type the rest of the pipeline can only misunderstand is
   // worse than a refusal here, and the caller has the count's spelling and its
   // node to point a sentence at.
-  if (!arraySize(element, count).has_value()) {
+  if (!isObject(element)) {
+    return kInvalidType;
+  }
+  // An element with no size *yet* -- a type parameter, or a product holding one
+  // -- skips the arithmetic instead of failing it: `[4]T` says nothing false
+  // about the store, and the count and the element are checked again on the
+  // substituted type, which is the type that reaches a module. Asking this
+  // through `arraySize` would refuse the template with a sentence about a size,
+  // which is the one thing that is not yet known.
+  if (!hasUnknownSize(element) && !arraySize(element, count).has_value()) {
     return kInvalidType;
   }
   Type type;
@@ -234,6 +250,87 @@ TypeId TypeStore::sliceOf(TypeId element) {
   // `count` stays 0: the count of a slice is not in the type, and 0 is not a
   // count the store ever gives a type that has one.
   return intern(type);
+}
+
+TypeId TypeStore::param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling) {
+  paramSpellings_.emplace_back(spelling);
+  Type type;
+  type.kind = TypeKind::Param;
+  type.owner = owner;
+  type.binder = binder;
+  type.paramSpelling = paramSpellings_.back();
+  return intern(type);
+}
+
+TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::uint32_t owner) {
+  if (!known(subject)) {
+    return subject;
+  }
+  // By value, and not a reference: building the result interns, and interning can
+  // grow the very vector this type lives in.
+  const Type type = get(subject);
+  switch (type.kind) {
+  case TypeKind::Param:
+    // The one place a substitution ends. A binder of *another* declaration keeps
+    // its identity, which is what makes a generic body that mentions an enclosing
+    // binder still be about that binder (decision 6).
+    if (type.owner != owner || type.binder >= args.size()) {
+      return subject;
+    }
+    return args[type.binder];
+  case TypeKind::Pointer: {
+    const TypeId pointee = substitute(type.pointee, args, owner);
+    return pointee.valid() ? pointerTo(pointee) : kInvalidType;
+  }
+  case TypeKind::Array: {
+    // Rebuilt through `arrayOf`, so the count and the element are checked *again*
+    // against the substituted type: `[4]T` with `T := i32` is an array the store
+    // is allowed to have, and `[4]T` with `T := (i32, bool)` is refused here, by
+    // the same arithmetic that would have refused it if it had been written.
+    const TypeId element = substitute(type.pointee, args, owner);
+    return element.valid() ? arrayOf(element, type.count) : kInvalidType;
+  }
+  case TypeKind::Slice: {
+    const TypeId element = substitute(type.pointee, args, owner);
+    return element.valid() ? sliceOf(element) : kInvalidType;
+  }
+  case TypeKind::Tuple: {
+    // The members are copied out before the walk: every `substitute` below can
+    // intern, and interning appends to the same member array this span points
+    // into.
+    const std::vector<TypeId> original(membersOf(subject).begin(), membersOf(subject).end());
+    std::vector<TypeId> replaced;
+    replaced.reserve(original.size());
+    for (const TypeId member : original) {
+      const TypeId one = substitute(member, args, owner);
+      if (!one.valid()) {
+        return kInvalidType;
+      }
+      replaced.push_back(one);
+    }
+    return tupleOf(replaced);
+  }
+  case TypeKind::Function: {
+    const std::vector<TypeId> original(paramsOf(subject).begin(), paramsOf(subject).end());
+    std::vector<TypeId> replaced;
+    replaced.reserve(original.size());
+    for (const TypeId param : original) {
+      const TypeId one = substitute(param, args, owner);
+      if (!one.valid()) {
+        return kInvalidType;
+      }
+      replaced.push_back(one);
+    }
+    const TypeId returns = substitute(type.returnType, args, owner);
+    if (!returns.valid()) {
+      return kInvalidType;
+    }
+    return function(returns, replaced, type.variadic);
+  }
+  default:
+    // Everything else is a type with no part that can be a binder.
+    return subject;
+  }
 }
 
 TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params, bool variadic) {
@@ -261,16 +358,23 @@ TypeId TypeStore::tupleOf(std::span<const TypeId> members) {
   if (members.size() < 2) {
     return kInvalidType;
   }
+  bool unknown = false;
   for (const TypeId member : members) {
     if (!isObject(member)) {
       return kInvalidType;
     }
+    unknown = unknown || hasUnknownSize(member);
   }
   // The layout arithmetic, for the same reason the array does it: a product whose
   // size does not fit `size_t` is refused where it is built, so `sizeOf` below is
   // a number and not a question. It also means the size and every member offset
   // are computed once per type and never overflow anywhere else.
-  if (!tupleSize(members).has_value()) {
+  //
+  // A member with no size yet is the exception, and it is the same one the array
+  // makes: `(T, K)` is the *template* of `Pair<T, K>`, and its layout is a
+  // question for the substituted product -- which `substitute` builds through
+  // this function, so the check is applied to the type that gets lowered.
+  if (!unknown && !tupleSize(members).has_value()) {
     return kInvalidType;
   }
   Type type;
@@ -284,6 +388,12 @@ std::optional<std::size_t> TypeStore::tupleSize(std::span<const TypeId> members)
   std::size_t align = 1;
   std::size_t size = 0;
   for (const TypeId member : members) {
+    if (hasUnknownSize(member)) {
+      // Not a size that is not a number: a size that does not exist yet. The
+      // sentence for it belongs to the position that asked (`sizeof` of a
+      // binder, an array of one), and the answer here is the honest "no".
+      return std::nullopt;
+    }
     const std::size_t memberAlign = alignOf(member);
     const std::size_t memberSize = sizeOf(member);
     if (memberAlign == 0 || memberSize == 0) {
@@ -404,6 +514,41 @@ bool TypeStore::isSlice(TypeId id) const {
 bool TypeStore::isTuple(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Tuple;
 }
+bool TypeStore::isParam(TypeId id) const {
+  return known(id) && get(id).kind == TypeKind::Param;
+}
+bool TypeStore::isParamOf(TypeId id, std::uint32_t owner) const {
+  return isParam(id) && get(id).owner == owner;
+}
+bool TypeStore::hasUnknownSize(TypeId id) const {
+  if (!known(id)) {
+    return false;
+  }
+  switch (get(id).kind) {
+  case TypeKind::Param:
+    // A binder stands for a type argument, and a type argument *is* an object --
+    // what it does not have, until it is substituted, is a width.
+    return true;
+  case TypeKind::Array:
+    // An array is an object of its element, so it is exactly as sizeable as the
+    // element is: `[4]T` has no size until `T` does, and `[4]i32` always has one.
+    return hasUnknownSize(get(id).pointee);
+  case TypeKind::Tuple:
+    // A product is its members laid out in order, so one member without a size
+    // is a product without a size -- the rule `tupleSize` applies, asked from
+    // the other direction.
+    for (const TypeId member : membersOf(id)) {
+      if (hasUnknownSize(member)) {
+        return true;
+      }
+    }
+    return false;
+  default:
+    // A pointer and a view are one or two words of their own; their element's
+    // width never enters their layout (`slices.md` decision 5).
+    return false;
+  }
+}
 bool TypeStore::isAggregate(TypeId id) const {
   // Three kinds and not one, because `isArray` is asked wherever the *storage* is
   // the subject (`sizeof` of the object, an element count, a copy) and a view is
@@ -433,6 +578,13 @@ bool TypeStore::isObject(TypeId id) const {
   }
   // `isScalar` minus the deferred literals: they are scalar-*shaped* and have no
   // width yet, so nothing may store one and nothing may be an array of one.
+  if (kind == TypeKind::Param) {
+    // A `T` is an object in this predicate's sense -- it *is* a type argument, and
+    // an argument is an object -- which is what lets a generic body bind, pass
+    // and return one (`generics.md`). It is deliberately not `isScalar`: "one
+    // word" is not a thing a binder promises.
+    return true;
+  }
   return isScalar(id) && !isDeferred(id);
 }
 TypeId TypeStore::elementOf(TypeId id) const {
@@ -517,6 +669,10 @@ std::string TypeStore::spelling(TypeId id) const {
     // view is what `slices.md` reserved and what a reader types back. There is no
     // length to print, which is the whole difference from the line above.
     return "[]" + spelling(type.pointee);
+  case TypeKind::Param:
+    // The binder's own name, which is the third fact stored beside the identity
+    // and the only one a diagnostic has any use for (`generics.md`).
+    return std::string(type.paramSpelling);
   case TypeKind::Tuple: {
     // `(i32, bool)`, in the order written: the canonical spelling is what a
     // reader can type back, and the order is part of the type -- which is why the
@@ -609,6 +765,11 @@ std::size_t TypeStore::sizeOf(TypeId id) const {
   case TypeKind::Function:
   case TypeKind::IntLiteral:
   case TypeKind::FloatLiteral:
+  // A type parameter has no width *yet*: the width is the argument's, and the
+  // argument is not known until the declaration is instantiated. The one place
+  // that could believe this zero is the array, and `arrayOf` asks
+  // `hasUnknownSize` before it does any arithmetic.
+  case TypeKind::Param:
     return 0;
   }
   return 0;
@@ -653,6 +814,10 @@ std::size_t TypeStore::alignOf(TypeId id) const {
     // -- not like its element. `[]u8` is eight-byte aligned on a 64-bit target,
     // and a `struct` that holds one gets the padding a C compiler would give it.
     return target_.pointerBits / 8U;
+  case TypeKind::Param:
+    // Nothing is known to need aligning, which is the only true answer available
+    // and the one that keeps a product of binders from claiming anything.
+    return 1;
   case TypeKind::Tuple: {
     // The largest member alignment, and never zero: every member is an object
     // (`tupleOf`), and an object has an alignment. A product is aligned like its

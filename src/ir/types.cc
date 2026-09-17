@@ -105,6 +105,18 @@ llvm::Type* Lowering::llvmType(sema::TypeId id) {
     return nullptr;
   }
   switch (types_.get(id).kind) {
+  case sema::TypeKind::Param:
+    // **The invariant, enforced where it can be broken.** A type parameter has no
+    // width, so there is no answer here at all -- and instantiation substitutes
+    // every one of them before a module is built, which is what makes reaching
+    // this line a compiler bug rather than a program's mistake
+    // (`generics.md`, decision 20). Reported as internal, because the reader of
+    // the message is whoever is changing `sema`.
+    fatal(support::Span{}, IRDiagnosticCode::Internal,
+          "a type parameter (`" + types_.spelling(id) +
+              "`) reached the LLVM mapper: instantiation must substitute every binder before "
+              "a module is built");
+    return nullptr;
   case sema::TypeKind::Void:
   case sema::TypeKind::Never:
     // One branch because it is one answer: a function returning `!` returns

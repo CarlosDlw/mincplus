@@ -1,0 +1,66 @@
+// A **generic alias** -- `type Pair<T, K> = (T, K);` -- and the rule it rests on:
+// an alias is an *abbreviation*.
+//
+// The declaration reads its target once, with one name in scope per binder, and
+// what it produces is a **template**: the target with type parameters in it. A use
+// substitutes the arguments into that template, and the substitution is a type the
+// store already has -- so `Pair<i32, bool>` *is* `(i32, bool)`, and the check is an
+// id equality rather than a second kind of type (`generics.md`, decision 8).
+//
+// The surface:
+//
+//   * a binder list goes **after the name being declared**, before `=`:
+//     `type Pair<T, K> = ...`. The parser reads it, and this file is checked by a
+//     stage that instantiates it;
+//   * a use writes `<...>` in any type position: `Pair<i32, bool>`, `*Vec<u8>`,
+//     `(Vec<u8>, bool)`, `[4]Pair<i32, i32>`;
+//   * a binder is a name *of that declaration only*: `T` outside the `type` that
+//     introduced it is an unknown type, exactly as it looks;
+//   * constraints on a binder -- `<T: Ordered>` -- are not read yet, and the parser
+//     refuses one by name rather than reading it and ignoring it.
+//
+// A generic `fn` is the next stage: it needs the binder in scope for its body and
+// one function per instantiation, which is what the symbols and the debug records
+// in `generics.md` are about. Declaring one today is refused with one sentence
+// instead of one unknown name per use of `T`.
+
+// One binder becomes a product, so a use is a product type.
+type Pair<T, K> = (T, K);
+
+// A binder reaches inside a constructor: this is a view of the argument.
+type Vec<T> = []T;
+
+// And a count, whose size is the argument's -- `[4]i32`, `[4]bool`, `[4](i32, bool)`.
+type Rows<T> = [4]T;
+
+// A use of one generic alias inside another, which is just a type position.
+type Grid<T> = Rows<Vec<T>>;
+
+// An alias may end in an instantiation, and then it is a plain name again.
+type Bytes = Vec<u8>;
+type PairOfBytes = Pair<Bytes, u32>;
+
+fn i32 main() {
+  // The whole point: the two annotations below are the *same type*.
+  let p: Pair<i32, bool> = (1, true);
+  let same: (i32, bool) = p;
+  let nested: Pair<Pair<i32, i32>, bool> = ((1, 2), true);
+
+  // A constructor over a use, read back through it, and a use inside a product
+  // member.
+  let q: *Pair<i32, bool> = &p;
+  let through: Pair<i32, bool> = *q;
+  let mm: (Vec<u8>, bool) = (query[..], true);
+
+  // A count that comes from the argument, and an array of a substituted element.
+  let table: [4]u32 = [10, 20, 30, 40];
+  let rows: Rows<u32> = table;
+  let deep: Rows<Rows<i32>> = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]];
+
+  // The values, so the program computes something rather than only declaring.
+  return p.0 + same.0 + nested.0 .1 + through.0 + rows[2] as i32 / (deep[1][1] - 4 * 1) -
+         mm.0[0] as i32;
+}
+
+// A byte view to take a slice from, so `mm`'s first member is a real value.
+let query: [4]u8 = [1, 2, 3, 4];

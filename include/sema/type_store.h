@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -127,6 +128,39 @@ public:
   // and a default would let one of them build the non-variadic type for a
   // variadic function without the compiler saying anything.
   [[nodiscard]] TypeId function(TypeId returnType, std::span<const TypeId> params, bool variadic);
+  // A **type parameter**: `T` of `fn T identity<T>(value: T)` (`generics.md`).
+  //
+  // Its identity is `(owner, binder)` and not its structure, which is the whole
+  // reason it is a kind: two declarations may each call their binder `T`, and they
+  // are two types. `owner` is the declaring node's id in the unit's tree, `binder`
+  // is the position in that declaration's binder list, and `spelling` is what a
+  // diagnostic prints -- the *third* fact, kept beside the identity and not part
+  // of it. The store copies the spelling, so the caller's view need not outlive
+  // the call.
+  [[nodiscard]] TypeId param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling);
+  // Is this the parameter of *that* declaration? One question, because a binder
+  // is only ever substituted by the declaration that owns it: a body referring to
+  // an enclosing binder keeps it (decision 6), so "is this mine" is what every
+  // substitution asks.
+  [[nodiscard]] bool isParamOf(TypeId id, std::uint32_t owner) const;
+  [[nodiscard]] bool isParam(TypeId id) const;
+  // **Substitution.** Every `Param` of `owner` in `subject` is replaced by the
+  // corresponding entry of `args`, and the result is interned like any other type
+  // -- so `Pair<i32, bool>` *is* `(i32, bool)`, the check is an id equality, and
+  // the store did not grow a second kind of type (decision 8).
+  //
+  // Total for the declaration it belongs to and partial for nothing: a type that
+  // mentions no `Param` of `owner` comes back unchanged, which is what makes it
+  // safe to call on a type read anywhere. `args` must be at least as long as the
+  // binder list the params came from; a shorter span leaves the tail unsubstituted
+  // rather than reading past it.
+  //
+  // `kInvalidType` when an argument has no object and one is required (the array
+  // and tuple rules, applied to the *result*) or when the budget is reached -- the
+  // invalid answer is a diagnostic the caller reports, never an allocation that
+  // already happened.
+  [[nodiscard]] TypeId substitute(TypeId subject, std::span<const TypeId> args,
+                                  std::uint32_t owner);
 
   // --- access ---------------------------------------------------------------
 
@@ -199,8 +233,23 @@ public:
   // load, a store or a copy moves as one *object* rather than as one value, which
   // is the distinction the lowering needs and the reason this is not `isScalar`.
   [[nodiscard]] bool isAggregate(TypeId id) const;
+  // Does this type have no size *yet*? True for a type parameter and for an
+  // aggregate built out of one -- a product with a binder member, or an array of
+  // one -- and false for everything else, which is every type that can reach a
+  // module (`generics.md`: a `Param` is the one type the lowering never sees).
+  //
+  // It is a separate question from "is it an object": `(T, K)` *is* an object --
+  // it can be returned, bound and passed -- and its width is the argument's, so
+  // the two rules that *do* arithmetic on widths (an array's element product, a
+  // product's layout) ask this first and skip the arithmetic instead of believing
+  // a zero.
+  [[nodiscard]] bool hasUnknownSize(TypeId id) const;
   // A type with an object representation: an integer, a float, a `bool`, a
-  // `char`, a `str`, a pointer, or an aggregate. What can be a binding, a
+  // `char`, a `str`, a pointer, an aggregate, or a type parameter -- a `Param`
+  // answers yes, because a type argument *is* an object and the body of a generic
+  // is checked once against the binder (`generics.md`). What a `Param` does not
+  // have is a width, so nothing may take its size: see `arrayOf`, which is the one
+  // place a wrong zero could be believed. What can be a binding, a
   // parameter, an element, a field, or the source of a copy -- the one question
   // those four have in common.
   //
@@ -287,6 +336,13 @@ private:
   std::vector<Type> types_;
   std::vector<TypeId> params_;
   std::unordered_multimap<std::uint64_t, TypeId> index_;
+  // The spellings of the type parameters, owned by the store because a `Type`
+  // holds a *view* of them: a `deque` and not a `vector`, because a vector's move
+  // would leave every view dangling for a name short enough to live inside the
+  // string (`T`). The pool never shrinks and nothing removes an entry: a spelling
+  // is part of what a type's name is, and a type outlives the declaration that
+  // introduced it.
+  std::deque<std::string> paramSpellings_;
 };
 
 } // namespace minc::sema

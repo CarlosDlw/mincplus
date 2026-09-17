@@ -105,7 +105,10 @@ namespace {
   case ',':
     return punct(offset, 1, TokenKind::Comma);
   case ':':
-    return punct(offset, 1, TokenKind::Colon);
+    // `::` before `:`, longest match: the explicit type-argument list of a call
+    // (`f::<i32>(x)`) is spelled with two colons written together, and the parser
+    // reads one token rather than asking whether two `:` happened to be adjacent.
+    return c1 == ':' ? punct(offset, 2, TokenKind::ColonColon) : punct(offset, 1, TokenKind::Colon);
   case '?':
     return punct(offset, 1, TokenKind::Question);
   case '.':

@@ -383,6 +383,27 @@ CompletedMarker Parser::parsePostfix() {
           expr = index.complete(SyntaxKind::IndexExpr);
         }
       }
+    } else if (at(lex::TokenKind::ColonColon) && nth(1) == lex::TokenKind::Less) {
+      // `f::<i32>(x)`: the arguments of a call written where no argument can
+      // tell them (a binder that appears in no parameter, `f::<i32>` for a
+      // function whose type argument is only in its return).
+      //
+      // The `::` is a postfix that only ever precedes a call: `f::<i32>` on its
+      // own would name an instantiated function, and a function value carrying
+      // arguments is a shape this language does not have -- so the call is
+      // required and the sentence says which token is missing.
+      Marker call = expr.precede();
+      bump(); // `::`
+      reportUnusedListClose(parseTypeArgList());
+      if (!at(lex::TokenKind::LParen)) {
+        error("expected the call this argument list belongs to: `f::<i32>(x)`",
+              ParseErrorCode::ExpectedToken);
+      } else {
+        bump(); // `(`
+        parseArgList();
+        expect(lex::TokenKind::RParen);
+      }
+      expr = call.complete(SyntaxKind::CallExpr);
     } else if (at(lex::TokenKind::Dot) && nth(1) != lex::TokenKind::Dot) {
       // `t.0`, and `s.field` when `struct` lands: one node for a component of a
       // value (`tuples.md`, decision 16). A `.` **followed by another `.`** is not
@@ -679,8 +700,9 @@ CompletedMarker Parser::parseTypedInitializer() {
   Marker initializer = start();
   // `[N]T` is one `Type` node, count and all -- the same `parseType` a binding
   // annotation uses, so a typed initializer cannot spell a type differently from
-  // the rest of the language.
-  parseType();
+  // the rest of the language. There is no `=` after it, so a compound closer's
+  // `=` has nothing to belong to and is reported where it was written.
+  reportUnusedListClose(parseType());
   bump(); // `{`, guaranteed by `atTypedInitializer`
   parseInitializerElements(lex::TokenKind::RBrace);
   expect(lex::TokenKind::RBrace);

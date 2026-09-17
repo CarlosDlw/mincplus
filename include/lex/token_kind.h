@@ -93,6 +93,15 @@ enum class TokenKind : std::uint8_t {
   Semicolon,
   Comma,
   Colon,
+  // `::`, one token and not two `:`. It precedes the argument list of an
+  // explicit call -- `makePair::<i32, bool>(...)` -- and it is a punctuator of
+  // the lexical grammar for the same reason `..` is: two characters this language
+  // writes together, and a tokenizer that split them would leave the parser to
+  // decide, from adjacency alone, whether the reader meant one thing or two.
+  //
+  // Longest match applies, so `::` and `: :` stay distinguishable, exactly as
+  // `##` and `# #` do.
+  ColonColon,
   Question,
   Dot,
   Arrow,
@@ -299,6 +308,7 @@ enum class TokenKind : std::uint8_t {
   case TokenKind::Semicolon:
   case TokenKind::Comma:
   case TokenKind::Colon:
+  case TokenKind::ColonColon:
   case TokenKind::Question:
   case TokenKind::Dot:
   case TokenKind::Arrow:

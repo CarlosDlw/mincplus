@@ -129,6 +129,8 @@ const char* toString(TokenKind kind) {
     return "Comma";
   case TokenKind::Colon:
     return "Colon";
+  case TokenKind::ColonColon:
+    return "ColonColon";
   case TokenKind::Question:
     return "Question";
   case TokenKind::Dot:

@@ -255,10 +255,13 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
   case sema::TypeKind::Void:
   case sema::TypeKind::Never:
   case sema::TypeKind::Error:
-    // Nothing to say. `Error` cannot reach here on a checked tree -- `run()`
-    // refuses it first -- and neither `void` nor `!` has a type in DWARF. `!` is
-    // the same answer for the same reason: it has no value for a debugger to
-    // describe, and a function returning it is `void` on the ABI side.
+  case sema::TypeKind::Param:
+    // Nothing to say, and the four say it for the same reason: there is no
+    // object to describe. `Error` cannot reach here on a checked tree -- `run()`
+    // refuses it first; neither `void` nor `!` has a DWARF type (`!` has no value
+    // for a debugger to look at, and a function returning it is `void` on the ABI
+    // side); and a `Param` has no width at all, which the *mapper* refuses first
+    // and states (`generics.md`, decision 20).
     return nullptr;
   case sema::TypeKind::Bool:
     // The object is a byte (`memory.md`, *Objects*), and saying `i1` here would

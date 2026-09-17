@@ -56,6 +56,21 @@ struct TypeName {
   // at that declaration (`TypedFile::aliasAt`), which is what the debug info and
   // an editor's hover read.
   std::uint32_t alias = kNoAliasRow;
+  // A **generic** name: how many binders its declaration wrote, and which
+  // declaration they belong to -- the id of its binder list, which is what a
+  // `Param`'s identity is made of (`generics.md`).
+  //
+  // `binders == 0` is a name for one type, and the two are the same row because
+  // they are the same question: a use answers it by substituting when there are
+  // binders and by handing the type back when there are none. `type` for a
+  // generic name is the **template** -- the target with `Param`s in it -- and it
+  // is never a type anything below this reader sees.
+  //
+  // Declared *after* `alias` on purpose: the three-field rows a non-generic name
+  // publishes are written positionally all over this stage, and a new field in the
+  // middle would silently reorder every one of them.
+  std::uint32_t binders = 0;
+  std::uint32_t owner = 0;
 };
 
 // The row that answers a word, or `nullptr` when the word is no name of this
@@ -162,6 +177,12 @@ struct TypePart {
   // punctuator -- it cannot be spelled by an identifier, which is the whole
   // reason the bottom type is `!` and not a reserved word (`never.md`).
   bool isBang = false;
+  // `<...>`: the arguments of the word to the left, one run of parts each. A
+  // *use* of a generic name, and a base of the run like a product is: the
+  // substitution it produces is a whole type, so `*Pair<i32, bool>` is a pointer
+  // to one.
+  bool hasArgs = false;
+  std::vector<std::vector<TypePart>> args;
   // Empty for a `*` and for a `!`.
   std::string_view word;
 };

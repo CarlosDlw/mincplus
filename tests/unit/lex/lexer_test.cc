@@ -135,6 +135,10 @@ TEST(LexerTest, EveryPunctuatorSpelling) {
       {">>=", TokenKind::GreaterGreaterEqual},
       {"##", TokenKind::HashHash},
       {"#", TokenKind::Hash},
+      // `::`, and longest match is what keeps it one token: the explicit argument
+      // list of a call is spelled with two colons written together, and `: :`
+      // stays two, exactly as `##` and `# #` do.
+      {"::", TokenKind::ColonColon},
       {"->", TokenKind::Arrow},
       {"++", TokenKind::PlusPlus},
       {"--", TokenKind::MinusMinus},

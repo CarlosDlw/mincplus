@@ -824,7 +824,15 @@ warnings inside them are dropped at the report step while errors are not.
   *chain* of two reads is written apart (`t.0 .1`) for the same reason
   ([`architectures/tuples.md`](architectures/tuples.md)). Generics come after it:
   a binder list is itself a sequence of pairs, and the store gained
-  arity-unknown interning here.
+  arity-unknown interning here. **Generics** are designed and recorded but not
+  built — `fn T identity<T>(value: T)` and `type Pair<T, K> = (T, K);`, with the
+  binders after the name being declared, `<...>` in every type position and
+  `::<...>` at a call site (in an expression, `f < T > (x)` *is* a comparison),
+  inference over the arguments and the expected type, compiler-known capability
+  constraints, and one function and one `DW_TAG_subprogram` per instantiation,
+  whose symbol is `__M8_identityi32` — inside `[A-Za-z0-9_]` and behind a reserved
+  `__` prefix, because the emitter is only half of what a symbol has to survive
+  ([`architectures/generics.md`](architectures/generics.md)).
 
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which

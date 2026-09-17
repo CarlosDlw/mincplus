@@ -632,6 +632,11 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
        false},
       {"fn i32 main() { let p = (1, 2, 3); let (a, b) = p; return a; }\n", false},
       {"fn i32 main() { let (a, b) = 5; return a; }\n", false},
+      // The binder list. The parser reads it and this stage says so in one
+      // sentence instead of one unknown name per use of `T` (`generics.md`,
+      // decision 4); `T` is what makes the input the shortest one that reaches
+      // the code, since a binder no body mentions is still a binder.
+      {"fn i32 f<T>(v: T) { return 0; }\n", false},
   };
 
   for (const Case& one : cases) {

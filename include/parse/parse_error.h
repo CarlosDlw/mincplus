@@ -116,6 +116,23 @@ enum class ParseErrorCode : std::uint8_t {
   // `10 z` needs the spans, and because the sentence names the set of suffixes
   // the reader could have meant, which is the grammar's table.
   InvalidLiteralSuffix,
+  // `<i32, bool` with the closing `>` missing -- the type argument list's peer
+  // of `ExpectedTypeGroupClose`: the sentence a reader who left a list open
+  // needs, naming the character to type and the list it closes.
+  ExpectedTypeArgClose,
+  // A `>` that closes nothing: `A<B>>` written where one `>` is enough, or the
+  // `=` of a `>=`/`>>=` where no declaration has an `=` to give.
+  //
+  // Named rather than left to the next token's "expected `;`", because the
+  // *character* is the mistake and the fix is which one to delete -- or, for
+  // `>=`, that `>` and `=` are two characters (`generics.md`, decision 4).
+  StrayTypeArgClose,
+  // A constraint on a binder -- `<T: Ordered>`. The slot is the `:` of every
+  // other binding and it is reserved, but nothing reads it yet: an accepted
+  // constraint that no stage enforces is a declaration that promises more than
+  // the compiler checks, which is worse than a missing one. Refused by name, and
+  // the tokens are consumed with it so one mistake stays one sentence.
+  ConstraintNotRead,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

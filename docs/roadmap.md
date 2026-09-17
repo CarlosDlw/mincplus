@@ -920,6 +920,45 @@ the two cannot disagree about what the pipeline means.
       [`architectures/tuples.md`](architectures/tuples.md). It lands before
       generics on purpose: a binder list is itself a sequence of pairs, and the
       store gained arity-unknown interning here
+- [ ] **Generics** `<T>` on a function and on a `type`: **the parser half and
+      the generic-`type` half have landed.** The binder list follows the name,
+      `<...>` is read in every type position, `::<...>` at a call site, and a
+      `>>`/`>>=` that closes two lists is split by the reader and not by the
+      lexer — with `::` added to the lexical grammar as one token, and the two
+      mistakes that are about a *character* (`A<B>>`, `A<i32`) named by their own
+      codes. A constraint is refused by name rather than read and ignored. On the
+      type side: `Param` with identity `(owner, binder)`, and a use that
+      **substitutes** into the declaration's template — so `Pair<i32, bool>` *is*
+      `(i32, bool)`, the check is an id equality, and `examples/021_generic_alias.mx`
+      runs. A generic **function** is the next stage, and the type checker still
+      refuses one with a single sentence (`sema-generics-not-read`) instead of one
+      "did you mean `i8`?" per use of a binder. The binders
+      follow the name being declared (`fn T identity<T>(value: T)`,
+      `type Pair<T, K> = (T, K);`),
+      a type position reads plain `<...>` and a call site writes `::<...>` —
+      because after an expression `f < T > (x)` *is* a comparison, which is the
+      whole reason Rust has that spelling, and because the type-argument reader
+      splits a `>>` or `>>=` that closes two lists, measured against `rustc`
+      (which splits both) and `clang++` (which accepts `>>` and still refuses
+      `>>=`). A parameter is a real interned type with identity
+      `(declaration, position)`, so the store gains one kind and no predicate
+      changes: a `T` under `+` with no constraint is refused by the sentence
+      `*void` under `+` already gets. The body is checked **once**, under a
+      constraint — Go's rule, and C++'s two-phase-name-lookup problem avoided —
+      and instantiation is a worklist keyed on `(declaration, arguments)` with a
+      budget, because the calls *inside* a generic body are written in terms of
+      its binders, so no single walk of the program enumerates them. An
+      instantiated alias is a type the store already has: `Pair<i32, bool>` *is*
+      `(i32, bool)`. Each instance is one function with the symbol
+      `__M8_identityi32` — restricted to `[A-Za-z0-9_]` because the emitter is
+      only half of what a symbol has to survive, with the `__` prefix reserved by
+      the language so the form is unreachable from source — and one
+      `DW_TAG_subprogram` whose
+      `DW_AT_name` is `identity<i32>`, so a regex breakpoint stops in every
+      instance, measured in gdb against clang and rustc. The design, the market
+      evidence, the refusals and the constraints (`Num`, `Int`, `Float`,
+      `Ordered`, `Eq`, `Any`) are in
+      [`architectures/generics.md`](architectures/generics.md)
 - [ ] Top-level types: `struct`, `enum`, and `union`, with **nominal**
       identity across modules (`architectures/modules.md`, seam S4 — the type
       store interns by structure today, which is right for scalars and wrong for

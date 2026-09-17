@@ -251,6 +251,15 @@ enum class SemaErrorCode : std::uint8_t {
   // or an annotation that names a single type. The fix is one of two spellings --
   // bind the value whole, or take a product apart -- so the sentence names both.
   DestructuringNotProduct,
+  // The unit declares something generic -- `<T>` after a name -- and this stage
+  // does not instantiate a binder yet: the parser reads the list (`generics.md`,
+  // decision 4) and the type model has no `Param` in it.
+  //
+  // Reported **once for the unit**, before any declaration is read. The
+  // alternative is one "`T` is not a type, did you mean `i8`?" per use of a
+  // binder, which is a sentence about a typo for something the reader wrote on
+  // purpose -- a wrong pointer being worse than a missing one.
+  GenericsNotRead,
 };
 
 struct SemaErrorCodeInfo {

@@ -37,6 +37,33 @@ struct ParseOutput {
   bool bailedOut = false;
 };
 
+// What a list of type arguments -- or of binders -- consumed *beyond* its own
+// closing `>`.
+//
+// Lists are closed by `>`. They are also closed by the first half of a `>>`,
+// which is one token to this language's lexer (maximal munch, so `.` and `..`
+// are two tokens for the same reason) and two closers to the grammar, because
+// `Grid<Grid<f64>>` is the spelling the market converged on and a reader should
+// never have to write a space to nest a type. `>=` and `>>=` carry an `=` that
+// belongs to the declaration around the list, not to the list.
+//
+// **A returned value, and not a parser flag.** Closing is observed deep inside a
+// type run and paid for several frames up, and every frame in between is the
+// grammar's own recursion -- which is exactly the traffic a return value can
+// carry and a flag cannot. A flag would also survive the one thing that must
+// clear it, a desynchronized token stream, and that is the failure this parser
+// does not recover from (`generics.md`, decision 4).
+struct ListClose {
+  // `>>` or `>>=`: this token closed the enclosing list as well.
+  bool closedParent = false;
+  // `>=` or `>>=`: the token also carried the `=` a declaration is looking for.
+  bool sawEqual = false;
+
+  [[nodiscard]] bool any() const {
+    return closedParent || sawEqual;
+  }
+};
+
 class Parser;
 class CompletedMarker;
 
@@ -174,6 +201,34 @@ public:
   // when the language grows them, which is why the name is read as its own node
   // and not folded into the `=`'s lookahead.
   void parseTypeAlias();
+  // `<T, K>`: the binders of a declaration, after the name being declared and
+  // before its parameter list or its `=`. One production for `fn` and for `type`,
+  // because the position is one position (`generics.md`, decision 1).
+  //
+  // Returns what its closing token consumed beyond itself, because the last
+  // binder of `type Pair<T>= (T, K);` leaves the `=` of the alias already read.
+  [[nodiscard]] ListClose parseGenericParams();
+  // `<i32, bool>`: the arguments of a use, inside a type run or behind the `::`
+  // of an explicit call. Precondition: the current token is `<`.
+  //
+  // This and `parseGenericParams` are two functions over *one* list shape and one
+  // closer, differing in what the list holds -- binders are names, arguments are
+  // types -- which is why the closing rule is read from one place for both.
+  [[nodiscard]] ListClose parseTypeArgList();
+  // The `>` that closes a list, splitting a compound token when the source wrote
+  // one: `>>` is two closures, and `>=`/`>>=` carry the `=` a declaration owns.
+  [[nodiscard]] ListClose closeList();
+  // Is the current token a closer? `>`, `>=`, `>>`, `>>=` -- one question with
+  // four spellings, answered in one place, so no reader of the grammar has to
+  // hold all four (`closeList` is where the four are told apart).
+  [[nodiscard]] bool atListCloser() const {
+    return at(lex::TokenKind::Greater) || at(lex::TokenKind::GreaterEqual) ||
+           at(lex::TokenKind::GreaterGreater) || at(lex::TokenKind::GreaterGreaterEqual);
+  }
+  // A closing token that no frame can own, reported beside the character to
+  // delete. Every type position and every `::` calls it with what its reader
+  // returned, so one sentence covers all of them and none of them stays silent.
+  void reportUnusedListClose(ListClose close);
   // The part after the closing `)`: a block for a definition, `;` for an
   // `extern` declaration, and a diagnostic for either of the two wrong
   // combinations.
@@ -212,12 +267,24 @@ public:
   // zero-width node of that kind.
   void parseForClause(SyntaxKind wrapper);
   void parseJumpStmt(SyntaxKind kind);
-  void parseType(); // type-only position (after `:`)
-  // One run of a type position: the constructors, the words, and the `(T, U)`
-  // groups, stopping at the first token that cannot continue a type. Shared by a
-  // whole position and by one member of a product, which is why it is not folded
-  // into `parseType` (`tuples.md`, decision 15).
-  void parseTypeRun();
+  // A type-only position (after `:`).
+  //
+  // Returns what the type's closing token consumed beyond itself. Only the
+  // caller knows whether an `=` belongs there -- `let p: Pair<i32, bool>= t;`
+  // wants it, a parameter does not -- so the reader reports it and the caller
+  // decides. A `>>` that lands with no enclosing list is reported here, where
+  // the absence is known.
+  [[nodiscard]] ListClose parseType();
+  // One run of a type position: the constructors, the words, the `(T, U)`
+  // groups, and the `<...>` argument lists, stopping at the first token that
+  // cannot continue a type. Shared by a whole position and by one member of a
+  // product, which is why it is not folded into `parseType` (`tuples.md`,
+  // decision 15).
+  //
+  // A run is a pure conduit for a compound closer: what a list inside it reports
+  // travels up unchanged, and stops the run, because the frame the report is
+  // about encloses the run.
+  [[nodiscard]] ListClose parseTypeRun();
   // `(T, U)`: a product. Its members are runs, so this is the one place the type
   // grammar is recursive, and it is guarded like the expression grammar is.
   void parseTypeGroup();

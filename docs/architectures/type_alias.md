@@ -469,10 +469,14 @@ above is written the way it is.
   1.18, generic aliases in 1.24. Because identity here is structural and an alias
   carries none, instantiation adds no identity problem — only spelling, which is
   the LSP's and the debugger's problem again. The only thing to do now is leave
-  the *parser* able to grow a parameter list between the name and the `=` (the
-  production above is written with that slot in mind), and to keep the reader
-  taking a *table of names* rather than a single name, so a future instantiation
-  is one more table entry and not a new reader.
+  the *parser* able to grow a parameter list between the name and  the `=` (the production above is written with that slot in mind), and to keep
+  the reader taking a *table of names* rather than a single name, so a future
+  instantiation is one more table entry and not a new reader. **Both slots were
+taken exactly as written**, and that record now exists:
+  [`generics.md`](generics.md) — a binder is one more row in the table this file
+  put in the reader, and `type Pair<T, K> = (T, K);` instantiated at
+  `<i32, bool>` is the type `(i32, bool)`, so decision 2 above carries one step
+  and `TypeStore::count()` still does not move.
 - **A C header's `typedef`** (`cinterop`, `extern.md`). Different door, different
   rules: C's names are in the ordinary namespace and C's identical-redefinition
   allowance applies there. Nothing in this record prevents that; the one thing it

@@ -222,12 +222,20 @@ void Parser::parseBinding() {
     name.complete(SyntaxKind::Name);
   }
 
+  // `let p: Pair<i32, bool>= v;` writes the type's `>` and the binding's `=` as
+  // **one** token, and the type reader reports it by value: the closer consumed
+  // it, so this is the frame that owns the `=` -- and the frame that must not ask
+  // for a second one (`generics.md`, decision 4).
+  bool wroteEqual = false;
   if (at(lex::TokenKind::Colon)) {
     bump();
-    parseType();
+    wroteEqual = parseType().sawEqual;
   }
-  if (at(lex::TokenKind::Equal)) {
+  if (!wroteEqual && at(lex::TokenKind::Equal)) {
     bump();
+    wroteEqual = true;
+  }
+  if (wroteEqual) {
     // A `{` here is the C habit of bracing the initializer -- `let a: [3]i32 =
     // {1, 2, 3};` -- and it is the one position where the reading is not
     // ambiguous: after `=` there is no block, so the token has exactly one

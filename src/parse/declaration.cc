@@ -45,6 +45,10 @@ void Parser::parseFnDecl(bool isExtern, bool isStatic) {
   }
   expect(lex::TokenKind::KwFn);
   parseTypeAndName();
+  // `fn T identity<T>(v: T)`: the binders, after the name and before the
+  // parameter list. The scan above stopped at the `<` on purpose and left it in
+  // the stream, because the list is its own node and not part of the name.
+  reportUnusedListClose(parseGenericParams());
   expect(lex::TokenKind::LParen);
   parseParamList(/*allowVariadic=*/isExtern);
   expect(lex::TokenKind::RParen);
@@ -185,7 +189,7 @@ void Parser::parseParam() {
     bump();
     name.complete(SyntaxKind::Name);
     bump(); // `:`
-    parseType();
+    reportUnusedListClose(parseType());
   } else {
     // Two ways to be here, and they are worth telling apart: one identifier run
     // with no colon is a type somebody forgot to name, while two or more is the
@@ -248,12 +252,60 @@ struct TypeRunScan {
   // word -- the name of a function is the last word of the run, and a product is
   // one word.
   std::uint32_t words = 0;
-  // One past the last word.
-  std::uint32_t lastWordEnd = 0;
+  // The index of the last word's **first token** -- the name of the declaration.
+  // Everything before it is the type, and it is deliberately not "one past the
+  // word": `identity<T>` is *one* word whose name is `identity`, and the list
+  // that follows the identifier is the declaration's, not the word's.
+  std::uint32_t nameStart = 0;
   // That last word was a `(T, U)` group and not an identifier: a run that ends
   // this way has no name in it, and the reader has to say so.
   bool lastWordIsGroup = false;
 };
+
+// One past the `>` that closes the argument list whose `<` is at `open`, walking
+// the four spellings a closer has.
+//
+// The *rule* of closing -- which tokens close one list, and which close two -- is
+// `Parser::closeList`'s, and this is the lookahead's copy of it, because a scan
+// cannot parse. The two are held together by a test that runs every spelling
+// through both: a drift here reads the name of a declaration from the wrong
+// token, which is the one mistake this scan exists to prevent.
+[[nodiscard]] static std::uint32_t skipTypeArgList(const Parser& parser, std::uint32_t open) {
+  // `open` indexes the `<`, so the first iteration is what depth 1 means.
+  std::uint32_t i = open;
+  std::int32_t depth = 0;
+  while (true) {
+    const lex::TokenKind kind = parser.nth(i);
+    if (kind == lex::TokenKind::EndOfFile) {
+      // Unterminated. The reader below is the one that reports it, with the span
+      // of the `<` to point at; the scan only has to stop somewhere.
+      return i;
+    }
+    std::int32_t closed = 0;
+    switch (kind) {
+    case lex::TokenKind::Less:
+      ++depth;
+      break;
+    case lex::TokenKind::Greater:
+    case lex::TokenKind::GreaterEqual:
+      closed = 1;
+      break;
+    case lex::TokenKind::GreaterGreater:
+    case lex::TokenKind::GreaterGreaterEqual:
+      closed = 2;
+      break;
+    default:
+      break;
+    }
+    if (closed != 0) {
+      depth -= closed;
+      if (depth <= 0) {
+        return i + 1;
+      }
+    }
+    ++i;
+  }
+}
 
 [[nodiscard]] static TypeRunScan scanTypeRun(const Parser& parser) {
   TypeRunScan run;
@@ -268,11 +320,22 @@ struct TypeRunScan {
         // reader below splits the run the same way it splits `fn i32 f()`.
         kind == lex::TokenKind::Bang) {
       if (kind == lex::TokenKind::Identifier) {
-        // The one place a *word* is counted, so "how many words" and "where does
-        // the last one end" cannot disagree.
+        // The one place a *word* is counted, so "how many words" and "where the
+        // name starts" cannot disagree.
         run.words += 1;
-        run.lastWordEnd = tokens + 1;
+        run.nameStart = tokens;
         run.lastWordIsGroup = false;
+        ++tokens;
+        // `<...>`, the list attached to this word: **part of the word**, and the
+        // reason `fn Vec<i32> f()` does not read `i32` as the name. In a
+        // declaration a `<` after a word has no other reading -- the run ends at
+        // the `(` of the parameter list, so there is no expression for it to be
+        // a comparison of -- which is what lets the scan take it without asking
+        // what is inside.
+        if (parser.nth(tokens) == lex::TokenKind::Less) {
+          tokens = skipTypeArgList(parser, tokens);
+        }
+        continue;
       }
       ++tokens;
       continue;
@@ -314,7 +377,10 @@ struct TypeRunScan {
         }
       }
       run.words += 1;
-      run.lastWordEnd = tokens;
+      // The group is one word and this is the token after it. When nothing
+      // follows, `lastWordIsGroup` is true and the reader reports the missing
+      // name instead of reading this index.
+      run.nameStart = tokens;
       run.lastWordIsGroup = true;
       continue;
     }
@@ -352,10 +418,15 @@ void Parser::parseTypeAndName() {
   // the only token that separates them from the rest of the declaration is `(`.
   // So the last identifier before `(` is the name and everything before it --
   // stars included -- is the type.
+  //
+  // A `<...>` list attached to a word is part of that word, and the *name* is the
+  // word's first token: `fn Vec<i32> f<T>()` is the type `Vec<i32>` and the name
+  // `f`, with `<T>` left in the stream for `parseGenericParams`. Nothing after
+  // the name is consumed here, because the binders are their own node.
   const TypeRunScan run = scanTypeRun(*this);
   const std::uint32_t tokens = run.tokens;
   const std::uint32_t words = run.words;
-  const std::uint32_t lastWord = run.lastWordEnd;
+  const std::uint32_t nameStart = run.nameStart;
 
   if (run.lastWordIsGroup) {
     // The run ends in a `(T, U)` and holds no identifier after it, so there is no
@@ -375,7 +446,7 @@ void Parser::parseTypeAndName() {
     return;
   }
 
-  if (words == 1 && lastWord <= 1) {
+  if (words == 1 && nameStart == 0) {
     // `fn name()` -- a name with no return type. Report the type, not the name,
     // because the name is the part that is definitely there.
     error("expected a return type before the function name", ParseErrorCode::ExpectedType);
@@ -408,7 +479,7 @@ void Parser::parseTypeAndName() {
   }
 
   Marker type = start();
-  for (std::uint32_t i = 0; i + 1 < lastWord; ++i) {
+  for (std::uint32_t i = 0; i < nameStart; ++i) {
     bump();
   }
   type.complete(SyntaxKind::Type);
@@ -470,36 +541,208 @@ void Parser::parseTypeAlias() {
   }
   name.complete(SyntaxKind::Name);
 
-  expect(lex::TokenKind::Equal);
+  // `type Pair<T, K> = (T, K);`: the binders, between the name and the `=`. The
+  // one token that can stand here is `<`, so this asks for the list and gets an
+  // empty answer when the alias is not generic.
+  const ListClose binders = parseGenericParams();
+  if (!binders.sawEqual) {
+    // `type Pair<T>= (T, K);` writes the `>` and the `=` as one token, and the
+    // list has already consumed it as the `=` of the alias.
+    expect(lex::TokenKind::Equal);
+  }
+  reportUnusedListClose(ListClose{.closedParent = binders.closedParent});
   // The type is read even when the `=` was missing: one mistake, one sentence,
   // and the tree keeps the shape a reader wrote so nothing below has to guess at
   // what was meant.
-  parseType();
+  reportUnusedListClose(parseType());
   expect(lex::TokenKind::Semicolon);
   decl.complete(SyntaxKind::TypeAliasDecl);
 }
 
-void Parser::parseType() {
+// `<T, K>`: the binders of a declaration (`generics.md`).
+//
+// The list holds **names** and nothing else today. A constraint -- `T: Ordered`
+// -- takes the `:` of every other binding, and its slot is deliberately not read
+// here yet: syntax that parses and is then ignored would let a declaration claim
+// a constraint the checker does not enforce, and an unenforced constraint is
+// worse than a missing one. The constraint arrives with its enforcement.
+ListClose Parser::parseGenericParams() {
+  // A `<` in this position is a binder list and nothing else, which is the
+  // grammar's doing rather than a convention: the *type* is what precedes the
+  // name, so `fn i32 f<T>(` cannot read the `<` as part of a return type. When
+  // the token is not `<` nothing is read, which is what lets `fn` and `type` call
+  // this unconditionally.
+  if (!at(lex::TokenKind::Less)) {
+    return {};
+  }
+  Marker list = start();
+  bump(); // `<`
+  while (!bailedOut_ && !atEnd()) {
+    if (!at(lex::TokenKind::Identifier)) {
+      // Two readers land here, and which one it is changes the sentence. `<>` is
+      // a list that binds nothing: a generic declaration with no parameter is the
+      // declaration it already was, and the empty list cannot be told from the
+      // *closer* by shape, so it is named here rather than left to "expected a
+      // name" at a `>` that is in fact the right character. Anything else is a
+      // slot with a name missing from it.
+      error(atListCloser() ? "a binder list holds at least one name: write `<T>`"
+                           : "expected the name of a binder",
+            ParseErrorCode::ExpectedName);
+      break;
+    }
+    Marker name = start();
+    bump();
+    name.complete(SyntaxKind::Name);
+    if (at(lex::TokenKind::Colon)) {
+      // `T: Ordered`: the constraint slot. The `:` and the class name are
+      // consumed here, so the list can still close and one slip costs one
+      // sentence instead of a cascade from every token after it -- and the
+      // refusal is *named*, because silently ignoring a constraint would leave a
+      // declaration claiming a guarantee no stage checks.
+      error("a constraint on a binder is not read yet: write the binder alone (`<T>`)",
+            ParseErrorCode::ConstraintNotRead);
+      bump(); // `:`
+      // The class name is spelled exactly like a type, so the type reader is what
+      // consumes it -- and what would consume its own `<...>` when a class takes
+      // arguments.
+      static_cast<void>(parseTypeRun());
+    }
+    if (at(lex::TokenKind::Comma)) {
+      bump();
+      continue;
+    }
+    break;
+  }
+  const ListClose close = closeList();
+  list.complete(SyntaxKind::GenericParams);
+  return close;
+}
+
+// `<i32, bool>`: the arguments of a use, in a type run or behind `::`.
+ListClose Parser::parseTypeArgList() {
+  // Precondition: the current token is `<`.
+  Marker list = start();
+  bump(); // `<`
+  bool first = true;
+  while (!bailedOut_ && !atEnd() && isTypeStart(current())) {
+    // The argument's run is read by the same function a whole type position uses,
+    // so an argument cannot accept a type the rest of the language refuses, and
+    // `<>` cannot nest deeper than a type can. It is wrapped in a `Type` node,
+    // because an argument is a type *written in a type position* and every reader
+    // below asks for one by kind (`generics.md`).
+    Marker argument = start();
+    const ListClose close = parseTypeRun();
+    argument.complete(SyntaxKind::Type);
+    first = false;
+    if (close.closedParent) {
+      // The list inside the argument was closed by a **compound** closer, so this
+      // list is closed as well and there is no closer left to read. The bit is
+      // consumed here, because this is the frame it is about; the `=` travels on
+      // to whoever owns it.
+      list.complete(SyntaxKind::TypeArgList);
+      return ListClose{.sawEqual = close.sawEqual};
+    }
+    if (at(lex::TokenKind::Comma)) {
+      bump();
+      continue;
+    }
+    break;
+  }
+  if (first) {
+    // `<>`, and the same shape with a non-type token after the `<`. One sentence
+    // for both, naming the written form, because the mistake is the same one: the
+    // list has a slot with nothing in it.
+    error("expected the type of an argument: a list is written `<i32, bool>`",
+          ParseErrorCode::ExpectedType);
+  }
+  const ListClose close = closeList();
+  list.complete(SyntaxKind::TypeArgList);
+  return close;
+}
+
+// The `>` that closes a list -- and the two characters a compound token carries
+// beyond it (`generics.md`, decision 4).
+ListClose Parser::closeList() {
+  switch (current()) {
+  case lex::TokenKind::Greater:
+    bump();
+    return {};
+  case lex::TokenKind::GreaterEqual:
+    // `>=`: one list, and the `=` some declaration is asking for.
+    // `let p: Pair<i32, bool>= t;` is the spelling this exists for.
+    bump();
+    return ListClose{.sawEqual = true};
+  case lex::TokenKind::GreaterGreater:
+    // `>>`: `Grid<Grid<f64>>`, one token and two lists. The second belongs to the
+    // enclosing list, which is why this is a return value and not a flag: the
+    // frame that owns it is several calls up, and the calls in between are the
+    // type grammar's own recursion.
+    bump();
+    return ListClose{.closedParent = true};
+  case lex::TokenKind::GreaterGreaterEqual:
+    // `>>=`: two lists and the `=`. Spelled together, and never by accident:
+    // `A<B<C>>= t` is exactly what the reader means.
+    bump();
+    return ListClose{.closedParent = true, .sawEqual = true};
+  default:
+    error("expected `>` to close this list of type arguments",
+          ParseErrorCode::ExpectedTypeArgClose);
+    // A zero-width `>` so the node's shape does not depend on whether the reader
+    // wrote the closer -- the same answer `expect` gives a missing token.
+    token(toSyntaxKind(lex::TokenKind::Greater), /*missing=*/true);
+    return {};
+  }
+}
+
+void Parser::reportUnusedListClose(ListClose close) {
+  if (close.closedParent) {
+    // `A<B>>` where one `>` was enough: the extra character is the mistake, and
+    // the sentence says how many a list needs.
+    error("one `>` closes each list of type arguments: the extra one written here closes "
+          "nothing",
+          ParseErrorCode::StrayTypeArgClose);
+    return;
+  }
+  if (close.sawEqual) {
+    // `>=` typed where only `>` belongs. Named because the two characters are one
+    // token, so "expected `>`" would point at a `>` the reader did write, and the
+    // fix is to separate them.
+    error("this `=` is not part of the type: `>=` is `>` and then `=`",
+          ParseErrorCode::StrayTypeArgClose);
+  }
+}
+
+ListClose Parser::parseType() {
   Marker type = start();
   if (!isTypeStart(current())) {
     error("expected a type", ParseErrorCode::ExpectedType);
     type.complete(SyntaxKind::Type);
-    return;
+    return {};
   }
   // In an annotation (`x: T`) there is no trailing name to separate, so the
   // whole run is the type. `!` is accepted here too, and refused one stage later
   // where the position is known: this stage answers "what shape is written", and
   // `let x: !` is a shape -- a wrong one, with a sentence about why, produced by
   // the only stage that knows an object cannot have that type (`never.md`).
-  parseTypeRun();
+  ListClose close = parseTypeRun();
   type.complete(SyntaxKind::Type);
+  // A `>>` here closed a list this position does not have: `A<B>>` is one `>`
+  // too many, and this is the frame that knows there is no enclosing list. What
+  // survives is the `=`, which *does* belong to the declaration around the type
+  // (`let p: Pair<i32, bool>= t;`) and which only that frame can consume.
+  if (close.closedParent) {
+    reportUnusedListClose(close);
+    close.closedParent = false;
+  }
+  return close;
 }
 
-void Parser::parseTypeRun() {
-  // One run, from the current token: the constructors, the words, and the groups.
-  // It stops at the first token that cannot continue a type, which is what makes
-  // it reusable both for a whole position and for one member of a product -- the
-  // member's run ends at a `,` or a `)` and needs no second loop.
+ListClose Parser::parseTypeRun() {
+  // One run, from the current token: the constructors, the words, the groups, and
+  // the `<...>` lists. It stops at the first token that cannot continue a type,
+  // which is what makes it reusable both for a whole position and for one member
+  // of a product -- the member's run ends at a `,` or a `)` and needs no second
+  // loop.
   while (!bailedOut_ && !atEnd()) {
     if (at(lex::TokenKind::Identifier) || at(lex::TokenKind::Star) || at(lex::TokenKind::Bang)) {
       bump();
@@ -513,8 +756,24 @@ void Parser::parseTypeRun() {
       parseTypeGroup();
       continue;
     }
+    if (at(lex::TokenKind::Less)) {
+      // `<i32, bool>`: the argument list of the word just read. A type position
+      // has no expression in it, so a `<` after a word has exactly one meaning
+      // here -- which is the whole reason the ambiguity that costs C++ a space in
+      // `>>=` does not exist in this position.
+      //
+      // A run is a **conduit**: what a list reports is handed up unchanged, and
+      // the run stops, because the list that compound closer closed encloses this
+      // run. Consuming the bit here would lose it for the frame that needs it.
+      const ListClose close = parseTypeArgList();
+      if (close.any()) {
+        return close;
+      }
+      continue;
+    }
     break;
   }
+  return {};
 }
 
 void Parser::parseTypeGroup() {
@@ -548,7 +807,10 @@ void Parser::parseTypeGroup() {
               ParseErrorCode::ExpectedType);
         break;
       }
-      parseTypeRun();
+      // A member is a run, so it can carry a list of arguments -- and a compound
+      // closer inside it would be closing a list that this group is not, which is
+      // reported beside the extra character.
+      reportUnusedListClose(parseTypeRun());
       if (at(lex::TokenKind::Comma)) {
         bump();
         if (at(lex::TokenKind::RParen)) {

@@ -41,6 +41,11 @@ std::string_view toString(TypeKind kind) {
     return "slice";
   case TypeKind::Tuple:
     return "tuple";
+  case TypeKind::Param:
+    // The kind's name, like `never` above: `spelling()` is what prints the
+    // binder's own spelling (`T`) in a diagnostic, and this one is for a reader
+    // of the implementation.
+    return "param";
   }
   return "unknown";
 }

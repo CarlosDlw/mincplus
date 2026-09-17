@@ -17,7 +17,7 @@ struct NodeKindInfo {
   const char* name;
 };
 
-constexpr std::array<NodeKindInfo, 44> kNodeKindInfos{{
+constexpr std::array<NodeKindInfo, 46> kNodeKindInfos{{
     {SyntaxKind::File, "File"},
     {SyntaxKind::Error, "Error"},
     {SyntaxKind::FnDecl, "FnDecl"},
@@ -63,6 +63,8 @@ constexpr std::array<NodeKindInfo, 44> kNodeKindInfos{{
     {SyntaxKind::ArrayLiteral, "ArrayLiteral"},
     {SyntaxKind::TypedInitializer, "TypedInitializer"},
     {SyntaxKind::TuplePattern, "TuplePattern"},
+    {SyntaxKind::GenericParams, "GenericParams"},
+    {SyntaxKind::TypeArgList, "TypeArgList"},
     {SyntaxKind::MacroCall, "MacroCall"},
     {SyntaxKind::TokenTree, "TokenTree"},
     {SyntaxKind::Attribute, "Attribute"},

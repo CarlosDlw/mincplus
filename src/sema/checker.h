@@ -104,6 +104,11 @@ private:
 
   // --- declarations and statements ------------------------------------------
 
+  // Does the unit declare anything generic? True means the walk stops before a
+  // declaration is read: the binder list is the parser's and not this stage's
+  // yet, and checking a body against a binder with no type would produce one
+  // sentence per use (`generics.md`, decision 4).
+  bool hasGenericDeclaration();
   void runSignatures();
   void checkFunction(const FunctionInfo& info);
   void checkBody(ast::AstId block, TypeId returnType);
@@ -597,7 +602,17 @@ private:
     // come from: a name has no other definition to read.
     ast::AstId target;
     resolve::DefId def;
+    // For a generic name this is the **template** -- the target with `Param`s in
+    // it -- which no stage below this reader ever sees: a use substitutes into it
+    // and the substitution is a type the store already has (`generics.md`,
+    // decision 8).
     TypeId type = kInvalidType;
+    // How many binders the declaration wrote, and the node those binders belong
+    // to -- the `owner` half of every `Param`'s identity. Zero binders is a name
+    // for one type, and the pass treats the two the same way until a *use* says
+    // which one it is.
+    std::uint32_t binders = 0;
+    std::uint32_t owner = 0;
   };
 
   // What a declaration's name stands for: reads the target with the names in scope

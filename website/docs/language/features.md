@@ -91,6 +91,16 @@ first-class types; the examples use the primitive names. See
       [`docs/architectures/tuples.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/tuples.md);
       generics come **after** it, because a binder list is itself a sequence of
       pairs and the store gained arity-unknown interning here
+- [ ] Generics `<T>` — **a generic `type` works today** (a use substitutes into
+      the declaration, so `Pair<i32, bool>` *is* `(i32, bool)`) and a generic `fn`
+      is the next stage, refused until then with one sentence. A binder list after
+      the name being declared
+      (`fn T identity<T>(value: T)`, `type Pair<T, K> = (T, K);`), plain `<...>`
+      in a type position and `::<...>` at a call site, inference from the
+      arguments and the expected type, compiler-known capability constraints
+      (`Num`, `Int`, `Float`, `Ordered`, `Eq`, `Any`), and one function plus one
+      debug record per instantiation. See
+      [`docs/architectures/generics.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/generics.md)
 - [ ] `struct`
 - [ ] `union`
 - [ ] `enum` constants and tagged unions `[?]`

@@ -111,8 +111,44 @@ bool Checker::decideAlias(AliasBinding& binding) {
     binding.type = kInvalidType;
     return true;
   }
-  const TypeSpecResult spec =
-      readType(typeParts(binding.target), types_, aliasNames_, std::nullopt);
+  // `type Pair<T, K> = (T, K);`: a **generic** name (`generics.md`).
+  //
+  // A binder is a name that stands for a type, which is exactly what a row of
+  // this table already is -- so the target is read with one extra row per binder
+  // pushed on the stack the shadowing rule already has, and nothing else about
+  // this pass changes. What comes out is the *template*: the target with `Param`s
+  // in it. A use with arguments substitutes into it, and the substituted type is
+  // a type the store already has, so `Pair<i32, bool>` *is* `(i32, bool)` and the
+  // check is an id equality (decision 8).
+  //
+  // The owner of those parameters is the binder list's own node, which is unique
+  // in the unit and stable for as long as it is being checked -- and which is what
+  // keeps two declarations that both call their binder `T` from sharing a type.
+  std::vector<TypeName> scope;
+  if (const ast::AstId params = childOf(binding.decl, ast::NodeKind::GenericParams);
+      params.valid()) {
+    binding.owner = params.index;
+    scope.assign(aliasNames_.begin(), aliasNames_.end());
+    for (const ast::AstId binder : file_.childrenOf(params)) {
+      if (kindOf(binder) != ast::NodeKind::Name) {
+        continue;
+      }
+      const std::string_view written = spelling(binder);
+      if (written.empty()) {
+        continue;
+      }
+      const TypeId parameter = types_.param(binding.owner, binding.binders, written);
+      // The row says `binders == 0` on purpose: a binder is not a generic name of
+      // its own, so `T<i32>` is a use of a name that takes no arguments and the
+      // reader says so.
+      scope.push_back(TypeName{written, parameter, kNoAliasRow});
+      ++binding.binders;
+    }
+  }
+  const std::span<const TypeName> names = binding.binders == 0
+                                              ? std::span<const TypeName>(aliasNames_)
+                                              : std::span<const TypeName>(scope);
+  const TypeSpecResult spec = readType(typeParts(binding.target), types_, names, std::nullopt);
   binding.type = spec.ok ? spec.type : kInvalidType;
   if (!spec.ok) {
     // The reader's own sentence, reported at the type position it is about: an
@@ -178,7 +214,8 @@ void Checker::checkBlockAlias(ast::AstId decl) {
   aliases_.push_back(binding);
   publishAlias(binding);
   if (publishable && !word.empty()) {
-    aliasNames_.push_back(TypeName{word, binding.type, static_cast<std::uint32_t>(index)});
+    aliasNames_.push_back(TypeName{word, binding.type, static_cast<std::uint32_t>(index),
+                                   binding.binders, binding.owner});
   }
 }
 
@@ -262,9 +299,12 @@ void Checker::runAliases() {
     const std::string_view written = spelling(nameNode);
     if (!written.empty()) {
       // The row carries the declaration it came from, and the index is this
-      // pass's own: the table published below is this vector in this order.
-      aliasNames_.push_back(
-          TypeName{written, aliases_[index].type, static_cast<std::uint32_t>(index)});
+      // pass's own: the table published below is this vector in this order. A
+      // generic name also carries its binder count and the id of the declaration
+      // those binders belong to, which is what a *use* substitutes with.
+      aliasNames_.push_back(TypeName{written, aliases_[index].type,
+                                     static_cast<std::uint32_t>(index), aliases_[index].binders,
+                                     aliases_[index].owner});
     }
   };
 

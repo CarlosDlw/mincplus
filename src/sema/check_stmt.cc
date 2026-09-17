@@ -343,6 +343,38 @@ void Checker::typePartsInto(std::span<const ast::AstId> children, std::size_t& i
       ++i;
       continue;
     }
+    // `A<i32, bool>`: the arguments of the word to the left (`generics.md`). The
+    // list is a node of its own in the tree -- which is what keeps a use's `<...>`
+    // apart from a product or a parenthesised group -- so this is where it is
+    // attached to the word it belongs to, and the reader below sees one *part* per
+    // use. Each argument is a type position like any other, so it is read by this
+    // same function.
+    if (kindOf(child) == ast::NodeKind::TypeArgList) {
+      TypePart use;
+      use.hasArgs = true;
+      for (const ast::AstId argument : file_.childrenOf(child)) {
+        if (kindOf(argument) != ast::NodeKind::Type) {
+          continue;
+        }
+        std::vector<TypePart> one;
+        std::size_t at = 0;
+        typePartsInto(file_.childrenOf(argument), at, depth + 1, one);
+        use.args.push_back(std::move(one));
+      }
+      // Attached to the word on its left, which the grammar guarantees is there.
+      // A list that arrived alone is still read -- as a part with no word, which
+      // the reader answers with a sentence rather than with a lookup of the empty
+      // name.
+      if (!parts.empty() && !parts.back().word.empty() && !parts.back().hasArgs &&
+          !parts.back().isTuple) {
+        parts.back().hasArgs = true;
+        parts.back().args = std::move(use.args);
+      } else {
+        parts.push_back(std::move(use));
+      }
+      ++i;
+      continue;
+    }
     // The punctuators a type position can hold: `*`, `!` and one `[N]` group.
     // Anything else the builder left inside the type node is not part of a type,
     // and the grammar accepted nothing else here either -- so it is skipped
@@ -744,6 +776,19 @@ SemaOutput Checker::run() {
   out_.typed.typeTable.assign(file_.nodeCount(), kTypeError);
   out_.typed.exprFacts.assign(file_.nodeCount(), ExprInfo{});
 
+  // A binder list is read by the parser and by nothing here yet: the type model
+  // has no `Param` in it, so every use of `T` would be an unknown name and the
+  // note would suggest a type one edit away (`generics.md`, decision 4). One
+  // sentence for the unit, before a declaration is read, is the honest answer --
+  // and the sweeps below still run, so the artifact keeps the shape every other
+  // unit's artifact has and a stage that reads it anyway finds nothing
+  // half-built.
+  if (hasGenericDeclaration()) {
+    decideDeferredTypes();
+    out_.typed.buildCoercionIndex(file_.nodeCount());
+    return std::move(out_);
+  }
+
   // The unit's type names first, before anything that reads a type: a signature
   // may be written with a name declared below it, and a pass that ran after the
   // signatures would have to make them all wait for it (`type_alias.md`,
@@ -769,6 +814,29 @@ SemaOutput Checker::run() {
   // makes the lowering's lookup a constant-time question.
   out_.typed.buildCoercionIndex(file_.nodeCount());
   return std::move(out_);
+}
+
+bool Checker::hasGenericDeclaration() {
+  for (const ast::AstId decl : operandsOf(file_.root())) {
+    if (inError(decl) || kindOf(decl) != ast::NodeKind::FnDecl) {
+      continue;
+    }
+    // A `type` with binders is read: its target is a template and every *use*
+    // substitutes into it, which is a type the store already has. A `fn` with
+    // binders is the next stage -- its parameters and its body need the binder in
+    // scope, and its instantiations are functions the lowering builds -- so a unit
+    // that declares one is answered once, here, instead of once per use of `T`.
+    const ast::AstId params = childOf(decl, ast::NodeKind::GenericParams);
+    if (!params.valid()) {
+      continue;
+    }
+    error(params, SemaErrorCode::GenericsNotRead,
+          "a binder list on a function is not read yet: this stage does not instantiate a "
+          "function's type parameters. A generic `type` is read, and a generic `fn` is the "
+          "next stage");
+    return true;
+  }
+  return false;
 }
 
 void Checker::runSignatures() {

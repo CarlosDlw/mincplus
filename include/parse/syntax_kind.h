@@ -165,6 +165,25 @@ enum class SyntaxKind : std::uint16_t {
   // which one a reader wrote so no later stage has to guess.
   TuplePattern,
 
+  // `<T, K>`: the binders of a declaration, written after the name being declared
+  // and before its parameter list (`fn T identity<T>(v: T)`) or its `=`
+  // (`type Pair<T, K> = (T, K);`). Children are `<`, one `Name` per binder, the
+  // commas between them, and `>`.
+  //
+  // The position is the same in both productions because the same token decides
+  // it: a *type* run is what precedes the name, so a `<` after a name can only be
+  // a binder list (`generics.md`, decision 1).
+  GenericParams,
+  // `<i32, bool>`: the arguments of a **use**, inside a type run
+  // (`Pair<i32, bool>`) or behind the `::` of an explicit call
+  // (`makePair::<i32, bool>(...)`). Children are `<`, one `Type` per argument, the
+  // commas, and `>`.
+  //
+  // The arguments are `Type` nodes and not expressions, even when a value binder
+  // arrives later: an argument is a type written in a type position, and the
+  // reader that resolves it is the one that resolves every other type.
+  TypeArgList,
+
   // Reserved: names are fixed now, the syntax that produces them is not.
   MacroCall,
   TokenTree,

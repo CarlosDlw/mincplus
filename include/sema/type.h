@@ -98,6 +98,22 @@ enum class TypeKind : std::uint8_t {
   // `struct`, and that is a nominal kind when it lands -- it must not be this
   // one with a flag.
   Tuple,
+  // A **type parameter**: the `T` of `fn T identity<T>(value: T)` and of
+  // `type Pair<T, K> = (T, K);` (`generics.md`).
+  //
+  // It has identity of its own -- `(owner, binder)` and not its structure -- for
+  // the one reason a structural store needs a nominal kind: `T` of one
+  // declaration and `T` of another are *not* the same type, and a spelling is
+  // not enough to tell them apart (two functions may each call their binder
+  // `T`). The spelling is kept beside the identity because a diagnostic prints
+  // it and it has no other source.
+  //
+  // A `Param` is what a signature holds *before* an instantiation. It is not a
+  // value type: it has no width, so it cannot be stored, cannot be an array's
+  // element, and reaching the lowering is an internal error -- the record's
+  // invariant, because instantiation substitutes every one of them before a
+  // module is built.
+  Param,
 };
 
 [[nodiscard]] std::string_view toString(TypeKind kind);
@@ -134,6 +150,19 @@ struct Type {
   bool variadic = false;
   // Reserved: a named type (`struct S`, a typedef).
   support::SymId name = support::kInvalidSym;
+  // Param: **the identity**, which is `(owner, binder)` and not the structure.
+  //
+  // The owner is the declaring node's id in the unit's tree, which is stable for
+  // as long as a unit is being checked and unique within it -- and a unit is the
+  // scope a `TypeStore` has today. Two declarations that both call their binder
+  // `T` get two types, which is the whole point of a nominal kind here.
+  std::uint32_t owner = 0;
+  std::uint32_t binder = 0;
+  // Param: what a diagnostic prints (`T`). Deliberately **not** part of the
+  // identity: the identity is the pair above, and two binders with the same
+  // spelling in two declarations are still two types. The view is owned by the
+  // store's spelling pool, which never moves or shrinks an entry.
+  std::string_view paramSpelling;
 };
 
 // --- the well-known types ----------------------------------------------------

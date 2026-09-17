@@ -182,6 +182,12 @@ void collectWords(std::span<const TypePart> parts, std::vector<std::string_view>
     if (!part.word.empty()) {
       out.push_back(part.word);
     }
+    // The arguments of a use are names this run mentions: `type A = Pair<B, i32>;`
+    // depends on `B` exactly as `type A = *B;` does, and a walk that skipped them
+    // would decide `A` before `B` and then fail to read it.
+    for (const std::vector<TypePart>& argument : part.args) {
+      collectWords(argument, out);
+    }
   }
 }
 
@@ -282,7 +288,13 @@ TypeSpecResult applyConstructors(const TypeSpecResult& base,
                   "` cannot be an array element: an element has to be a type that can be "
                   "stored");
     }
-    if (!types.arraySize(result, count).has_value()) {
+    // An element with no width *yet* -- a type parameter, or a product holding
+    // one -- skips the arithmetic: `[4]T` is a perfectly good array *type*, and
+    // the number the refusal is about is the argument's, which is not known until
+    // the declaration is instantiated. `substitute` builds the result through
+    // `arrayOf`, so the arithmetic is applied to the type that reaches a module
+    // (`generics.md`, decision 8).
+    if (!types.hasUnknownSize(result) && !types.arraySize(result, count).has_value()) {
       return fail("an array of " + std::to_string(count) + " `" + types.spelling(result) +
                   "` is larger than this target can address");
     }
@@ -325,6 +337,10 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
   std::vector<std::string_view> words;
   words.reserve(parts.size());
   const TypePart* tuplePart = nullptr;
+  // The base a use of a generic name produced, already substituted. Set in the
+  // loop above and applied with the constructors below, exactly like a product's
+  // base -- the two are the only bases a run can have.
+  TypeId usedBase = kInvalidType;
   bool sawWord = false;
   for (const TypePart& part : parts) {
     if (part.isStar || part.isArray) {
@@ -371,8 +387,82 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
       return fail("`(T, U)` is a whole type: it cannot be combined with a type name in the "
                   "same type position");
     }
+    if (part.hasArgs) {
+      // `Pair<i32, bool>`: a **use** of a generic name (`generics.md`).
+      //
+      // It is a base of the run and not a prefix over it, for the same reason a
+      // product is: the substitution produces a whole type, so `*Pair<i32, bool>`
+      // is a pointer to one and there is no half-built state for a constructor to
+      // wrap.
+      if (sawWord || usedBase.valid()) {
+        return fail("a type with arguments is one type: it cannot be combined with another "
+                    "type name in the same type position");
+      }
+      if (part.word.empty()) {
+        // Unreachable from the grammar -- a list of arguments is always written
+        // against a name -- and spelled anyway so a tree from somewhere else costs
+        // a sentence and not a wrong lookup of the empty name.
+        return fail("a list of type arguments belongs to a type name: `Pair<i32, bool>`");
+      }
+      // The arguments are type positions of their own, read by this same reader,
+      // so `Pair<i32, Vec<u8>>` nests without a rule of its own.
+      std::vector<TypeId> arguments;
+      arguments.reserve(part.args.size());
+      for (const std::vector<TypePart>& argument : part.args) {
+        TypeSpecResult read = readType(argument, types, names, std::nullopt);
+        if (!read.ok) {
+          // The inner sentence is the whole answer: it names the word that was
+          // wrong, and re-stating it here would be two messages for one mistake.
+          return read;
+        }
+        if (!read.type.valid()) {
+          return brokenName();
+        }
+        arguments.push_back(read.type);
+      }
+      const TypeName* row = findTypeName(names, part.word);
+      if (row == nullptr) {
+        return fail("expected a type name where `" + std::string(part.word) +
+                        "` is: a list of type arguments belongs to a type this unit declared",
+                    part.word);
+      }
+      if (row->binders == 0) {
+        // The name is a type and takes nothing. Named rather than left to "this
+        // is not a type", because the reader wrote a name the unit *has* -- the
+        // mistake is the list, and the fix is to delete it.
+        return fail("`" + std::string(part.word) +
+                    "` takes no type arguments: it is a name for one type, and the `type` that "
+                    "declares it wrote no binders");
+      }
+      if (arguments.size() != row->binders) {
+        return fail("`" + std::string(part.word) + "` takes " + std::to_string(row->binders) +
+                    " type argument" + (row->binders == 1 ? "" : "s") + ", and " +
+                    std::to_string(arguments.size()) + " were written");
+      }
+      if (!row->type.valid()) {
+        // A name whose own expansion failed; reported where it failed.
+        return brokenName();
+      }
+      usedBase = types.substitute(row->type, arguments, row->owner);
+      if (!usedBase.valid()) {
+        // The substitution itself was refused. It is *not* the store's budget,
+        // which reports itself: this is the target's own rules meeting the
+        // arguments -- `[4]T` with `T := void`, or a count whose product does not
+        // fit the address space. A sentence, because the reader wrote something
+        // and nothing else will explain it (`generics.md`, decision 8).
+        return fail("`" + std::string(part.word) +
+                    "` with these arguments has no type: the arguments are substituted into "
+                    "the declaration's target, and the result is refused -- an argument that "
+                    "cannot be stored, or an object this target cannot address");
+      }
+      sawWord = true;
+      continue;
+    }
     sawWord = true;
     words.push_back(part.word);
+  }
+  if (usedBase.valid()) {
+    return applyConstructors(ok(usedBase), constructors, types, inferredCount);
   }
   if (words.empty() && !constructors.empty() && tuplePart == nullptr) {
     // A constructor with nothing under it (`*`, `[4]`). The base reader would
@@ -522,6 +612,18 @@ TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& 
   // expansion failed answers `brokenName`: understood, no type, caller silent.
   if (words.size() == 1) {
     if (const TypeName* const named = findTypeName(names, words.front()); named != nullptr) {
+      if (named->binders != 0) {
+        // A **generic** name written with no arguments. Its template is a type
+        // with `Param`s in it, which is not a type any position may hold, so this
+        // is refused here -- beside the name -- rather than left to fail later
+        // against the first member with a sentence about `T` that the reader never
+        // wrote (`generics.md`, decision 3).
+        return fail("`" + std::string(named->spelling) + "` is generic: it takes " +
+                    std::to_string(named->binders) + " type argument" +
+                    (named->binders == 1 ? "" : "s") +
+                    ", and a generic name is only a type once they are written (`" +
+                    std::string(named->spelling) + "<...>`)");
+      }
       return named->type.valid() ? ok(named->type) : brokenName();
     }
   }

@@ -114,6 +114,18 @@ constexpr CodeCase kCases[] = {
     {"a parenthesised product used as a cast's type",
      "fn i32 main() { let p: (i32, i32) = (1, 2); let x = (i32, i32)p; return 0; }\n",
      ParseErrorCode::CastToProduct},
+    // The closing `>` of a list of type arguments, and the two ways to write it
+    // wrong (`generics.md`). One names the character that is missing; the other
+    // names a character written where it closes nothing -- an extra `>` in a
+    // `>>` that had one list to close too few.
+    {"type argument list with no closer", "fn i32 main() { let x: A<i32 = 1; }\n",
+     ParseErrorCode::ExpectedTypeArgClose},
+    {"one `>` more than there are lists", "fn i32 main() { let x: A<B>> = 1; }\n",
+     ParseErrorCode::StrayTypeArgClose},
+    // The constraint slot, reserved and refused: accepting it would be a generic
+    // promising a guarantee no stage checks.
+    {"a constraint on a binder", "type P<T: Ordered> = (T, T);\n",
+     ParseErrorCode::ConstraintNotRead},
 };
 
 [[nodiscard]] std::string deepInput() {
