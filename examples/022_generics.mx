@@ -22,9 +22,10 @@
 //     function able to call itself at another type.
 //
 // What a binder may **not** do is anything that needs a width: `T` has no size,
-// so `[4]T` has none either until it is substituted, and `T + 1` needs a
-// constraint (`T: Num`) that this stage does not read yet. Both are refusals with
-// a sentence, not answers.
+// so `[4]T` has none either until it is substituted. What it may do with *values*
+// is what its class grants: `T + 1` needs a constraint, and `fn T twice<T>(x: T)`
+// is refused with the sentence that names the class to write. This file is about
+// the binder and its instances; `023_constraints.mx` is about the classes.
 
 type Pair<T, K> = (T, K);
 

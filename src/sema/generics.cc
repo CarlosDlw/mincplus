@@ -22,11 +22,13 @@
 //     body is instantiated with (§ 5). The list is bounded and the bound is a
 //     diagnostic rather than an out-of-memory.
 //
-// What is deliberately not here is *constraints* (§ 6). A binder with no constraint
-// is `Any`: it may be stored, copied, passed, returned and addressed, and every
-// other operation is refused with the sentence that names the fix
-// (`refuseParameter`). Constraints add classes to that one table; they change
-// nothing below it.
+// The **constraints** (§ 6) are the other half, and they are two rules over one
+// table: a binder's class decides what its *body* may do with it (checked here,
+// once, abstractly) and which *type arguments* may fill it (checked when an
+// instance is made). A binder with no written constraint is `Any`, which grants no
+// operation and admits every type -- so `<T>` means exactly what it meant before
+// classes existed, and every refusal that used to say "constraints are the next
+// stage" now says which word to write.
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -56,12 +58,61 @@ namespace {
 
 std::uint32_t Checker::pushBinderRows(ast::AstId params, std::uint32_t owner,
                                       std::vector<TypeName>& out) {
-  std::uint32_t count = 0;
   if (!params.valid()) {
     return 0;
   }
+  // The declaration's binders are read **once**, and every later entry -- the body
+  // pass after the signature pass, which is the pair this exists for -- is answered
+  // from the table rather than from the tree. Two consequences, and both are the
+  // reason: a constraint fault is one sentence and not two, and the body pass cannot
+  // disagree with the signature pass about what `T` is.
+  std::vector<BinderRow>& rows = binders_[owner];
+  if (rows.empty()) {
+    readBinderRows(params, owner, rows);
+  }
+  out.reserve(out.size() + rows.size());
+  for (const BinderRow& row : rows) {
+    // `kNoAliasRow` because a binder declares no name for a type -- it *is* the
+    // type. No `rows`: this entry is the binder's own name inside the declaration's
+    // target, and the list a *use* checks against is the `fn`/`type` name's own row
+    // (`TypeName::rows`), which is published with the declaration.
+    TypeName entry{row.spelling, row.param, kNoAliasRow};
+    out.push_back(entry);
+  }
+  return static_cast<std::uint32_t>(rows.size());
+}
+
+// The one read of a binder list: the names, their constraints, and the `Param`s
+// they intern to.
+void Checker::readBinderRows(ast::AstId params, std::uint32_t owner, std::vector<BinderRow>& out) {
+  // The *n*-th `Name` and the `Constraint` that follows it are one binder
+  // (`parse/syntax_kind.h`), so the list is walked in order and the constraint is
+  // attached to the last name seen. A `Constraint` with no name before it cannot be
+  // produced by the parser, and is ignored here rather than guessed at.
+  std::vector<support::ConstraintClass> classes;
+  std::size_t last = std::string_view::npos;
+  for (const ast::AstId child : file_.childrenOf(params)) {
+    const ast::NodeKind kind = kindOf(child);
+    if (kind == ast::NodeKind::Name) {
+      classes.push_back(support::ConstraintClass::Any);
+      last = classes.size() - 1;
+      continue;
+    }
+    if (kind == ast::NodeKind::Constraint && last != std::string_view::npos) {
+      classes[last] = readConstraintClass(child);
+      last = std::string_view::npos;
+    }
+  }
+
+  // The binder's index is what the `Param` is made of (`owner`, index), so it is the
+  // width of a `Param` from the first line rather than a `size_t` narrowed at the
+  // call -- a declared binder list that could not be counted is not a case this
+  // stage has to report.
+  std::uint32_t count = 0;
   for (const ast::AstId binder : childrenOf(params, ast::NodeKind::Name)) {
     const std::string_view written = spelling(binder);
+    const support::ConstraintClass klass =
+        count < classes.size() ? classes[count] : support::ConstraintClass::Any;
     // A binder is a *name*, and a sound name is one `resolve` accepted. Three
     // things make it unsound, and all three are already reported there: a word of
     // the language (`fn i32 f<i32>()`, which would otherwise hide `i32` from the
@@ -80,25 +131,58 @@ std::uint32_t Checker::pushBinderRows(ast::AstId params, std::uint32_t owner,
         sound = row != nullptr && row->canonical == *def;
       }
     }
-    // The spelling is kept beside the row for the two sentences that have to name
-    // a binder, and it is *not* recoverable from the type afterwards: a `Param`'s
+    // The spelling is kept beside the row for the sentences that have to name a
+    // binder, and it is *not* recoverable from the type afterwards: a `Param`'s
     // identity is `(owner, binder)` and an unsound binder has no `Param` at all.
-    if (!written.empty()) {
-      std::vector<std::string_view>& names = binderSpellings_[owner];
-      if (names.size() <= count) {
-        names.resize(count + 1);
-      }
-      names[count] = written;
-    }
-    const TypeId parameter = sound ? types_.param(owner, count, written) : kInvalidType;
-    // `binders == 0` on the row on purpose: a binder is not a generic name of its
-    // own, so `T<i32>` is a use of a name that takes no arguments and the reader
-    // says so. `kNoAliasRow` because a binder declares no name for a type -- it
-    // *is* the type.
-    out.push_back(TypeName{written, parameter, kNoAliasRow});
+    // The class travels the same way and for the same reason (`BinderRow`).
+    BinderRow row;
+    row.spelling = written;
+    row.klass = klass;
+    row.param = sound ? types_.param(owner, count, written, klass) : kInvalidType;
+    out.push_back(row);
     ++count;
   }
-  return count;
+}
+
+// The class a `Constraint` names.
+//
+// A word that is not a class is refused here, and the refusal is *not* silent: an
+// unrecognized constraint left as `Any` would be a declaration that asked for a
+// guarantee and got none, which is the one outcome worse than an error
+// (`generics.md`, § 6). The sentence lists the classes, because a reader who wrote
+// a plausible word (`number`, `numeric`, `Ordered`) has no other way to learn the
+// set.
+//
+support::ConstraintClass Checker::readConstraintClass(ast::AstId constraint) {
+  const ast::AstId nameNode = childOf(constraint, ast::NodeKind::Name);
+  if (!nameNode.valid()) {
+    // The parser already reported the missing name; a `:` with nothing after it is
+    // that sentence and not this one.
+    return support::ConstraintClass::Any;
+  }
+  const std::string_view word = spelling(nameNode);
+  if (word.empty()) {
+    return support::ConstraintClass::Any;
+  }
+  if (const std::optional<support::ConstraintClass> klass =
+          support::constraintClassFromName(word)) {
+    return *klass;
+  }
+
+  std::string classes;
+  for (const std::string_view name : support::constraintClassNames()) {
+    if (!classes.empty()) {
+      classes += name == support::constraintClassNames().back() ? " and " : ", ";
+    }
+    classes += name;
+  }
+  error(nameNode, SemaErrorCode::ConstraintNotAClass,
+        quoted(word) +
+            " is not a class a binder can be constrained to: a binder is "
+            "constrained to one of the classes the language knows, because a class is what "
+            "decides which operations the body may perform. The classes are " +
+            classes);
+  return support::ConstraintClass::Any;
 }
 
 // --- the questions ------------------------------------------------------------
@@ -140,16 +224,122 @@ bool Checker::mentionsParam(TypeId type, std::uint32_t owner) const {
   }
 }
 
-bool Checker::refuseParameter(ast::AstId at, TypeId type, std::string_view why) {
+bool Checker::refuseOperation(ast::AstId at, TypeId type, support::Operation op,
+                              std::string_view opText) {
   if (!types_.isParam(type)) {
+    // Not a binder: the ordinary operation rules judge it, and this has nothing to
+    // say. Every caller reaches here with a type it has already checked for being an
+    // error, so the only two cases are a binder and a concrete type.
     return false;
   }
+  const support::ConstraintClass klass = types_.binderClass(type);
+  if (support::constraintGrants(klass, op)) {
+    return false;
+  }
+
+  const std::string_view binder = types_.get(type).paramSpelling;
+
+  // A **pointer** binder is the one class whose refusal must not name another class,
+  // and the reason is that the operation is not missing a class -- it is missing a
+  // *type*. `*p`, `p[i]` and `p + i` are the pointee's, and an abstract pointer does
+  // not name it, so "widen the class to `Number`" would be advice about a different
+  // kind of value entirely (`support/constraint`'s header).
+  if (klass == support::ConstraintClass::Pointer) {
+    error(at, SemaErrorCode::GenericOperation,
+          std::string(opText) + " on a binder: `" + std::string(binder) +
+              "` is a pointer, and the only operations expressible on one whose pointee nobody "
+              "named are the comparisons. This one needs the pointee -- write the pointed-at type "
+              "(`fn i32 f(p: *i32)`), or write the comparison");
+    return true;
+  }
+
+  const support::ConstraintClass needed = support::constraintForOperation(op);
+  if (needed == support::ConstraintClass::Any) {
+    // No class grants it, which happens for exactly the positions that require a
+    // `bool`: `!`, `&&`, `||`, and the condition of `if`/`while`/`for`. The fix is
+    // not a class -- a class with one member is the type -- so the sentence names
+    // the type.
+    error(at, SemaErrorCode::GenericOperation,
+          std::string(opText) + " on a binder: `" + std::string(binder) +
+              "` is a type parameter and no class allows this, because it is defined for `bool` "
+              "and nothing else. A value that must be a `bool` is written `bool`, not a binder");
+    return true;
+  }
+
+  // Two sentences, and which one is right is decided by whether the binder has a
+  // class at all: a binder with none is one word away from being fine, and a binder
+  // with the wrong one needs the *larger* class named -- `Number` does not grant
+  // `%` and `Integer` does, and `Ordered` does not grant `+` and `Number` does.
+  // `constraintForOperation` is what picks the larger one, so the two sentences
+  // cannot disagree about which class an operation needs.
+  const std::string klassName(support::constraintClassName(klass));
+  const std::string neededName(support::constraintClassName(needed));
+  if (klass == support::ConstraintClass::Any) {
+    error(at, SemaErrorCode::GenericOperation,
+          std::string(opText) + " on a binder needs a constraint: `" + std::string(binder) +
+              "` is a type parameter, and what may be done with one is what its class allows. "
+              "Constrain it, as in `fn " +
+              std::string(binder) + " f<" + std::string(binder) + ": " + neededName +
+              ">(...)`, and `" + neededName + "` is the weakest class that admits " +
+              std::string(opText));
+    return true;
+  }
   error(at, SemaErrorCode::GenericOperation,
-        std::string(why) + ": `" + std::string(types_.get(type).paramSpelling) +
-            "` is a type parameter, and what may be done with one is what its constraint allows "
-            "(`T: Num`). Constraints are the next stage; today a binder may be stored, copied, "
-            "passed, returned and addressed");
+        std::string(opText) + " on a binder: `" + std::string(binder) + "` is constrained to `" +
+            klassName + "`, which does not allow it. Widen the class to `" + neededName + "`");
   return true;
+}
+
+void Checker::refuseLiteralInBinder(ast::AstId at, TypeId binder, TypeId literal) {
+  const support::ConstraintClass klass = classOfBinder(binder);
+  const support::LiteralClass admitted = support::constraintLiteralClass(klass);
+  const bool isFloat = types_.get(literal).kind == TypeKind::FloatLiteral;
+  const std::string binderName(types_.get(binder).paramSpelling);
+
+  // Four shapes of refusal and one sentence each, and the four exist because the fix
+  // is different in each: a binder with no class needs a class named, a class whose
+  // members are not all of one kind of number needs a *narrower* class, and a class
+  // of the other kind needs the literal rewritten. The `Any` case is first because a
+  // class that admits nothing admits no literal either -- `None` is its value too,
+  // and only one of the two can be said about it.
+  std::string why;
+  if (klass == support::ConstraintClass::Any) {
+    why = "`" + binderName +
+          "` has no constraint, so nothing says what a literal means for it: a class whose "
+          "members are all integers (`<" +
+          binderName + ": Integer>`) takes `1`, and one whose members are all floats (`<" +
+          binderName +
+          ": Float>`) takes `1.0`. Write the literal in the type you mean, or constrain the "
+          "binder";
+  } else if (admitted == support::LiteralClass::None) {
+    why = "`" + binderName + "` is constrained to `" +
+          std::string(support::constraintClassName(klass)) +
+          "`, and that class does not say which kind of number a literal is: `1` would mean "
+          "`1i32` for one instantiation and `1.0` for another, and the body is checked "
+          "**once**. Write the value in the type you mean, or narrow the binder to `Integer` "
+          "(every member an integer) or `Float` (every member a float)";
+  } else {
+    // The admitted kind is the other one, so the literal is the thing to rewrite --
+    // and the class it should be narrowed to is the one that admits what was written.
+    const bool classWantsInteger = admitted == support::LiteralClass::Integer;
+    why = "`" + binderName + "` is constrained to `" +
+          std::string(support::constraintClassName(klass)) + "`, whose members are all " +
+          (classWantsInteger ? "integers" : "floats") + ", so a " +
+          (isFloat ? "float literal has" : "integer literal has") + " no type to take. Write " +
+          (classWantsInteger ? "an integer" : "a float") + " literal, or narrow the binder to `" +
+          std::string(support::constraintClassName(classWantsInteger
+                                                       ? support::ConstraintClass::Float
+                                                       : support::ConstraintClass::Integer)) +
+          "`";
+  }
+  error(at, SemaErrorCode::GenericOperation,
+        std::string(isFloat ? "this float" : "this integer") + " literal cannot be stored in `" +
+            binderName + "`: " + why);
+}
+
+TypeId Checker::binderParam(std::uint32_t owner, std::uint32_t binder) const {
+  const std::span<const BinderRow> rows = binderRowsOf(owner);
+  return binder < rows.size() ? rows[binder].param : kInvalidType;
 }
 
 // --- the two names of an instance ---------------------------------------------
@@ -382,6 +572,43 @@ std::uint32_t Checker::internInstance(std::uint32_t function, std::span<const Ty
     return kNoInstance;
   }
   const FunctionInfo& decl = out_.typed.functionTable[function];
+
+  // The **constraint check**, and it belongs here rather than at the call: an
+  // instance is made from `(declaration, arguments)` whichever path asked for it --
+  // a concrete call, or the worklist expanding a site inside another generic -- so
+  // one check here covers both, and the body it is about was already checked once
+  // against the class. That is the trade the record makes (`generics.md`, § 6): the
+  // *one* body check plus this is what lets the lowering substitute and emit with
+  // no re-checking, which is the half C++ cannot have.
+  //
+  // Before the substitution, because a list that cannot be filled needs no signature.
+  const std::span<const BinderRow> binders = binderRowsOf(decl.owner);
+  bool admissible = true;
+  for (std::size_t i = 0; i < args.size() && i < binders.size(); ++i) {
+    if (types_.satisfies(binders[i].klass, args[i])) {
+      continue;
+    }
+    admissible = false;
+    // One sentence per way of being wrong here, not one per expansion. A call
+    // written inside a generic body is expanded once per instance of the enclosing
+    // declaration, and two expansions asking for the same inadmissible argument are
+    // one fact about the source -- the node and the argument list, which is the key.
+    std::string seen = std::to_string(at.index) + ':' + key;
+    if (unsatisfiedReported_.insert(std::move(seen)).second) {
+      error(at, SemaErrorCode::ConstraintUnsatisfied,
+            "`" + types_.spelling(args[i]) + "` does not satisfy the constraint on `" +
+                std::string(binderSpelling(decl.owner, static_cast<std::uint32_t>(i))) +
+                "`: this declaration says that binder is `" +
+                std::string(support::constraintClassName(binders[i].klass)) +
+                "`, and a type argument has to be one of the types that class admits -- "
+                "otherwise the body, which is checked once against the class, would mean "
+                "something the instance cannot do");
+    }
+  }
+  if (!admissible) {
+    return kNoInstance;
+  }
+
   // **The substitution**, and the whole of what an instance is: a signature the
   // store already knew how to build. A refusal here is the declaration's own rules
   // meeting the arguments -- `[4]T` with `T := void`, a count that does not fit the
@@ -405,8 +632,11 @@ std::uint32_t Checker::internInstance(std::uint32_t function, std::span<const Ty
   // (`binderSpelling`) and type it with the argument (`generics.md`, § 8).
   info.templateParams.reserve(decl.binders);
   for (std::uint32_t binder = 0; binder < decl.binders; ++binder) {
-    info.templateParams.push_back(
-        types_.param(decl.owner, binder, binderSpelling(decl.owner, binder)));
+    // The `Param` the declaration's own read interned, and not a fresh one built
+    // from the spelling: rebuilding it would be a second way to name one binder, and
+    // the class the declaration wrote is exactly the fact a rebuild would drop
+    // (`BinderRow`).
+    info.templateParams.push_back(binderParam(decl.owner, binder));
   }
   info.functionType = signature;
   info.name = instanceName(written, args, types_);
@@ -519,15 +749,31 @@ TypeId Checker::checkGenericCall(ast::AstId expr, ast::AstId callee, std::uint32
     }
   }
 
-  // (2) The arguments, each checked **once**, against the template's row. That is
-  // what lets a binder be solved from an argument's type, and it is also what keeps
-  // a literal in its own class: a literal in a binder position is not decided by the
-  // binder (decision 11), it contributes its default.
+  // (2) The arguments, each checked **once**. What this step is *for* is the type of
+  // each argument, because that is what a binder is solved from -- and the row it is
+  // checked against is the template's, which means a binder.
+  //
+  // A binder as the *context* is deliberately withheld: a literal in a binder's
+  // position contributes its own class's default and never the binder (decision 10),
+  // so `identity(5)` is `identity<i32>` and not `identity<typeof 5>`. Handing the
+  // binder down would let `decideAt` adopt it -- which is right where a value is
+  // *stored* in one (`let x: T = 1;`) and wrong here, because here the literal is an
+  // argument whose type is the equation, and a binder cannot be a term of it.
+  // A **concrete** row is still handed down: `fn T f(n: u8, x: T)` has one, and the
+  // width it gives a literal is the width that literal has.
   std::vector<TypeId> actuals(args.size(), kInvalidType);
   for (std::size_t i = 0; i < args.size(); ++i) {
     if (i >= params.size()) {
       // Past the declared parameters: the variadic promotion and nothing else.
       (void)checkVariadicArgument(expr, static_cast<std::uint8_t>(i + 1), args[i]);
+      continue;
+    }
+    if (types_.isParam(params[i])) {
+      (void)checkExpr(args[i], kInvalidType);
+      // No conversion is recorded here: the pair that matters is the argument and the
+      // **instance's** parameter type, and that is not known until the instance is
+      // (`coerce.cc`). Step (5) records it.
+      actuals[i] = decideAt(args[i], kInvalidType);
       continue;
     }
     actuals[i] = checkOperand(expr, static_cast<std::uint8_t>(i + 1), args[i], params[i]);
@@ -637,11 +883,14 @@ TypeId Checker::checkGenericCall(ast::AstId expr, ast::AstId callee, std::uint32
 }
 
 std::string_view Checker::binderSpelling(std::uint32_t owner, std::uint32_t binder) const {
-  const auto found = binderSpellings_.find(owner);
-  if (found == binderSpellings_.end() || binder >= found->second.size()) {
+  const std::span<const BinderRow> rows = binderRowsOf(owner);
+  if (binder >= rows.size() || rows[binder].spelling.empty()) {
+    // The fallback is a binder the parser could not read a name for, and it is a
+    // *spelling* rather than a fault: the sentence that would use it has already
+    // been reported by the stage that found the missing name.
     return "T";
   }
-  return found->second[binder];
+  return rows[binder].spelling;
 }
 
 } // namespace minc::sema

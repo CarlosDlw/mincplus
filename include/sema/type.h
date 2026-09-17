@@ -21,6 +21,8 @@
 #pragma once
 
 #include <cstdint>
+
+#include "support/constraint/constraint.h"
 #include <string_view>
 
 #include "support/intern/sym_id.h"
@@ -192,6 +194,21 @@ struct Type {
   // spelling in two declarations are still two types. The view is owned by the
   // store's spelling pool, which never moves or shrinks an entry.
   std::string_view paramSpelling;
+  // Param: the **constraint** the binder was declared with, which is what decides
+  // which operations a body may perform on it and which type arguments may fill
+  // it (`generics.md`, § 6, `support/constraint`).
+  //
+  // Kept beside the spelling and for the same reason, and like the spelling it is
+  // **not** compared for identity (`equalFields` mixes the pair above): a class is
+  // a fact *about* a binder, and two `Param`s differing only in their class would
+  // be the same type declared twice. It is a pure function of `(owner, binder)` --
+  // a binder list is read once, from one piece of source -- so there is nothing to
+  // reconcile and nothing to keep in sync.
+  //
+  // The default is `Any`, which is the class of a binder that wrote no constraint,
+  // so `<T>` and `<T: Any>` are the same declaration and every generic body that
+  // existed before constraints means exactly what it meant.
+  support::ConstraintClass binderClass = support::ConstraintClass::Any;
 };
 
 // --- the well-known types ----------------------------------------------------

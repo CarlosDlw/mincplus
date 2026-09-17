@@ -145,9 +145,7 @@ bool Checker::decideAlias(AliasBinding& binding) {
     // point at. `ok` with an invalid type is the other answer -- "understood, the
     // store refused it" (the budget has already reported that one), or "the name
     // is one whose expansion failed", which was reported where it failed.
-    error(binding.target,
-          spec.unknownWord.empty() ? SemaErrorCode::MalformedType : SemaErrorCode::UnknownType,
-          spec.message);
+    error(binding.target, codeOf(spec), spec.message);
   }
   return true;
 }
@@ -203,8 +201,14 @@ void Checker::checkBlockAlias(ast::AstId decl) {
   aliases_.push_back(binding);
   publishAlias(binding);
   if (publishable && !word.empty()) {
+    // The binder rows travel with the name, because a *use* of it is where the
+    // class is enforced: `Vec<bool>` for a `type Vec<T: Number>` is refused there,
+    // and the row is the only thing at the use that knows the classes
+    // (`TypeName::rows`). The rows are the declaration's own, read once by
+    // `pushBinderRows` above, so a use cannot see a class the declaration did not
+    // write.
     addTypeName(TypeName{word, binding.type, static_cast<std::uint32_t>(index), binding.binders,
-                         binding.owner});
+                         binding.owner, binderRowsOf(binding.owner)});
   }
 }
 
@@ -290,10 +294,12 @@ void Checker::runAliases() {
     if (!written.empty()) {
       // The row carries the declaration it came from, and the index is this
       // pass's own: the table published below is this vector in this order. A
-      // generic name also carries its binder count and the id of the declaration
-      // those binders belong to, which is what a *use* substitutes with.
+      // generic name also carries its binder count, the id of the declaration those
+      // binders belong to, and the rows themselves -- the rows are what a *use*
+      // reads the classes from (`TypeName::rows`).
       addTypeName(TypeName{written, aliases_[index].type, static_cast<std::uint32_t>(index),
-                           aliases_[index].binders, aliases_[index].owner});
+                           aliases_[index].binders, aliases_[index].owner,
+                           binderRowsOf(aliases_[index].owner)});
     }
   };
 

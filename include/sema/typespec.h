@@ -40,6 +40,22 @@ namespace minc::sema {
 // row never dereferences a wrong index.
 inline constexpr std::uint32_t kNoAliasRow = 0xFFFFFFFFu;
 
+// One binder of a declaration, as the two readers of a binder list need it: the
+// word the reader wrote, the `Param` it interned to (invalid for a binder
+// `resolve` refused), and the **class** it was constrained to.
+//
+// It lives here rather than inside the checker because two stages read it and both
+// are readers of the same list: the alias pass pushes one `TypeName` per binder so
+// its target can be read, and a **use** of a generic name reads the classes through
+// `TypeName::rows` below to refuse an argument outside its binder's class. One
+// table, then -- a second copy of "which class is binder 2" is exactly the kind of
+// fact this compiler keeps in one place.
+struct BinderRow {
+  std::string_view spelling;
+  TypeId param = kInvalidType;
+  support::ConstraintClass klass = support::ConstraintClass::Any;
+};
+
 // The unit's own name for a type, as the reader consumes it. **The table is a
 // stack and the last row wins**: a block may declare a name the file already has
 // (`type_alias.md`, decision 5), and while that block is being checked the inner
@@ -71,6 +87,17 @@ struct TypeName {
   // middle would silently reorder every one of them.
   std::uint32_t binders = 0;
   std::uint32_t owner = 0;
+  // The declaration's binder rows, in binder order, for a generic name: `binders`
+  // is then `rows.size()`. Kept as well as the count because the count is read
+  // positionally at three sites that predate this one, and because the *rows* are
+  // what a use needs -- a use substitutes at this row, and the check that each
+  // argument is inside its binder's class is exactly a read of `rows[i].klass`.
+  //
+  // A span and not a copy: the caller's binder table owns them and outlives every
+  // use (the map is keyed by the declaring node and holds one vector per
+  // declaration, built once). Empty for a name with no binders, which is every
+  // ordinary alias.
+  std::span<const BinderRow> rows = {};
 };
 
 // The row that answers a word, or `nullptr` when the word is no name of this
@@ -95,6 +122,12 @@ struct TypeSpecResult {
   // the caller suggests a near miss. Empty for every other failure, whose fix is
   // not a different spelling.
   std::string_view unknownWord;
+  // The failure was an **argument outside its binder's class** -- `Vec<bool>` for a
+  // declaration that wrote `T: Number`. It is its own flag rather than one more
+  // `message` because the code it reports under is not this reader's: the caller
+  // maps all three failures to one code each, and `ConstraintUnsatisfied` is the
+  // same fact whether the type argument filled a `fn`'s binder or an alias's.
+  bool constraintViolation = false;
   // `ok` with an invalid `type` has two reasons, and they are not the same
   // sentence. The *store* refusing the run is the type budget, and the caller owns
   // that diagnostic; this flag is the other one -- the run is a name this unit

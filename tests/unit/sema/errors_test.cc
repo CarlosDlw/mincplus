@@ -645,6 +645,14 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       {"fn i32 g<T>(x: T) { let p: *T = &x; return g::<*T>(p); }\n"
        "fn i32 main() { return g(7); }\n",
        false}, // the budget, at `maxInstances`
+      // The two codes the constraints add. The first is a word that is not a class,
+      // and the second is a class the *argument* is not in -- which is the half that
+      // has to be judged at the instantiation, because the body was already checked
+      // against the class (`generics.md`, § 6).
+      {"type P<T: number> = (T, T);\n", false},
+      {"fn T twice<T: Number>(x: T) { return x + x; }\n"
+       "fn i32 main() { let s = \"ab\"; return twice::<str>(s); }\n",
+       false},
   };
 
   for (const Case& one : cases) {

@@ -98,6 +98,31 @@ TypeId Checker::decideAt(ast::AstId node, TypeId decided) {
     // type, not the hint.
     return current;
   }
+  // A **binder** as the context, which is the one context the *class* decides
+  // rather than the literal's own class (`generics.md`, decisions 7 and 11). The
+  // body of a generic is checked once, so `let x: T = 1;` has to mean one thing for
+  // every type the class admits -- and which thing follows from the class: `Integer`
+  // admits an integer literal, `Float` a float one, and `Number` admits neither,
+  // because for one instantiation the body would have to mean `1.0`.
+  //
+  // When the class admits it, the literal is decided **as the binder**, which is what
+  // makes the value right per instance: the text is one `1` everywhere, and the type
+  // travels through the substitution boundary like every other type of the node.
+  if (types_.isParam(decided)) {
+    const bool floatLiteral = types_.get(current).kind == TypeKind::FloatLiteral;
+    const support::LiteralClass admitted = support::constraintLiteralClass(classOfBinder(decided));
+    if (support::literalAdmittedBy(admitted, floatLiteral)) {
+      setType(node, decided);
+      return decided;
+    }
+    // The class does not admit this literal, so the language's default is **not**
+    // taken here: defaulting would turn the reader's `1` into an `i32` and the
+    // sentence that follows would be about a type nobody wrote. Left deferred, the
+    // assignability check says what is wrong with the literal itself -- and the unit
+    // is refused either way, so no stage below ever sees a deferred type.
+    return current;
+  }
+
   TypeId chosen = kInvalidType;
   if (decided.valid() && !types_.isError(decided) && !types_.isDeferred(decided)) {
     const bool floatLiteral = types_.get(current).kind == TypeKind::FloatLiteral;

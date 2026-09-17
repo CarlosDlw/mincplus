@@ -174,6 +174,23 @@ enum class SyntaxKind : std::uint16_t {
   // it: a *type* run is what precedes the name, so a `<` after a name can only be
   // a binder list (`generics.md`, decision 1).
   GenericParams,
+  // `: Num`: what one binder is **constrained to** -- the operations its body may
+  // perform on it (`generics.md`, § 6). It is a child of `GenericParams` and
+  // follows the `Name` of the binder it belongs to, which is what pairs the two
+  // without a position rule of its own: the *n*-th `Name` and the `Constraint`
+  // after it are the same binder.
+  //
+  // Children are the `:` and one `Name`, so the leaves still tile the source. The
+  // name is **inert** to resolution on purpose: a class is a word of the language
+  // (`Num`, `Int`, `Float`, `Ordered`, `Eq`, `Any` -- `support/constraint`), not a
+  // declaration, so `visit` must not look it up and report an unknown name; the
+  // checker is what decides whether the word is a class, and it says so in one
+  // sentence that names the six.
+  //
+  // A node of its own rather than a second `Name` beside the binder, because the
+  // pair would then be ambiguous by shape: two names in a row do not say which is
+  // the binder and which is the class.
+  Constraint,
   // `<i32, bool>`: the arguments of a **use**, inside a type run
   // (`Pair<i32, bool>`) or behind the `::` of an explicit call
   // (`makePair::<i32, bool>(...)`). Children are `<`, one `Type` per argument, the

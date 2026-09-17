@@ -10,6 +10,7 @@ add_subdirectory(session)
 add_subdirectory(fs)
 add_subdirectory(text)
 add_subdirectory(typenames)
+add_subdirectory(constraint)
 add_subdirectory(consteval)
 
 add_library(minc_support INTERFACE)
@@ -26,6 +27,7 @@ target_link_libraries(minc_support INTERFACE
   minc_fs
   minc_text
   minc_typenames
+  minc_constraint
   minc_consteval
 )
 target_include_directories(minc_support INTERFACE ${PROJECT_SOURCE_DIR}/include)

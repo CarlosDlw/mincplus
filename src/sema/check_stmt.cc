@@ -520,6 +520,16 @@ std::string Checker::suggestTypeName(std::string_view word) const {
   return best;
 }
 
+SemaErrorCode Checker::codeOf(const TypeSpecResult& spec) {
+  if (spec.constraintViolation) {
+    // The same fact whether the argument filled a `fn`'s binder or a generic
+    // `type`'s: a declaration promised a set of types and the use wrote one
+    // outside it.
+    return SemaErrorCode::ConstraintUnsatisfied;
+  }
+  return spec.unknownWord.empty() ? SemaErrorCode::MalformedType : SemaErrorCode::UnknownType;
+}
+
 TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
   if (!typeNode.valid() || inError(typeNode)) {
     return kTypeError;
@@ -528,7 +538,7 @@ TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
   const TypeSpecResult spec = readType(parts, types_, names());
   if (!spec.ok) {
     if (spec.unknownWord.empty()) {
-      error(typeNode, SemaErrorCode::MalformedType, spec.message);
+      error(typeNode, codeOf(spec), spec.message);
     } else {
       error(typeNode, SemaErrorCode::UnknownType, spec.message);
       const std::string suggestion = suggestTypeName(spec.unknownWord);
@@ -689,23 +699,58 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   if (types_.isError(from) || types_.isError(to)) {
     return;
   }
-  // A **binder**, and this is the whole of what is known about one: it is an
-  // object, and a value is assignable to it exactly when it already *is* of that
-  // type (`generics.md`, § 6). Anything else -- `let y: i32 = x;` where `x: T`, or
-  // a literal in a binder's position -- would need the declaration to say which
-  // types it takes, which is what a constraint is. The sentence says so, and it is
-  // this one rather than the arithmetic rules' "`T` cannot be used as `i32`",
-  // which is a sentence about a type the reader never wrote.
-  //
-  // `*T` is not this case: a pointer is an object with a width, so `*void` and
-  // `*T` keep converting as they always did.
   if (from != to && (types_.isParam(from) || types_.isParam(to))) {
     const TypeId parameter = types_.isParam(to) ? to : from;
+    const std::string binder(types_.get(parameter).paramSpelling);
+
+    // (1) A **deferred literal** in a binder's position, and the one place a class is
+    // consulted for something other than "may this operator be used". The body is
+    // checked once, so `let x: T = 1;` has to mean one thing for every type the class
+    // admits -- and `1` is an integer literal, so only a class whose members are all
+    // integers can take it (`generics.md`, decision 11). `Integer` admits it, `Float`
+    // admits `1.0`, and `Number` admits neither, because for one instantiation the
+    // body would have to mean `1.0` and for another `1i32`.
+    //
+    // When the class admits it the literal is **decided as the binder**, which is what
+    // makes the value right per instance: the text is the same `1` everywhere, and the
+    // type travels through the substitution boundary like every other type of the node.
+    if (types_.isParam(to) && types_.isDeferred(from)) {
+      const support::LiteralClass admitted = support::constraintLiteralClass(classOfBinder(to));
+      if (support::literalAdmittedBy(admitted, types_.get(from).kind == TypeKind::FloatLiteral)) {
+        setType(at, to);
+        return;
+      }
+      // Refused, and the sentence is `refuseLiteralInBinder`'s -- the same one the
+      // binary case and the decision site would use, which is what keeps the three
+      // from telling a reader three different things about one rule.
+      refuseLiteralInBinder(at, to, from);
+      return;
+    }
+
+    // (2) A **binder into a written type** -- `fn i32 f<T>(x: T) { return x; }`. The
+    // declaration is what is wrong, so the sentence names the type to write instead of
+    // the arithmetic rules' one about a type the reader never wrote.
+    if (types_.isParam(from)) {
+      error(at, SemaErrorCode::GenericOperation,
+            "`" + binder + "` cannot be used as `" + types_.spelling(to) + "`" + std::string(what) +
+                ": a binder is not any one type, so a declaration that takes one has to name the "
+                "binder -- write this type as `" +
+                binder +
+                "`, and constrain it if the body "
+                "needs operations (`fn " +
+                binder + " f<" + binder + ": Integer>(...)`)");
+      return;
+    }
+
+    // (3) A **concrete value into a binder**, and the reason it is refused is not
+    // pedantry: the class admits more than one type, and a value of one of them is not
+    // a value of all of them. (`from == to` never reaches this branch.)
     error(at, SemaErrorCode::GenericOperation,
-          "`" + types_.spelling(from) + "` cannot be used as `" + types_.spelling(to) + "`" +
-              std::string(what) + ": `" + std::string(types_.get(parameter).paramSpelling) +
-              "` is a type parameter, and what may be stored in one is what its constraint "
-              "allows (`T: Num`). Constraints are the next stage");
+          "`" + types_.spelling(from) + "` cannot be stored in `" + binder + "`" +
+              std::string(what) + ": the body is checked **once**, for every type the class `" +
+              std::string(support::constraintClassName(classOfBinder(to))) +
+              "` admits, so only a literal of the class's own kind can be the value -- convert it "
+              "where it comes from, or write the type");
     return;
   }
   const std::string target = typeAsWritten(to, expectedAt);
@@ -1527,13 +1572,12 @@ void Checker::checkCondition(ast::AstId condition, std::string_view what) {
   if (types_.isError(type)) {
     return;
   }
-  // A binder is refused before the rule about `bool`, because "`T` is not a
-  // `bool`" is a sentence about a type nobody wrote: what a condition needs is the
-  // declaration to say that every type it takes is a `bool`, which is what a
-  // constraint is (`generics.md`, § 6).
-  if (refuseParameter(condition, type,
-                      "the condition of `" + std::string(what) +
-                          "` needs `bool`, and a binder is not one")) {
+  // A binder is refused before the rule about `bool`, because "`T` is not a `bool`"
+  // is a sentence about a type nobody wrote. What this position needs is a `bool`,
+  // and no class grants one -- a class with one member is the type -- so the
+  // sentence names the type to write (`generics.md`, § 6).
+  if (refuseOperation(condition, type, support::Operation::Condition,
+                      "the condition of `" + std::string(what) + "`")) {
     return;
   }
   if (types_.get(type).kind != TypeKind::Bool) {

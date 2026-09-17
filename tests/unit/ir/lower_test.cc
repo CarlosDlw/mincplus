@@ -193,6 +193,55 @@ TEST(IrLowerTest, ADivisionIsGuardedAndNeverPromisesNoOverflow) {
   EXPECT_EQ(text.find("nuw"), std::string::npos);
 }
 
+TEST(IrLowerTest, ANegationAndAStepAreTheOperandsOwnKind) {
+  // A negation and a step are each **two instructions with one spelling**, and the
+  // operand's type is what chooses: integer negation is `sub 0, x` and float
+  // negation is `fneg`; an integer step adds an integer one and a float step adds a
+  // float one. The checker accepts all four for every arithmetic type, so a branch
+  // missing here is a module the verifier refuses -- which is what a negation and a
+  // step written once for both kinds produced, and the sentence the reader got was
+  // `ir-internal` about arithmetic on a floating type.
+  //
+  // The generic half is the same fact one stage up: `-x` under `Number` is a
+  // negation at the *instance's* type, so the branch has to be read from the value
+  // and not from the node.
+  test::IrFixture fixture;
+  fixture.source("fn f64 flip(x: f64) { return -x; }\n"
+                 "fn f32 drift(x: f32) { x--; return x; }\n"
+                 "fn i32 bump(x: i32) { return ++x; }\n"
+                 "fn u8 negate(x: u8) { return -x; }\n"
+                 "fn T mean<T: Number>(x: T) { return -x + ++x; }\n"
+                 "fn i32 main() {\n"
+                 "  let a: i32 = 1;\n"
+                 "  let b: f64 = 1.0;\n"
+                 "  let p = mean(a);\n"
+                 "  let q = mean(b);\n"
+                 "  return 0;\n"
+                 "}\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+  ASSERT_FALSE(fixture.hasError("ir-internal")) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("fneg double"), std::string::npos) << text;
+  EXPECT_NE(text.find("fsub float"), std::string::npos) << text;
+  EXPECT_NE(text.find("add i32"), std::string::npos) << text;
+  // A `u8` negation is performed at the **promoted** type and truncated back, which
+  // is the concrete path's own rule and not this test's subject -- so what is
+  // asserted is the integer negation itself, at the width the operation happens at.
+  EXPECT_NE(text.find("sub i32 0"), std::string::npos) << text;
+  // The instance, so both halves of the branch are read at a *substituted* type and
+  // not only at a written one: a `fneg` inside `mean<i32>` would be the node's type
+  // leaking where the instance's belongs.
+  EXPECT_NE(text.find("@__M4_meani32"), std::string::npos) << text;
+  EXPECT_NE(text.find("@__M4_meanf64"), std::string::npos) << text;
+  // And the two shapes that are *not* there: an integer zero built at a float type,
+  // and a float one built at an integer type. They are one mistake in two places,
+  // and each is a module the verifier refuses.
+  EXPECT_EQ(text.find("sub double 0.000000e+00"), std::string::npos) << text;
+  EXPECT_EQ(text.find("i0 "), std::string::npos) << text;
+}
+
 TEST(IrLowerTest, AnIndexIsAPlainGetElementPtr) {
   test::IrFixture fixture;
   fixture.source("fn i32 read(p: *i32, i: i64)\n"

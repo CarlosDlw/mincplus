@@ -99,9 +99,16 @@ first-class types; the examples use the primitive names. See
       plain `<...>` in a type position and `::<...>` at a call site, inference
       from the arguments and from what the context wants, one function plus one
       debug record per instance (`break identity` stops in all of them), and a
-      doubling structure refused by name rather than built. **Constraints
-      (`T: Num`) are the next stage** and are refused by name until then. See
+      doubling structure refused by name rather than built. See
       [`docs/architectures/generics.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/generics.md)
+- [x] Constraints `T: Class` — seven classes (`Any`, `Eq`, `Ordered`, `Number`,
+      `Integer`, `Float`, `Pointer`), each a set of types *and* a promise of
+      operations. `fn T twice<T: Number>(x: T)` is checked once and accepts every
+      type in the class; an operation the class does not grant is one sentence
+      naming the class to write; a type argument outside the class is refused at
+      the call; and a literal in a binder's position is decided by the class
+      (`Integer` takes `1`, `Float` takes `1.0`). See
+      [Generics](/language/generics)
 - [ ] `struct`
 - [ ] `union`
 - [ ] `enum` constants and tagged unions `[?]`

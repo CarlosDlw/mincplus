@@ -269,12 +269,27 @@ enum class SemaErrorCode : std::uint8_t {
   // one mistake -- the list and the declaration disagree -- and the sentence says
   // which numbers or which name.
   GenericTypeArgs,
-  // An **operation** on a binder. A `Param` may be stored, copied, passed,
-  // returned and addressed -- the rules every type has -- and everything else is
-  // what a constraint permits (`generics.md`, § 6). Constraints are the next
-  // stage, so this is the sentence that says so instead of the arithmetic rules'
-  // one about a type the reader never wrote.
+  // An **operation** on a binder that its constraint does not grant, or that no
+  // class grants at all. A `Param` may be stored, copied, passed, returned and
+  // addressed -- the rules every type has -- and everything else is what a
+  // constraint permits (`generics.md`, § 6).
+  //
+  // The sentence names the class to write, because the fix is one word in the
+  // binder list; and for the three `bool`-only operators, which no class grants
+  // on purpose, it names the type to write instead.
   GenericOperation,
+  // The word after the `:` of a binder is not a class: `fn T max<T: number>()`.
+  // The sentence lists the classes, because a reader who wrote a plausible word
+  // has no other way to learn the set -- and because the alternative, treating an
+  // unknown word as `Any`, would silently drop the guarantee the declaration
+  // asked for (`generics.md`, § 6).
+  ConstraintNotAClass,
+  // A type argument that the binder's constraint does not admit:
+  // `fn T twice<T: Num>(x: T)` called as `twice::<str>(s)`. Refused here, at the
+  // instantiation, so the body -- which was checked once, against the class --
+  // never has to be re-checked (`generics.md`, § 6). The sentence names the
+  // declaration, the binder, the class and the argument.
+  ConstraintUnsatisfied,
   // The instantiation budget, reached. A generic that grows its own argument
   // (`fn i32 g<T>(x: T) { return g::<*T>(x); }`) asks for one instance per step,
   // and a compiler that follows it runs out of memory instead of reporting.

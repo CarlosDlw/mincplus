@@ -838,9 +838,13 @@ warnings inside them are dropped at the report step while errors are not.
   binders, and the instances are a worklist keyed on `(declaration, arguments)`
   with a budget — the first thing in this compiler that makes the store a **DAG**,
   which is why its layouts are computed once when a type is built and its
-  structures are bounded (`kMaxTypeNodes`). **Constraints (`<T: Num>`) are the
-  next stage** and are refused by name until then, so a binder under an arithmetic
-  operator is one sentence about the missing constraint rather than a guess.
+  structures are bounded (`kMaxTypeNodes`). **Constraints** (`<T: Number>`) are
+  **implemented**: seven classes, each a *set of types* and a *promise of
+  operations* — two facts, because `Ordered` and `Number` admit the same types and
+  grant different operations. A body is checked once against its class (one
+  sentence naming the class to write when an operation is not granted), an
+  instantiation is refused when the argument is outside the class, and a literal
+  in a binder's position is decided by the class rather than by its own default.
 
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which

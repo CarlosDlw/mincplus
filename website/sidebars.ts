@@ -30,6 +30,7 @@ const sidebars: SidebarsConfig = {
         'language/pointers',
         'language/arrays',
         'language/slices',
+        'language/generics',
         'language/builtins',
         'language/never',
         'language/memory-model',

@@ -148,7 +148,38 @@ public:
   // diagnostic prints -- the *third* fact, kept beside the identity and not part
   // of it. The store copies the spelling, so the caller's view need not outlive
   // the call.
-  [[nodiscard]] TypeId param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling);
+  //
+  // `klass` is the *fourth* fact and travels the same way: the constraint the
+  // binder wrote, which decides what its body may do with it and which type
+  // arguments may fill it. It is not part of the identity for the same reason the
+  // spelling is not -- both are properties of the bound name, and the identity is
+  // which binder it is.
+  [[nodiscard]] TypeId param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling,
+                             support::ConstraintClass klass = support::ConstraintClass::Any);
+  // The constraint a binder was declared with, or `Any` for a type that is not a
+  // binder at all. One question, asked where an operation is about to be allowed
+  // or a type argument accepted.
+  [[nodiscard]] support::ConstraintClass binderClass(TypeId id) const;
+
+  // Does this type belong to the class?
+  //
+  // Each predicate is the **operation rule's own** -- `isArithmetic` for `+`,
+  // `isScalar` for `==`, `isInteger` for `%` -- and that is the property that keeps
+  // the two halves of a constraint from drifting: the body check asks "does the
+  // class grant this operation", the satisfaction check asks "is the argument in the
+  // class", and both are answering about the same rules.
+  //
+  // Here and not in the checker, because the predicates are this class's and both
+  // stages that ask are asking about a *type*: the instantiation of a `fn`, and the
+  // use of a generic `type` name.
+  //
+  // A binder is accepted rather than judged, and it is the one case that *cannot* be
+  // judged here: a call inside a generic body is written in terms of the enclosing
+  // binders (`fn T outer<T>(x: T) { return id::<T>(x); }`), and the honest answer for
+  // an abstract argument is "ask again when it is concrete". It is asked again --
+  // the worklist substitutes the enclosing instance before it interns anything, so
+  // every argument reaching this from the expansion path is a real type.
+  [[nodiscard]] bool satisfies(support::ConstraintClass klass, TypeId type) const;
   // Is this the parameter of *that* declaration? One question, because a binder
   // is only ever substituted by the declaration that owns it: a body referring to
   // an enclosing binder keeps it (decision 6), so "is this mine" is what every

@@ -15,7 +15,11 @@ namespace {
 // compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' code tables.
-constexpr std::array<SemaErrorCodeInfo, 64> kSemaErrorCodeInfos{{
+// The size is **deduced** (`std::to_array`): it used to be written out, so a code
+// added to the enum and the table also needed an edit to a number in a file the
+// reader was not editing -- and forgetting it failed the build there. The table is
+// now the only thing that decides how big it is.
+constexpr auto kSemaErrorCodeInfos = std::to_array<SemaErrorCodeInfo>({
     {SemaErrorCode::UnknownType, "sema-unknown-type", false},
     {SemaErrorCode::MalformedType, "sema-malformed-type", false},
     {SemaErrorCode::TypeAliasCycle, "sema-type-alias-cycle", false},
@@ -79,8 +83,10 @@ constexpr std::array<SemaErrorCodeInfo, 64> kSemaErrorCodeInfos{{
     {SemaErrorCode::GenericNotInferable, "sema-generic-not-inferable", false},
     {SemaErrorCode::GenericTypeArgs, "sema-generic-type-args", false},
     {SemaErrorCode::GenericOperation, "sema-generic-operation", false},
+    {SemaErrorCode::ConstraintNotAClass, "sema-constraint-not-a-class", false},
+    {SemaErrorCode::ConstraintUnsatisfied, "sema-constraint-unsatisfied", false},
     {SemaErrorCode::GenericInstanceLimit, "sema-generic-instance-limit", false},
-}};
+});
 // NOLINTEND(readability-identifier-naming)
 
 template <std::size_t... Indexes>

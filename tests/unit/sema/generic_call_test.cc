@@ -126,15 +126,39 @@ fn i32 main() {
 }
 )");
   ASSERT_TRUE(fixture.build());
-  // The *context* is what would decide `T` here -- `let a: i32 = make();` wants
-  // an `i32`, and § 2 of the record lets it fill in what the arguments left
-  // open. It does not get that far, and the reason is the honest one: the body
-  // is refused first, because a literal is not a `T` until a constraint says `T`
-  // is a number, and constraints are the next stage. This test pins the refusal
-  // rather than a program the language cannot express yet.
+  // A literal in a binder's position is refused, and the reason is the one the
+  // constraints make precise: the body is checked **once**, so `0` would have to
+  // mean the same thing for every type `T` may be -- and `T` here has no constraint,
+  // so it may be anything at all. The sentence names the class that fixes it, which
+  // is the whole difference between this refusal and the one it replaced.
   ASSERT_TRUE(fixture.hasError("sema-generic-operation"));
-  EXPECT_NE(fixture.firstError().message.find("T: Num"), std::string::npos)
+  EXPECT_NE(fixture.firstError().message.find("`T` has no constraint"), std::string::npos)
       << fixture.firstError().message;
+  EXPECT_NE(fixture.firstError().message.find("Integer"), std::string::npos)
+      << fixture.firstError().message;
+}
+
+TEST(GenericCallTest, AConstrainedBinderTakesALiteralOfItsOwnKind) {
+  // The other half of the sentence above, and the reason the refusal is not a
+  // limitation: constrain the binder and the same body is legal -- and the literal is
+  // **decided as the binder**, so each instance gets its own value out of one text.
+  SemaFixture fixture;
+  fixture.source(R"(
+fn T make<T: Integer>() {
+  return 0;
+}
+
+fn i32 main() {
+  let a: i32 = make();
+  let b: u8 = make();
+  return a;
+}
+)");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_EQ(fixture.errorCount(), 0u) << fixture.firstError().message;
+  // Two instances of one body, from two contexts: the literal contributed nothing to
+  // `T` and the context decided it both times.
+  ASSERT_EQ(fixture.instanceCount(), 2u);
 }
 
 TEST(GenericCallTest, AGenericAliasIsTheReturnTypeOfAnInstantiatedFunction) {

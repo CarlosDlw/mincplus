@@ -349,29 +349,103 @@ and the syntax has exactly one slot for one to occupy later:
 
 ```minc
 fn T max<T: Ordered>(a: T, b: T) { return a < b ? b : a; }
-fn T twice<T: Num>(x: T) { return x + x; }
+fn T twice<T: Number>(x: T) { return x + x; }
 fn T identity<T>(value: T) { return value; }        // no constraint: the default
 ```
 
-The classes are not invented. Each one is the set of types the **existing**
-operation rules accept, measured on this compiler:
+### The two facts of a class, and why they are two
 
-| class | operation set | who satisfies it (measured) |
+A class is **members** and **grants**, and the pair is stated separately on
+purpose:
+
+* its **members**, a predicate over types — the predicate the operation rules
+already use (`isArithmetic`, `isInteger`, `isFloat`, `isScalar`, `isPointer`);
+* its **grants**, the operations a body may perform on a hole of that class.
+
+The temptation is to *derive* the grants from the members — a class grants
+whatever its members admit. That derivation is wrong, and the pair `Ordered` /
+`Number` is why: they admit exactly the same types and promise different
+operations. `fn T max<T: Ordered>` says *"all I do with it is compare"*, which is
+a smaller promise than `Number` and therefore a better one; a derivation would
+collapse the two into one class and take away the reader's ability to say which
+capability they meant. The same shape appears in Rust (`Add` ≠ `PartialOrd`, and
+a bound `T: Add` does not give `<`) and in Haskell (`Num` and `Ord` are separate
+classes over overlapping types).
+
+What *is* derived — and what a test in `tests/unit/sema/constraint_test.cc`
+asserts over representative types — is soundness:
+
+> **Every operation a class grants is legal for every type in it.**
+
+That is the property that keeps the grants from being decoration, and it is a
+test rather than an argument because it is exactly what fails when the two facts
+drift apart: a `Float` that granted `%` would grant an operation no float admits,
+and a `Number` that granted `%` would be a lie for half its members. It is the
+failure C++ has, where the constraint is inferred from whatever the body did and
+surfaces at a call site two layers away.
+
+The classes, each written as *members ← the operation rules*, and *grants*:
+
+| class | members | grants |
 |---|---|---|
-| `Any` | nothing beyond the universal rules (store, copy, pass, return, be an element) | every type argument |
-| `Num` | `+ - * /`, unary `-`/`+` | int and float; **not** `str`, `bool`, pointer |
-| `Int` | `Num` plus `%`, `& \| ^ ~ << >>` | integers only — `%` on `f64` is `error[sema-invalid-operands]: '%' needs integer operands` |
-| `Float` | `Num`, no `%` | floats |
-| `Ordered` | `< <= > >=` | int and float — **not** `str`, which is `error: '<' needs arithmetic operands` |
-| `Eq` | `== !=` | `bool`, `str`, pointer, arithmetic — **not** a product, which is `error: '==' has no meaning for a product: compare the members, as in 'a.0 == b.0 && a.1 == b.1'` |
+| `Any` | every object | nothing beyond the universal rules (store, copy, pass, return, be an element) |
+| `Eq` | `isScalar` — arithmetic, `bool`, `str`, pointer | `== !=` |
+| `Ordered` | `isArithmetic` | `Eq` and `< <= > >=` |
+| `Number` | `isArithmetic` | `Ordered` and `+ - * / \| ± ++ --` |
+| `Integer` | `isInteger` — the integers and `char` | `Number` and `% & \| ^ ~ << >>` |
+| `Float` | `isFloat` | `Number`, and **fewer members**: `f32`, `f64`, `f80` |
+| `Pointer` | `isPointer` | the comparisons, and nothing else |
+
+Three of these are worth a sentence rather than a row:
+
+* **`Eq` is wider in members and narrower in grants than the arithmetic** — a
+  `str`, a `bool` and a pointer are equatable and are not numbers, which is why
+  equality is a class of its own and not part of `Number`.
+* **`Float` is a narrowing, not a capability.** Its whole use is *"this works for
+  floats and must be refused for an integer"* — `fn T mean<T: Float>(xs: []T)`.
+  It grants everything `Number` does, over fewer types.
+* **`Pointer` grants only the comparisons**, `p < q` being an address comparison
+  this language defines. `*p`, `p[i]` and `p + i` are the *pointee's* type, and an
+  abstract pointer does not name one — so no class grants them, and the refusal
+  says to write the pointed-at type instead of widening the class to `Number`,
+  which would be advice about a different kind of value.
+
+**No class for `bool`.** `!`, `&&`, `||` and the condition of `if`/`while`/`for`
+are `bool`-only, and no class grants them *on purpose*: a class whose members are
+one type is not a constraint, it is the type. A binder in one of those positions
+is told to write `bool`, the honest fix.
+
+### A constraint on a generic `type`, where only one rule applies
+
+An alias's target is a type expression, and a type expression performs no
+operation — so of the two halves above, only the **satisfaction** half can say
+anything about `type Vec<T: Number> = [4]T;`. It is not decoration either way: the
+declaration wrote which types may fill the hole, and a use is where a hole gets
+filled.
+
+So a use is checked, in the type reader, at the substitution: `Vec<bool>` is
+refused with the argument, the binder and the class named, and no need to read the
+target first. This is C++'s rule for a constrained alias template and not Rust's,
+which ignores bounds on an alias — and the reason to have it is the reason the
+whole table exists: a declaration that promises something no stage checks is the
+failure `parse-constraint-not-read` was there to prevent.
+
+**Composition is not here yet, and nothing needs it.** Every pair of these
+classes is either redundant or contradictory (`Number` already grants everything
+`Ordered` does; `Float` and `Pointer` share no member), so `<T: A + B>` has no use
+today. The syntax that will need it is the **second independent class**, which is
+what a user-declared `interface` brings — a class that says nothing about
+operations this table already covers.
 
 Two rules, and they are the two halves of soundness:
 
-1. **Only the constrained operations are legal.** A `T` under `+` with no `Num`
-   is refused *at the declaration*, with the sentence that already exists for
-   `*void` under `+`. This is Go's rule, stated in its design document: *'Generic
-   functions may only use operations supported by all the types permitted by the
-   constraint.'*
+1. **Only the constrained operations are legal.** A `T` under `+` with no
+   `Number` is refused *at the declaration*, and the sentence names the **least
+   powerful** class that grants the operation — a body that only compares is told
+   `Ordered`, because naming `Number` would make the declaration promise
+   arithmetic it never uses. This is Go's rule, stated in its design document:
+   *'Generic functions may only use operations supported by all the types
+   permitted by the constraint.'*
 2. **Satisfying a constraint is checked at the instantiation**, and then the
    instance needs no re-checking. That is the payoff of checking the body once,
    and it is why the lowering can substitute and emit with confidence.
@@ -396,14 +470,34 @@ this language refuses an integer literal in an `f64` position (measured above).
 So the rule is stated in terms of the class and not in terms of the literal:
 
 > **A literal is assignable to a parameter when the constraint's class is the
-> literal's class.** `T: Int` accepts `1`; `T: Float` accepts `1.0`; `T: Num`,
-> which admits both, accepts neither — because the body would then mean different
-> things for an int and a float, and one of them is a conversion this language
-> does not perform.
+> literal's class.** `T: Integer` accepts `1`; `T: Float` accepts `1.0`; `T:
+> Number`, which admits both kinds, accepts neither — because the body would then
+> mean different things for an int and a float, and this language converts neither
+> into the other without a cast.
 
 That is Go's *'representable in all types in the constraint set'*, with our
 no-int→float rule applied on top of it, and it is the only rule in the body check
 that needs the constraint for anything other than 'may this operator be used'.
+
+When the class admits it, the literal is **decided as the binder** — not as its
+own default. That is what makes the value right in every instance: the text is one
+`1` in the source, and the type travels through the substitution boundary like
+every other type of the node, so `fn T zero<T: Integer>() { return 1; }` gives an
+`i32` `1` for one instance and a `u8` `1` for another from one body.
+
+The rule is written **once**, in `support::literalAdmittedBy`, and asked by the
+three sites that can meet it (`decideAt`, `checkAssignable` and the binary case
+where a literal sits beside a binder); the sentence that reports a refusal is
+`sema::Checker::refuseLiteralInBinder`, also once. A rule asked in three places is
+a rule that drifts, which is why neither half is written out at a call site.
+
+**The seam this leaves, named.** A `Number` body cannot write a constant at all:
+`(a + b) / 2` is refused, because `2` would have to be `2i32` in one instance and
+`2.0` in another. The honest fix is the *type's own* constant (Rust's associated
+constants, `T::ZERO`), which needs `interface` and is the same slot as
+`Fn`-shaped constraints below. Until it exists, a body that needs two writes
+`Number`-shaped arithmetic over the values it was given, or a class whose members
+are one kind (`Float` with `2.0`).
 
 ### `Fn`, and why it is not here
 
@@ -687,14 +781,22 @@ Each step with the test it comes with.
 
 ## What has landed
 
-The whole of it except constraints: the **parser**, the **alias** and the
-**generic function**, from the declaration to the emitted instance.
+The whole of it: the **parser**, the **alias**, the **generic function** and the
+**constraint**, from the declaration to the emitted instance.
 
 | Where | What |
 |---|---|
 | `lex` | `::` is a token, longest match over `:`, next to `..` and `##`. Two characters this language writes together; a tokenizer that split them would leave the parser to decide from adjacency alone |
 | `parse` | `GenericParams` (binders, after the name of a `fn` or a `type`) and `TypeArgList` (arguments, in a type run or behind `::` of a call, one `Type` per argument). `parseTypeRun` gained the `<` branch and became a **conduit** for a compound closer; `parseGenericParams`, `parseTypeArgList`, `closeList` and `reportUnusedListClose` are the list reader, and `parseType` returns what its closer consumed |
-| `parse` | Two new codes, and only two: `parse-expected-type-arg-close` (a list with no `>`) and `parse-stray-type-arg-close` (a `>`/`=` that closes nothing). `parse-constraint-not-read` refuses `<T: Ordered>`, because a constraint that parses and is then ignored is a declaration promising a guarantee no stage checks |
+| `parse` | Two new codes, and only two: `parse-expected-type-arg-close` (a list with no `>`) and `parse-stray-type-arg-close` (a `>`/`=` that closes nothing). The `:` of a constraint reads a `Constraint` node holding a `Name` — the same shape a `type` use has, so `resolve` treats the word as a language word and not as a user binding, and no stage has to special-case it. `parse-constraint-not-read` refused `<T: Ordered>` while the checker could not read it; the code is **retired** with the stage that made it temporary |
+| `support` | `support/constraint`: the class table, one row per class — the name, the member predicate *named* rather than encoded, the grant bit set, and the literal class. `constraintForOperation` answers the refusal's "write this one", and it picks the **least powerful** class that grants the operation |
+| `sema` | the class on a `Param`: `BinderRow` carries the spelling, the `Param` and the class, read **once** per declaration by `readBinderRows`, so the two passes over a signature (signature, then body) cannot produce two classes for one binder or two sentences for one fault. A `Param`'s class is *not* part of its identity — `equalFields` compares the explicit field list — so `T` under two constraints is one `Param` |
+| `sema` | the **body check**: `refuseOperation`, called at every site where an operation is about to be allowed (binary, unary, the step operators, and the condition of a control statement), refuses a binder whose class does not grant it and names the class to write. A binder is granted the *operation*, and the concrete rules below it are skipped — there is no width to promote to |
+| `sema` | the **satisfaction check** at the instantiation and not at the call: `satisfies` answers each class with the operation rule's own predicate, and `internInstance` asks it before the substitution, so an inadmissible argument produces no instance. One sentence per *(node, argument list)* — a call inside a generic body is expanded once per instance of the enclosing declaration, and two expansions of one call are one fact about the source |
+| `sema` | the **literal rule** in one place: `support::literalAdmittedBy` decides and `Checker::refuseLiteralInBinder` reports, asked by `decideAt`, `checkAssignable` and the binary case. The literal is **decided as the binder**, so one body gives the right value per instance |
+| `sema` | the class of a binder reaches the **type reader** through the name row: `TypeName::rows` carries the declaration's `BinderRow`s (one struct, `typespec.h`, so the checker's table and the reader's input cannot disagree), and a use of a generic *alias* is checked against them where the substitution happens — `Vec<bool>` is refused, `Vec<i32>` is not. The predicate mapping moved to `TypeStore::satisfies`, which is where the predicates it names already live |
+| `ir` | nothing new, and the rule that made it nothing: a binder operation is lowered at the **instance's** type, because the substitution happens at the checker's boundary — `typeOf` and `opTypeOf`, the latter being the one accessor that reads a record's *type* instead of its flags, precisely because `infoOf` hands back what `sema` wrote and a `Param` reaching `llvmType` is an internal error. A binary expression stores no `opType` at all: its operation happens at its left operand's type, and `lowerBinary` reads that from the operand |
+| `ir` | two **latent gaps** closed, both reachable only once a float could be an operand: a negation is `sub 0, x` for an integer and `fneg` for a float, and a step adds one *of the operand's own kind* (`stepValue`). Both were single-branch code that built a module the verifier refuses (`sub double 0.0, x`, `add double %x, i0 0`), and both are now chosen by the operand's type |
 | `parse` | The scanner that splits `fn`'s return type from its name treats an identifier's `<...>` as **part of the word** and remembers the name as the word's *first token*: `fn Vec<i32> f<T>()` is the type `Vec<i32>`, the name `f`, and the binders `<T>`. The lookahead's copy of the closing rule is `skipTypeArgList`, held to `closeList` by the tests that pin all four spellings |
 | `ast` | nothing: the tree lowering is structural, so both nodes ride it. The `NodeKind` values are `GenericParams` and `TypeArgList` |
 | `a declaration's return type` | read by the **type reader** and not walked token by token, and that needed a mechanism the grammar did not have: a **bound**. The scan (`scanTypeRun`) finds where the name begins, and `parseBoundTypeRun` reads up to that token with `TokenBound` making `atEnd()` true there — so `fn Vec<i32> f()` gets a `TypeArgList` like every other type position instead of the flat words `Vec < i32 >`, and `fn Pair<T, K> make<T, K>()` is a return type the reader below can resolve. A bound is a token *range*, restored by RAII; a flag on the parser would be state that survives the token stream going the wrong way, which is the failure this parser does not recover from |
@@ -705,7 +807,8 @@ The whole of it except constraints: the **parser**, the **alias** and the
 | `sema` | one new kind, `Param`, whose identity is `(owner, binder)` and whose spelling is a third fact kept beside it; `TypeStore::substitute`, which rebuilds a type through the same builders so the *result* meets the array and product rules a written type meets; `TypePart.hasArgs` and `TypeName.{binders, owner}`, which is how a use reaches the template; and the three refusals a use can produce — a generic name with no arguments, the wrong count, arguments on a name that takes none — each a `sema-malformed-type` sentence that names the numbers and the spelling to write |
 | `sema` | a **gate on functions only**: `sema-generics-not-read`, once per unit, when a `fn` declares binders — its parameters, its body and its instantiations are the next stage. Without it, a binder would be an unknown type name with a "did you mean `i8`?" note, which is a sentence about a typo for something the reader wrote on purpose |
 | `ir` | nothing new, and an **invariant** added: a `Param` reaching the LLVM mapper or the debug records is `ir-internal`. Instantiation substitutes every binder before a module is built, and a generic *alias* use is already a concrete type by the time the lowering sees it — `Rows<i32>` is `[4]i32` |
-| `examples` | `021_generic_alias.mx`: nested uses, a constructor over a use, a use in a product member, a count that comes from the argument, and an alias built on another. `022_generics.mx`: a binder in the parameter and in the return type, two binders, a generic alias as the return type, an explicit `::<...>` call, a template calling a template with its own binder, and the instances all of it produces. Both are checked, dumped, lowered and **run** by `make examples` |
+| `examples` | `021_generic_alias.mx`: nested uses, a constructor over a use, a use in a product member, a count that comes from the argument, and an alias built on another. `022_generics.mx`: a binder in the parameter and in the return type, two binders, a generic alias as the return type, an explicit `::<...>` call, a template calling a template with its own binder, and the instances all of it produces. `023_constraints.mx`: every class, the arithmetic/sign/step/bitwise grants, the literal rule, and the eight refusals written out in the compiler's own words. All three are lexed, parsed, resolved, checked and lowered by `make examples` |
+| `tests` | `tests/unit/sema/constraint_test.cc`: the **matrix** (one body using every grant of a class, instantiated at every member of it, plus every type the class excludes refused at the instantiation) — which is the invariant of § 6 as a test rather than as an argument — plus the inclusion rows, the literal rule's four shapes, the `bool`-only positions, the two-binders case, and the dedupe. `tests/unit/ir/lower_test.cc`: the negation and the step at the operand's own kind, in a written type and in a substituted instance |
 
 Two bounds came out of this stage, and both are `support/limits.h`: the
 **instance budget** (`SemaOptions::maxInstances`, reported once, § 5) and
@@ -752,7 +855,7 @@ reachable.
 | 8 | **A generic alias is an abbreviation: instantiation produces a type the store already has** | `type_alias.md` decision 2 carried one step. `Pair<i32, bool>` *is* `(i32, bool)`, the check is a `TypeId` equality, and the store does not grow — a stated invariant with a test |
 | 9 | **Inference is first-order unification from arguments and the expected type; no generalization** | There are no polymorphic values to generalize, and every constructor is first-order, so a solution is unique when it exists and 'cannot infer' is a fact about the program |
 | 10 | **A literal never decides a binder, and a binder is never a literal** | `identity(5)` is `i32` and `identity(5.0)` is `f64`, by the defaulting rule `let x = 5;` already follows. A parameter typed `<integer literal>` would be a second kind of deferred type for no gain |
-| 11 | **A literal is assignable to a parameter only when the constraint's class is the literal's class** | Measured: an integer literal in an `f64` position is an error here, so `T: Num` cannot accept `1`. Go's *'representable in all types in the constraint set'* with our strictness on top |
+| 11 | **A literal is assignable to a parameter only when the constraint's class is the literal's class** | Measured: an integer literal in an `f64` position is an error here, so `T: Number` cannot accept `1`. Go's *'representable in all types in the constraint set'* with our strictness on top — and the seam that follows (a `Number` body needs `T::ZERO`) is named in § 6 |
 | 12 | **Constraints are compiler-known capability classes, from the measured operation table** | There is no `interface` yet, and inventing one for this is designing two features at once. Each class is the set the existing operation rules already accept, so the body check reuses the sentences that exist |
 | 13 | **Only the constrained operations are legal on a parameter, checked at the declaration** | Otherwise the constraint would be documentation and the real rules would be the ones C++ has |
 | 14 | **Instantiation is a worklist keyed on `(declaration, arguments)`, expanded with the instance's substitution** | The arguments inside a generic body are written in terms of its binders, so the set cannot be enumerated by one walk of the program (`id<i32>` and `id<f64>` come from one body). A repeated key is not re-expanded, which is what makes a recursive generic terminate |

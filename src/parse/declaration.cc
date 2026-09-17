@@ -629,18 +629,34 @@ ListClose Parser::parseGenericParams() {
     bump();
     name.complete(SyntaxKind::Name);
     if (at(lex::TokenKind::Colon)) {
-      // `T: Ordered`: the constraint slot. The `:` and the class name are
-      // consumed here, so the list can still close and one slip costs one
-      // sentence instead of a cascade from every token after it -- and the
-      // refusal is *named*, because silently ignoring a constraint would leave a
-      // declaration claiming a guarantee no stage checks.
-      error("a constraint on a binder is not read yet: write the binder alone (`<T>`)",
-            ParseErrorCode::ConstraintNotRead);
+      // `T: Num`: the constraint, read into the tree rather than checked here.
+      //
+      // The parser decides **the shape** and nothing else: one name, and that is
+      // the whole of a constraint's syntax today. Whether the word is one of the
+      // classes is `sema`'s question, and it is asked there for the same reason
+      // every other name is -- the grammar has no table of names, and the one
+      // stage that does is the one that can also explain what the alternatives
+      // are (`generics.md`, § 6).
+      Marker constraint = start();
       bump(); // `:`
-      // The class name is spelled exactly like a type, so the type reader is what
-      // consumes it -- and what would consume its own `<...>` when a class takes
-      // arguments.
-      static_cast<void>(parseTypeRun());
+      if (at(lex::TokenKind::Identifier)) {
+        // A `Name` and not a `Type`: a class is a word of the language, and the
+        // `Name` kind is what tells `resolve` exactly that -- it reports an
+        // unknown name for a `PathExpr` and is silent about a `Name`, which is
+        // what keeps `Number` out of the definitions the resolver looks up.
+        Marker klass = start();
+        bump();
+        klass.complete(SyntaxKind::Name);
+      } else {
+        // A `:` with nothing after it, or with something that cannot be a class
+        // name. The sentence names the slot's shape, and the token is left where
+        // it is so the list's own closer reports the *other* mistake if there is
+        // one -- `T: (,)` is two slips and gets two sentences.
+        error(atListCloser() ? "a constraint needs a class name after `:`"
+                             : "expected the name of a constraint class after `:`",
+              ParseErrorCode::ExpectedName);
+      }
+      constraint.complete(SyntaxKind::Constraint);
     }
     if (at(lex::TokenKind::Comma)) {
       bump();

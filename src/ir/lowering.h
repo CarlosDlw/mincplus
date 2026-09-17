@@ -156,6 +156,18 @@ private:
   [[nodiscard]] const sema::ExprInfo& infoOf(ast::AstId id) const {
     return typed_.infoOf(id);
   }
+  // The **operation type** of a compound assignment, through `concrete`.
+  //
+  // `infoOf` hands back the record `sema` published, and that record holds one
+  // *type* -- `opType`. Reading it directly would be the one type read in this stage
+  // that skipped the substitution, which is why this accessor exists: a record written
+  // inside a generic body holds that body's types, and a `Param` reaching `llvmType`
+  // is an internal error rather than a wrong answer (decision 20). Everything else a
+  // caller wants from the record is a flag or a constant, and those are substituted
+  // by nobody.
+  [[nodiscard]] sema::TypeId opTypeOf(ast::AstId id) const {
+    return concrete(infoOf(id).opType);
+  }
   // The conversion `consumer` applies to `child`, or nullptr when it applies
   // none. Matched on the **operand node** rather than on an operand index: the
   // record keeps `node` precisely so the pair can be checked against the tree,
@@ -509,6 +521,13 @@ private:
   // record rather than from a width this stage picks.
   [[nodiscard]] Value pointerOffset(const Value& pointer, const Value& offset, bool negate);
   [[nodiscard]] Value pointerDifference(const Value& lhs, const Value& rhs);
+  // The step of `++`/`--` and of `p += 1`: one unit of the operand's **own kind**.
+  // An integer steps by an integer one and a float by a float one, and the type is
+  // what chooses the pair of instructions -- `add double %x, i0 0` is the shape a
+  // step written once for both kinds builds, and the verifier refuses it. One
+  // function, because `x++`, `++x` and the place form of `--` are one step with the
+  // value kept, dropped, or not produced at all.
+  [[nodiscard]] Value stepValue(const Value& old, bool increment, std::string_view name);
 
   // --- literals and globals ----------------------------------------------------
   // The bytes of a string literal, and the private global holding them. Keyed by

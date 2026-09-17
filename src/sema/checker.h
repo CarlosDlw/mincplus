@@ -30,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "ast/ast.h"
@@ -43,6 +44,7 @@
 #include "sema/typed_ast.h"
 #include "sema/typespec.h"
 #include "support/consteval/suffix.h"
+#include "support/constraint/constraint.h"
 #include "support/intern/interner.h"
 
 // The operator tokens the checker names, spelled once. Internal to this module,
@@ -304,14 +306,60 @@ private:
   // The rows one binder list contributes to a type reader's table, appended in
   // binder order; the return value is how many were written.
   //
-  // Total and silent, deliberately: a binder's *name* is `resolve`'s question and
-  // it has already answered -- a reserved word and a repeated binder are both its
-  // errors -- so a binder that is not a sound name contributes a row whose type
-  // is invalid, which every consumer of the table already reads as *understood,
-  // no type; the fault is reported elsewhere* (`readTypeSpec`'s `brokenName`). A
-  // row is pushed for every binder written, so the count is the written arity and
-  // not the number that happened to survive.
+  // **Read once per declaration.** The signature pass and the body pass both enter
+  // the binder list, and the second entry has to see what the first one saw -- a
+  // second read of the tree could report a second sentence and could disagree. So
+  // the declaration's binders live in `binders_` from the first read, and every
+  // later call is answered from the table. That is also why a constraint's fault is
+  // reported here exactly once.
+  //
+  // Total and silent about a binder's *name*, deliberately: that is `resolve`'s
+  // question and it has already answered -- a reserved word and a repeated binder
+  // are both its errors -- so a binder that is not a sound name contributes a row
+  // whose type is invalid, which every consumer of the table already reads as
+  // *understood, no type; the fault is reported elsewhere* (`readTypeSpec`'s
+  // `brokenName`). A row is pushed for every binder written, so the count is the
+  // written arity and not the number that happened to survive.
   std::uint32_t pushBinderRows(ast::AstId params, std::uint32_t owner, std::vector<TypeName>& out);
+
+  // One table, one writer, and four readers that must not disagree -- a sentence
+  // that names a binder, an operation that asks what its class grants, a
+  // `DW_TAG_template_type_parameter` that needs the `Param` itself, and the type
+  // reader's check that an argument is inside its binder's class. The row itself is
+  // `sema::BinderRow` (`typespec.h`), because that last reader is handed it through
+  // `TypeName::rows`; rebuilding a `Param` from `(owner, binder)` at any of them
+  // would be a second way to name one binder, and the class is exactly the fact that
+  // would be lost by it.
+  //
+  // The declaration's binders, or an empty span when it wrote none.
+  [[nodiscard]] std::span<const BinderRow> binderRowsOf(std::uint32_t owner) const {
+    const auto found = binders_.find(owner);
+    return found == binders_.end() ? std::span<const BinderRow>()
+                                   : std::span<const BinderRow>(found->second);
+  }
+
+  // The one read of a binder list: the names, the constraint each one wrote, and the
+  // `Param`s those intern to. Called by `pushBinderRows` exactly once per
+  // declaration, which is what keeps a fault to one sentence.
+  void readBinderRows(ast::AstId params, std::uint32_t owner, std::vector<BinderRow>& out);
+
+  // The class a `Constraint` names, and the one sentence for a word that is not a
+  // class. `Any` is the answer for a fault -- the declaration is then
+  // unconstrained rather than promising something no stage enforces, and the
+  // sentence has already said so.
+  [[nodiscard]] support::ConstraintClass readConstraintClass(ast::AstId constraint);
+
+  // The class a type's binder was declared with, or `Any` when the type is not a
+  // binder. One question, asked where an operation is about to be allowed and where
+  // a type argument is about to be accepted.
+  [[nodiscard]] support::ConstraintClass classOfBinder(TypeId type) const {
+    return types_.binderClass(type);
+  }
+
+  // Does this type belong to the class? The predicate per class is the *operation
+  // rule's own* (`support/constraint`'s header names one per class), so a class
+  // cannot accept a type that the operation it grants would refuse.
+  [[nodiscard]] bool satisfies(support::ConstraintClass klass, TypeId type) const;
 
   // A call whose callee is a generic declaration: the written argument list, or
   // inference from the arguments and the expected type, then the substituted
@@ -356,13 +404,45 @@ private:
                                           const TypeStore& types);
   static void mangleInto(const TypeStore& types, TypeId type, std::string& out);
 
-  // An **operation** on a binder, which needs a constraint (`generics.md`, § 6).
-  // True when `type` is a parameter and the sentence was reported; the caller then
-  // answers with a poison instead of the operation's result, so one mistake stays
-  // one diagnostic. `why` is the clause in front of the shared explanation, and it
-  // names the operation the way the source wrote it: `` `+` on a binder needs a
-  // constraint ``.
-  [[nodiscard]] bool refuseParameter(ast::AstId at, TypeId type, std::string_view why);
+  // An **operation** on a binder that the binder's class does not grant -- which is
+  // the whole of the body-side rule (`generics.md`, § 6).
+  //
+  // False when the operation is allowed, so a caller reads it as a guard rather
+  // than a test: `if (refuseOperation(at, type, op, "`+`")) return kTypeError;`.
+  // True when `type` is a binder the class does not admit and the sentence was
+  // reported; the caller then answers with a poison instead of the operation's
+  // result, so one mistake stays one diagnostic.
+  //
+  // The sentence names the class to write -- the *least powerful* one that grants
+  // the operation (`constraintForOperation`), because that is the smallest promise
+  // that makes the body legal. For the three `bool`-only operators and the `bool`
+  // positions, no class grants it on purpose and the sentence names the type
+  // instead (`support/constraint`'s header says why).
+  [[nodiscard]] bool refuseOperation(ast::AstId at, TypeId type, support::Operation op,
+                                     std::string_view opText);
+
+  // The **literal rule**'s sentence (`generics.md`, decision 11), and the one place
+  // it is written: a deferred literal whose kind the binder's class does not admit is
+  // refused here, naming the class, the literal's kind, and the two classes that
+  // would take it.
+  //
+  // The decision itself is `support::literalAdmittedBy`, asked by all three sites
+  // that can meet this case; this is only what a reader repairs from, so a change to
+  // the rule cannot leave one of the three saying something the others do not.
+  void refuseLiteralInBinder(ast::AstId at, TypeId binder, TypeId literal);
+
+  // The **code** a type reader's failure reports under. The reader knows what went
+  // wrong with the type and not which bucket a reader of the diagnostic looks for,
+  // so the mapping is here, once, instead of as the same expression at three call
+  // sites: an unknown word is the spelling's business (and earns a suggestion), an
+  // argument outside its binder's class is the declaration's promise meeting the
+  // use, and everything else is the type position itself.
+  [[nodiscard]] static SemaErrorCode codeOf(const TypeSpecResult& spec);
+
+  // The `Param` of the `binder`-th binder of `owner`, already interned by the
+  // declaration's own read. `kInvalidType` for an unsound binder -- one `resolve`
+  // refused -- and for an index past the list.
+  [[nodiscard]] TypeId binderParam(std::uint32_t owner, std::uint32_t binder) const;
 
   // What the `binder`-th binder of `owner` was called. Kept beside the rows
   // because a `Param`'s identity is `(owner, binder)` and an unsound binder has no
@@ -529,6 +609,14 @@ private:
                                      std::uint8_t operandBase, bool isFill, TypeId arrayType,
                                      ExprInfo& info);
   [[nodiscard]] TypeId checkBinary(ast::AstId expr, ExprInfo& info);
+
+  // A binary operator with a **binder** on one side: the class decides whether the
+  // operation is allowed, and the result is the binder (arithmetic) or `bool` (a
+  // comparison). Split out of `checkBinary` because every rule below that point
+  // compares two concrete kinds, and a `Param` is not one (`generics.md`, § 6).
+  [[nodiscard]] TypeId checkBinaryOnParameter(ast::AstId expr, Tag kind, ast::AstId lhs,
+                                              ast::AstId rhs, TypeId left, TypeId right,
+                                              ExprInfo& info);
   // `++p` / `--p` / `p++` / `p--` on a *pointer*: one element step, which is
   // `p + 1` / `p - 1` with the same scaling and the same void rule. `nullopt`
   // when the operand is not a pointer, so exactly one of the two rules owns the
@@ -867,9 +955,15 @@ private:
   // Which instance a call reaches, keyed on (the body being lowered, the node).
   // The body is `kNoInstance` for every call written outside a generic body.
   std::vector<CallTarget> callTargets_;
-  // What the `binder`-th binder of a declaration was called, by owner. One entry
-  // per declaration that wrote binders.
-  std::unordered_map<std::uint32_t, std::vector<std::string_view>> binderSpellings_;
+  // A declaration's binders, by owner: the spelling, the `Param` and the class.
+  // One entry per declaration that wrote binders, filled by the first read and
+  // never rewritten (`pushBinderRows`).
+  std::unordered_map<std::uint32_t, std::vector<BinderRow>> binders_;
+  // The `(call node, instance)` pairs a constraint refusal has already been
+  // reported for. A call inside a generic body is expanded once per instance of
+  // the enclosing declaration, and two expansions that ask for the *same*
+  // inadmissible argument would otherwise say the same thing twice.
+  std::unordered_set<std::string> unsatisfiedReported_;
   // The declaration whose body is being checked, and how many binders it wrote.
   // `binders == 0` is every body that is not generic, and it is what makes the two
   // paths through a generic call one condition instead of a mode.

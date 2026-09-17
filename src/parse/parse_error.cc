@@ -13,7 +13,13 @@ namespace {
 // parse_error.h; `toString` and the derived `allParseErrorCodes()` read this
 // instead of repeating the list, and the tests require every row to be
 // reachable from some input.
-constexpr std::array<ParseErrorCodeInfo, 26> kParseErrorCodeInfos{{
+// The size is **deduced**. It used to be written out, and then a row removed with
+// the code it named left the array one short: the *last* slot was zero-initialized,
+// which is a row for a real code with a null name -- a wrong answer that no read of
+// the table's own text would show. `std::to_array` makes the rows the only thing
+// that decides the size. `TableAndEnumAgree` is what catches the case this cannot:
+// a code with no row at all.
+constexpr auto kParseErrorCodeInfos = std::to_array<ParseErrorCodeInfo>({
     {ParseErrorCode::ExpectedToken, "parse-expected-token"},
     {ParseErrorCode::ExpectedItem, "parse-expected-item"},
     {ParseErrorCode::ExpectedName, "parse-expected-name"},
@@ -37,10 +43,9 @@ constexpr std::array<ParseErrorCodeInfo, 26> kParseErrorCodeInfos{{
     {ParseErrorCode::InvalidLiteralSuffix, "parse-invalid-literal-suffix"},
     {ParseErrorCode::ExpectedTypeArgClose, "parse-expected-type-arg-close"},
     {ParseErrorCode::StrayTypeArgClose, "parse-stray-type-arg-close"},
-    {ParseErrorCode::ConstraintNotRead, "parse-constraint-not-read"},
     {ParseErrorCode::CastToGenericType, "parse-cast-to-generic-type"},
     {ParseErrorCode::Aborted, "parse-aborted"},
-}};
+});
 
 // Derived, not listed again: a code added to the table above is picked up by
 // every consumer of allParseErrorCodes() without a second edit that could be

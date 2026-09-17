@@ -12,12 +12,18 @@ namespace {
 // The node kinds, in one table. Adding a node kind is a row here plus an
 // enumerator in syntax_kind.h; the dump, the tests, and the derived
 // `allNodeKinds()` all read this instead of repeating the list.
+//
+// The size is **deduced**, and that is not cosmetic: it used to be written out
+// (`std::array<NodeKindInfo, 46>`), so adding a kind was a row here, an enumerator
+// there, *and* an edit to a number nobody remembers -- and forgetting the third
+// failed the build in a file the reader was not editing. `std::to_array` makes the
+// table the only thing that decides how big it is.
 struct NodeKindInfo {
   SyntaxKind kind;
   const char* name;
 };
 
-constexpr std::array<NodeKindInfo, 46> kNodeKindInfos{{
+constexpr auto kNodeKindInfos = std::to_array<NodeKindInfo>({
     {SyntaxKind::File, "File"},
     {SyntaxKind::Error, "Error"},
     {SyntaxKind::FnDecl, "FnDecl"},
@@ -64,11 +70,12 @@ constexpr std::array<NodeKindInfo, 46> kNodeKindInfos{{
     {SyntaxKind::TypedInitializer, "TypedInitializer"},
     {SyntaxKind::TuplePattern, "TuplePattern"},
     {SyntaxKind::GenericParams, "GenericParams"},
+    {SyntaxKind::Constraint, "Constraint"},
     {SyntaxKind::TypeArgList, "TypeArgList"},
     {SyntaxKind::MacroCall, "MacroCall"},
     {SyntaxKind::TokenTree, "TokenTree"},
     {SyntaxKind::Attribute, "Attribute"},
-}};
+});
 
 // Derived, not listed again: a kind added to the table above is picked up by
 // every consumer of allNodeKinds() without a second edit that could be

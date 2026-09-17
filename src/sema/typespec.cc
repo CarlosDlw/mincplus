@@ -109,6 +109,16 @@ constexpr Alias kAliases[] = {
   return result;
 }
 
+// The one failure that is neither a malformed type nor an unknown word: an argument
+// outside its binder's class (`TypeSpecResult::constraintViolation`). Its own maker
+// because it is its own *code* at the caller, and because the message it carries is
+// about a declaration and a use rather than about this position.
+[[nodiscard]] TypeSpecResult constraintFailure(std::string message) {
+  TypeSpecResult result = fail(std::move(message));
+  result.constraintViolation = true;
+  return result;
+}
+
 [[nodiscard]] TypeSpecResult ok(TypeId type) {
   TypeSpecResult result;
   result.type = type;
@@ -444,6 +454,27 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
       if (!row->type.valid()) {
         // A name whose own expansion failed; reported where it failed.
         return brokenName();
+      }
+      // **The class check, at the use**, and this is the whole of what a constraint
+      // on a generic `type` means: the declaration wrote which types may fill its
+      // holes, and this is where a hole gets filled. Without it the class would be
+      // decoration on an alias -- `Vec<bool>` for a `type Vec<T: Number>` -- and a
+      // declaration that promises something no stage checks is exactly what this
+      // compiler refuses to ship (`generics.md`, § 6).
+      //
+      // Before the substitution, because a list that cannot be filled needs no
+      // target: the same order the `fn` half uses, and the same argument for it.
+      for (std::size_t i = 0; i < arguments.size() && i < row->rows.size(); ++i) {
+        if (types.satisfies(row->rows[i].klass, arguments[i])) {
+          continue;
+        }
+        return constraintFailure("`" + std::string(types.spelling(arguments[i])) +
+                                 "` cannot be the `" + std::string(row->rows[i].spelling) +
+                                 "` of `" + std::string(part.word) +
+                                 "`: the declaration says that binder is `" +
+                                 std::string(support::constraintClassName(row->rows[i].klass)) +
+                                 "`, and a type argument has to be one of the types that "
+                                 "class admits");
       }
       usedBase = types.substitute(row->type, arguments, row->owner);
       if (!usedBase.valid()) {

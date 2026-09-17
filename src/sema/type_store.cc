@@ -480,14 +480,55 @@ TypeId TypeStore::sliceOf(TypeId element) {
   return intern(type);
 }
 
-TypeId TypeStore::param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling) {
+TypeId TypeStore::param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling,
+                        support::ConstraintClass klass) {
   paramSpellings_.emplace_back(spelling);
   Type type;
   type.kind = TypeKind::Param;
   type.owner = owner;
   type.binder = binder;
   type.paramSpelling = paramSpellings_.back();
+  type.binderClass = klass;
+  // Interned like every other type, and the class is not compared for identity
+  // (`equalFields` mixes the pair above and not this) -- so a binder that is read
+  // twice comes back as one type, which is what "the identity is `(owner, binder)`"
+  // has to mean. The value is a function of the pair, so there is nothing to
+  // reconcile: the second read writes the same class the first one did.
   return intern(type);
+}
+
+support::ConstraintClass TypeStore::binderClass(TypeId id) const {
+  if (!isParam(id)) {
+    return support::ConstraintClass::Any;
+  }
+  return get(id).binderClass;
+}
+
+bool TypeStore::satisfies(support::ConstraintClass klass, TypeId type) const {
+  if (!type.valid() || isError(type) || isParam(type)) {
+    return true;
+  }
+  switch (klass) {
+  case support::ConstraintClass::Any:
+    return true;
+  case support::ConstraintClass::Eq:
+    return isScalar(type);
+  case support::ConstraintClass::Ordered:
+  case support::ConstraintClass::Number:
+    // One predicate for two classes, and that is the design and not a shortcut: a
+    // class is members *and* grants, and these two admit the same types while
+    // promising different operations (`support/constraint`'s header). Writing them
+    // as two branches would invite them to drift into two different sets of types,
+    // which is the one thing that is *not* free to change.
+    return isArithmetic(type);
+  case support::ConstraintClass::Integer:
+    return isInteger(type);
+  case support::ConstraintClass::Float:
+    return isFloat(type);
+  case support::ConstraintClass::Pointer:
+    return isPointer(type);
+  }
+  return true;
 }
 
 TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::uint32_t owner) {

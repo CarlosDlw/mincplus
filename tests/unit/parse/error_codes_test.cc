@@ -122,10 +122,6 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::ExpectedTypeArgClose},
     {"one `>` more than there are lists", "fn i32 main() { let x: A<B>> = 1; }\n",
      ParseErrorCode::StrayTypeArgClose},
-    // The constraint slot, reserved and refused: accepting it would be a generic
-    // promising a guarantee no stage checks.
-    {"a constraint on a binder", "type P<T: Ordered> = (T, T);\n",
-     ParseErrorCode::ConstraintNotRead},
     // A cast to a type that takes arguments. The `<` after a type in a cast is a
     // comparison (`x as i32 < 3`), so the list cannot be read there -- and the
     // refusal has to be named, because left to the next token it is three

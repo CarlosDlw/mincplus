@@ -1,0 +1,229 @@
+// **Constraints** -- `fn T twice<T: Number>(x: T)` (`generics.md`, section 6).
+//
+// A declaration with binders is checked **once**, abstractly: its body is checked
+// against `T` and not against any one type. What the body may do with `T` is what
+// `T`'s *class* promises, and a class is two independent facts:
+//
+//   * its **members** -- the predicate that decides which type arguments the
+//     declaration may be instantiated with;
+//   * its **grants** -- the operations the body may perform on the hole.
+//
+// They are independent *on purpose*. `Ordered` and `Number` admit exactly the same
+// types and promise different operations, so `fn T max<T: Ordered>` says "all I do
+// with it is compare" -- the smallest promise that makes the body legal. A class
+// that admitted something its operations would refuse (or the reverse) is the lie
+// the compiler refuses to tell, and the invariant *every grant is legal for every
+// member* is what holds the table together.
+//
+// The seven classes:
+//
+//   `Any`      nothing beyond the universal rules (store, copy, pass, return)
+//   `Eq`       `== !=`                     scalars: bool, str, pointer, arithmetic
+//   `Ordered`  `Eq` and `< <= > >=`        arithmetic -- *not* `str`, which has no order
+//   `Number`   `Ordered` and `+ - * /`     arithmetic, and the unary sign and step
+//   `Integer`  `Number` and `% & | ^ ~ << >>`  the integers and `char`
+//   `Float`    `Number`, no `%`            f32, f64, f80 -- as a *restriction*
+//   `Pointer`  the comparisons             the only thing expressible on `*T`
+//
+// A class name is a word of the language and not a type: `T: i32` is refused,
+// because a class whose members are one type is not a constraint, it is the type.
+// And `!`, `&&`, `||` and the condition of an `if` have **no** class on purpose --
+// they are `bool`-only -- so a binder written there is told to write `bool`, not to
+// go looking for a class that does not exist.
+
+// --- Number: the arithmetic, the sign, the step --------------------------------
+//
+// One body, and every type in `Number` may be the argument: the call decides the
+// instance, and the instance is where the operations get their width.
+//
+// Note what this body does **not** write: a literal. `2` would have to mean `2i32`
+// in one instance and `2.0` in another, and a body that means two things is not a
+// body -- so `Number`, which admits both kinds of number, admits neither literal.
+// A body that needs a constant needs the *type's* constant, which is the seam
+// `generics.md` names (associated constants), and not this stage.
+
+fn T sum3<T: Number>(a: T, b: T, c: T) {
+  return a + b + c;
+}
+
+// `-x` is the operand's **own kind**: `fneg` for a float and `sub 0, x` for an
+// integer, chosen at the instance's type and not at the body's.
+fn T negate<T: Number>(x: T) {
+  return -x;
+}
+
+// `++x` and `x++` are one operation with the value kept or dropped, and the class
+// grants it for every member of `Number` -- a pointer would be the same operator
+// with a stride, and that is `Pointer`'s, not this one's.
+fn T bump<T: Number>(x: T) {
+  let copy: T = x;
+  copy++;
+  return ++copy;
+}
+
+// --- Integer: what a float cannot do -------------------------------------------
+//
+// `%`, the bitwise family and the shifts are refused for a float by the operation
+// rules themselves, so the class that grants them is the one whose members all
+// admit them. `Number` deliberately does not grant `%`: half of its members would
+// be refused by it.
+
+fn T mixed<T: Integer>(a: T, b: T) {
+  let rest: T = a % b;
+  let mask: T = ~(a & b) | (a ^ b);
+  let shifted: T = mask << b;
+  return rest + (shifted >> b);
+}
+
+// --- Float: fewer types, the same operations -----------------------------------
+//
+// This is the class that is a **restriction** and not a capability: `mean` works
+// for floats and is refused for an `i32`, which is exactly what the declaration
+// wants to say. `f80` is the x87 format and is a `Float` on every target that has
+// it; a target without x87 refuses the *type name*, before a class is ever asked.
+
+// `2.0` is a float literal, so a `Float` body may write it: one spelling, one
+// meaning, for every type the class admits.
+fn T mean<T: Float>(a: T, b: T) {
+  return (a + b) / 2.0;
+}
+
+// --- Eq, and Ordered -----------------------------------------------------------
+//
+// Equality is wider than the arithmetic in members (`bool`, `str` and a pointer are
+// equatable and are not numbers) and narrower in grants. Ordering is the four
+// comparisons and nothing else -- `+` under `Ordered` is refused with the sentence
+// that names `Number`.
+
+fn bool same<T: Eq>(a: T, b: T) {
+  return a == b;
+}
+
+fn bool less<T: Ordered>(a: T, b: T) {
+  return a < b;
+}
+
+// --- Pointer: what an abstract pointer can express ------------------------------
+//
+// `p < q` is an address comparison this language defines, and it is the whole of
+// what is expressible on a pointer whose pointee nobody named. `*p`, `p[i]` and
+// `p + i` are the *pointee's* type, so no class grants them: the refusal says to
+// write the pointed-at type rather than to widen the class to `Number`, which would
+// be advice about a different kind of value.
+
+fn bool before<T: Pointer>(p: T, q: T) {
+  return p < q;
+}
+
+// --- the literal rule -----------------------------------------------------------
+//
+// `1` is an integer literal and `1.0` a float one, and this language refuses an
+// integer literal in a float position -- no silent `i32` to `f64`. A literal in a
+// binder's position therefore has to be decided by the **class**: only a class
+// whose members are all integers can take `1`, and only one whose members are all
+// floats can take `1.0`. `Number` takes neither, because `1` would mean `1i32` for
+// one instantiation and `1.0` for another, and a body that means two things is not
+// a body.
+
+fn T zero<T: Integer>() {
+  return 1;
+}
+
+fn T one<T: Float>() {
+  return 1.0;
+}
+
+// A literal *beside* a binder takes the same rule, and the value is right in every
+// instance because the literal's type is the binder: the text is one `2.0`
+// everywhere, and the type travels through the substitution boundary like every
+// other type of the node.
+fn T halve<T: Float>(x: T) {
+  return x / 2.0;
+}
+
+// --- refusals, in the compiler's own words ---------------------------------------
+//
+// Each line below is a program this compiler refuses, with the sentence it prints.
+// They are here rather than in a comment about "errors" because a constraint is
+// only worth writing if the wrong one is caught at the right place.
+//
+//   fn T twice<T>(x: T) { return x + x; }
+//     error[sema-generic-operation]: `+` on a binder needs a constraint: `T` is a type
+//     parameter, and what may be done with one is what its class allows. Constrain it,
+//     as in `fn T f<T: Number>(...)`, and `Number` is the weakest class that admits `+`
+//
+//   fn T half<T: Ordered>(x: T) { return x / 2; }
+//     `Ordered` admits the four comparisons and no arithmetic:
+//     error[sema-generic-operation]: `/` on a binder: `T` is constrained to `Ordered`,
+//     which does not allow it. Widen the class to `Number`
+//
+//   fn T rest<T: Number>(a: T, b: T) { return a % b; }
+//     error[sema-generic-operation]: `%` on a binder: `T` is constrained to `Number`,
+//     which does not allow it. Widen the class to `Integer`
+//
+//   fn bool even<T: Float>(x: T) { return x % 2.0 == 0.0; }
+//     `%` under `Float`: widen to `Integer`, which no float belongs to, so the call is
+//     what is refused: `f64` does not satisfy the constraint on `T`
+//
+//   fn T zero<T: Number>() { return 1; }
+//     error[sema-generic-operation]: this integer literal cannot be stored in `T`:
+//     `T` is constrained to `Number`, and that class does not say which kind of number
+//     a literal is: `1` would mean `1i32` for one instantiation and `1.0` for another,
+//     and the body is checked **once**
+//
+//   fn i32 odd<T>(x: T) { if x { return 1; } return 0; }
+//     error[sema-generic-operation]: `if` on a binder: `T` is a type parameter and no
+//     class allows this, because it is defined for `bool` and nothing else. A value
+//     that must be a `bool` is written `bool`, not a binder
+//
+//   fn T step<T: Pointer>(p: T) { return p + 1; }
+//     error[sema-generic-operation]: `+` on a binder: `T` is a pointer, and the only
+//     operations expressible on one whose pointee nobody named are the comparisons.
+//     This one needs the pointee -- write the pointed-at type (`fn i32 f(p: *i32)`),
+//     or write the comparison
+//
+//   fn i32 pick<T: i32>() { return 0; }
+//     error[sema-generic-operation]: `i32` is not a class; a class says which
+//     operations a body may use, and a class whose members are one type is the type
+//
+// And the other half of the rule, at the call:
+//
+//   fn i32 sum<T: Number>(x: T) { return x; }
+//   sum::<bool>(true);
+//     error[sema-constraint-unsatisfied]: `bool` does not satisfy the constraint on `T`:
+//     this declaration says that binder is `Number`, and a type argument has to be one
+//     of the types that class admits -- otherwise the body, which is checked once
+//     against the class, would mean something the instance cannot do
+
+fn i32 main() {
+  // One template, two instances: the same body at `i32` and at `f64`, and the
+  // arithmetic inside each is carried out at that type.
+  let whole: i32 = sum3(2, 4, 6);
+  let frac: f64 = sum3(1.5, 2.5, 3.0);
+
+  // `Integer` and `Float` are the two classes that admit a literal.
+  let no: i32 = zero();
+  let yes: f64 = one();
+
+  // The arithmetic, the sign, the step and a literal beside a binder.
+  let negated: i32 = negate(3);
+  let stepped: u8 = bump(2);
+  let halved: f32 = halve(3.0);
+  let mixedValue: i64 = mixed(13, 5);
+  let floatMean: f80 = mean(1.0, 3.0);
+
+  // The two comparison classes, at three kinds of type.
+  let equalWord: bool = same("a", "a");
+  let equalPointer: bool = same(&whole, &whole);
+  let ordered: bool = less(1, 2);
+
+  // `Pointer`: the comparisons of two addresses, and nothing else.
+  let first: i32 = 7;
+  let second: i32 = 9;
+  let lower: bool = before(&first, &second);
+
+  // Every instance above is emitted once, however many calls reach it, and the
+  // whole unit is checked without a single cast: that is the payoff of the class
+  // being a real promise rather than a note to the reader.
+  return whole + no + negated + stepped;
+}

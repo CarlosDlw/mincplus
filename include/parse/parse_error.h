@@ -127,12 +127,6 @@ enum class ParseErrorCode : std::uint8_t {
   // *character* is the mistake and the fix is which one to delete -- or, for
   // `>=`, that `>` and `=` are two characters (`generics.md`, decision 4).
   StrayTypeArgClose,
-  // A constraint on a binder -- `<T: Ordered>`. The slot is the `:` of every
-  // other binding and it is reserved, but nothing reads it yet: an accepted
-  // constraint that no stage enforces is a declaration that promises more than
-  // the compiler checks, which is worse than a missing one. Refused by name, and
-  // the tokens are consumed with it so one mistake stays one sentence.
-  ConstraintNotRead,
   // A cast to a type that takes arguments -- `x as Pair<i32, bool>`.
   //
   // The `<` after a type in this position is **not** a list: `x as i32 < 3` is a

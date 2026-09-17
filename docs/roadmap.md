@@ -920,16 +920,17 @@ the two cannot disagree about what the pipeline means.
       [`architectures/tuples.md`](architectures/tuples.md). It lands before
       generics on purpose: a binder list is itself a sequence of pairs, and the
       store gained arity-unknown interning here
-- [ ] **Generics** `<T>` on a function and on a `type`: **the parser, the
-      generic `type` and the generic `fn` have landed**, from the declaration to
-      the emitted instance; **constraints are the next stage** (`<T: Num>` is
-      refused by name until the operation table is a table of classes). The
+- [x] **Generics** `<T>` on a function and on a `type`: **landed**, from the
+      declaration to the emitted instance, **constraints included** — the seven
+      classes (`Any`, `Eq`, `Ordered`, `Number`, `Integer`, `Float`, `Pointer`),
+      the body check that grants an operation or names the class to write, the
+      satisfaction check at the instantiation, and the literal rule. The
       binder list follows the name,
       `<...>` is read in every type position, `::<...>` at a call site, and a
       `>>`/`>>=` that closes two lists is split by the reader and not by the
       lexer — with `::` added to the lexical grammar as one token, and the two
       mistakes that are about a *character* (`A<B>>`, `A<i32`) named by their own
-      codes. A constraint is refused by name rather than read and ignored. On the
+      codes. On the
       type side: `Param` with identity `(owner, binder)`, and a use that
       **substitutes** into the declaration's template — so `Pair<i32, bool>` *is*
       `(i32, bool)`, the check is an id equality, and `examples/021_generic_alias.mx`
@@ -947,9 +948,9 @@ the two cannot disagree about what the pipeline means.
       (which splits both) and `clang++` (which accepts `>>` and still refuses
       `>>=`). A parameter is a real interned type with identity
       `(declaration, position)`, so the store gains one kind and no predicate
-      changes: a `T` under `+` with no constraint is refused by the sentence
-      `*void` under `+` already gets. The body is checked **once**, under a
-      constraint — Go's rule, and C++'s two-phase-name-lookup problem avoided —
+      changes. The body is checked **once**, under a
+      constraint — Go's rule, and C++'s two-phase-name-lookup problem avoided,
+      because a class is what makes the once-check sufficient —
       and instantiation is a worklist keyed on `(declaration, arguments)` with a
       budget, because the calls *inside* a generic body are written in terms of
       its binders, so no single walk of the program enumerates them. An
@@ -960,9 +961,12 @@ the two cannot disagree about what the pipeline means.
       the language so the form is unreachable from source — and one
       `DW_TAG_subprogram` whose
       `DW_AT_name` is `identity<i32>`, so a regex breakpoint stops in every
-      instance, measured in gdb against clang and rustc. The design, the market
-      evidence, the refusals and the constraints (`Num`, `Int`, `Float`,
-      `Ordered`, `Eq`, `Any`) are in
+      instance, measured in gdb against clang and rustc. A **constraint** is a
+      class of values and a promise about a body: members *and* grants, stated
+      separately because `Ordered` and `Number` admit the same types and promise
+      different operations, with the invariant "every grant is legal for every
+      member" held by a test. The design, the market evidence, the refusals, the
+      classes and the seam a `Number` body still cannot cross (`T::ZERO`) are in
       [`architectures/generics.md`](architectures/generics.md)
 - [ ] Top-level types: `struct`, `enum`, and `union`, with **nominal**
       identity across modules (`architectures/modules.md`, seam S4 — the type

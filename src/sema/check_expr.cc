@@ -157,6 +157,57 @@ namespace {
   }
 }
 
+// The operation a **binary** operator performs, for the one question a class
+// answers: may this body do this to a binder?
+//
+// Every binary operator is here, including the two no class grants (`&&`, `||`), so
+// that "nothing grants it" is the table's answer rather than a case this file has to
+// remember it is missing. The unary operators are not here and do not need to be:
+// `-` is `Sub` as a binary operator and `Negate` as a unary one, and only the
+// position knows which -- so the three unary sites name their operation themselves.
+[[nodiscard]] support::Operation binaryOperationOf(Tag kind) {
+  switch (kind) {
+  case kTokPlus:
+    return support::Operation::Add;
+  case kTokMinus:
+    return support::Operation::Sub;
+  case kTokStar:
+    return support::Operation::Mul;
+  case kTokSlash:
+    return support::Operation::Div;
+  case kTokPercent:
+    return support::Operation::Remainder;
+  case kTokAmp:
+    return support::Operation::BitAnd;
+  case kTokPipe:
+    return support::Operation::BitOr;
+  case kTokCaret:
+    return support::Operation::BitXor;
+  case kTokLessLess:
+    return support::Operation::ShiftLeft;
+  case kTokGreaterGreater:
+    return support::Operation::ShiftRight;
+  case kTokLess:
+    return support::Operation::Less;
+  case kTokLessEqual:
+    return support::Operation::LessEqual;
+  case kTokGreater:
+    return support::Operation::Greater;
+  case kTokGreaterEqual:
+    return support::Operation::GreaterEqual;
+  case kTokEqualEqual:
+    return support::Operation::Equal;
+  case kTokBangEqual:
+    return support::Operation::NotEqual;
+  case kTokAmpAmp:
+    return support::Operation::LogicalAnd;
+  case kTokPipePipe:
+    return support::Operation::LogicalOr;
+  default:
+    return support::Operation::Condition;
+  }
+}
+
 [[nodiscard]] const char* opText(Tag kind) {
   switch (kind) {
   case kTokPercent:
@@ -195,9 +246,22 @@ namespace {
     return "*";
   case kTokSlash:
     return "/";
+  case kTokTilde:
+    return "~";
+  case kTokBang:
+    return "!";
+  case kTokPlusPlus:
+    return "++";
+  case kTokMinusMinus:
+    return "--";
   default:
     return "operator";
   }
+}
+
+// The operator as a diagnostic writes it, in backticks: `` `+` ``.
+[[nodiscard]] std::string quotedOperator(Tag kind) {
+  return "`" + std::string(opText(kind)) + "`";
 }
 
 } // namespace
@@ -697,7 +761,7 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
     if (types_.isError(inner)) {
       return kTypeError;
     }
-    if (refuseParameter(operand, inner, "`!` on a binder needs a constraint")) {
+    if (refuseOperation(operand, inner, support::Operation::LogicalNot, "`!`")) {
       return kTypeError;
     }
     if (types_.get(inner).kind != TypeKind::Bool) {
@@ -719,8 +783,20 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
     if (types_.isError(inner)) {
       return kTypeError;
     }
-    if (refuseParameter(operand, inner, "`++` on a binder needs a constraint")) {
+    if (refuseOperation(operand, inner, support::Operation::Increment, "`++`")) {
       return kTypeError;
+    }
+    if (types_.isParam(inner)) {
+      // A binder the class admitted, and the whole answer: the operation rules below
+      // are about concrete types (`isArithmetic`, the pointer step), and the class is
+      // the promise that every one of its members takes the step -- which is what the
+      // grant just read. The place is checked like any other, because a class says
+      // what may be done to a value and not whether the value is addressable.
+      if (!checkModifiable(operand, inner, expr, SemaErrorCode::IncDecNotLvalue,
+                           " and be incremented")) {
+        return inner;
+      }
+      return inner;
     }
     if (!checkModifiable(operand, inner, expr, SemaErrorCode::IncDecNotLvalue,
                          " and be incremented")) {
@@ -747,9 +823,24 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
   if (types_.isError(inner)) {
     return kTypeError;
   }
-  if (refuseParameter(operand, inner,
-                      std::string("`") + opText(kind) + "` on a binder needs a constraint")) {
+  // `~` is the bitwise family and `-`/`+` are the sign, and the two are different
+  // classes: `~` needs an integer and `-x` needs a number.
+  if (refuseOperation(operand, inner,
+                      kind == kTokTilde ? support::Operation::BitNot : support::Operation::Negate,
+                      quotedOperator(kind))) {
     return kTypeError;
+  }
+  if (types_.isParam(inner)) {
+    // Admitted by the class, so the result is the binder and not a promoted one: the
+    // body is checked once, `-x` has to be usable as `T` (`let y: T = -x;`), and the
+    // arithmetic below -- `promote`, the range check, the folded value -- is about the
+    // *instance's* type, which is what the substitution boundary hands the lowering.
+    // Nothing is recorded as an operand conversion: the operand is already the result.
+    info.isLvalue = false;
+    info.isConstant = false;
+    info.hasIntValue = false;
+    info.value = support::ConstInt{};
+    return inner;
   }
   const ExprInfo& innerInfo = out_.typed.infoOf(operand);
   info.isConstant = innerInfo.isConstant;
@@ -812,8 +903,24 @@ TypeId Checker::checkPostfix(ast::AstId expr, ExprInfo& info) {
   if (types_.isError(inner)) {
     return kTypeError;
   }
+  // The grant first, so a binder gets the class's answer rather than the concrete
+  // rule's: `x++` inside `fn T f<T: Number>` is granted for every member of `Number`,
+  // and the rules below are about a type the body does not name. `++` and `--` are
+  // one operation with two spellings (`support::Operation::Increment`).
+  const std::string written =
+      std::string("`") + (tagOf(kindOf(op)) == kTokPlusPlus ? "++" : "--") + "`";
+  if (refuseOperation(operand, inner, support::Operation::Increment, written)) {
+    return kTypeError;
+  }
   if (!checkModifiable(operand, inner, expr, SemaErrorCode::IncDecNotLvalue,
                        " and be incremented")) {
+    return inner;
+  }
+  if (types_.isParam(inner)) {
+    // A binder the class admitted, and the whole answer -- the same statement the
+    // prefix form makes, because `x++` and `++x` are the same operation with the
+    // value kept or dropped.
+    (void)info;
     return inner;
   }
   if (const std::optional<TypeId> stepped = checkPointerStep(expr, inner)) {
@@ -1629,9 +1736,7 @@ TypeId Checker::checkTypedInitializer(ast::AstId expr, ExprInfo& info) {
 
   const TypeSpecResult spec = readType(parts, types_, names(), inferredCount);
   if (!spec.ok) {
-    error(typeNode,
-          spec.unknownWord.empty() ? SemaErrorCode::MalformedType : SemaErrorCode::UnknownType,
-          spec.message);
+    error(typeNode, codeOf(spec), spec.message);
     setType(typeNode, kTypeError);
     return kTypeError;
   }
@@ -1785,6 +1890,101 @@ TypeId Checker::checkElements(ast::AstId consumer, std::span<const ast::AstId> e
   return arrayType;
 }
 
+// A **binder** on one side of a binary operator, which is where a constraint is
+// spent.
+//
+// The class decides whether the operation is allowed at all, and the refusal names
+// the word to write. Everything else follows from the two operands being one hole:
+// the operation happens *at* the binder, so its result is the binder for an
+// arithmetic operator and `bool` for a comparison, and the operand record is written
+// with the binder as the operation type -- which the lowering substitutes per
+// instance, so `src/ir` never sees a `Param` (`generics.md`, decision 20).
+//
+// Three cases reach here and each has its own answer:
+//
+//   * `a + b` with both operands the same binder: the class decides, and the result
+//     is the binder.
+//   * `a + b` with two *different* binders: not a constraint question at all. There
+//     is no conversion between two type parameters, so the operands are simply not
+//     two of one type.
+//   * `a + 1`: a deferred literal beside a binder, and the one place a class is
+//     consulted for something other than "may this operator be used". `Integer`
+//     admits `1` and `Number` does not, because for one instantiation `1` is `1i32`
+//     and for another the body would have to mean `1.0` -- and a body that means two
+//     things is not a body (`generics.md`, decision 11).
+TypeId Checker::checkBinaryOnParameter(ast::AstId expr, Tag kind, ast::AstId lhs, ast::AstId rhs,
+                                       TypeId left, TypeId right, ExprInfo& info) {
+  const support::Operation operation = binaryOperationOf(kind);
+  const std::string written = quotedOperator(kind);
+
+  const bool leftIsBinder = types_.isParam(left);
+  const TypeId binder = leftIsBinder ? left : right;
+  const TypeId other = leftIsBinder ? right : left;
+  const ast::AstId at = leftIsBinder ? lhs : rhs;
+  const ast::AstId otherAt = leftIsBinder ? rhs : lhs;
+  const std::uint8_t binderOperand = leftIsBinder ? 0 : 1;
+  const std::uint8_t otherOperand = leftIsBinder ? 1 : 0;
+
+  if (types_.isParam(other) && other != binder) {
+    error(expr, SemaErrorCode::InvalidOperands,
+          written + " needs two operands of one type; `" + types_.spelling(binder) + "` and `" +
+              types_.spelling(other) +
+              "` are two different type parameters, and nothing converts between them");
+    return kTypeError;
+  }
+
+  if (refuseOperation(at, binder, operation, written)) {
+    return kTypeError;
+  }
+
+  if (types_.isDeferred(other)) {
+    // The literal rule. The class's own literal class is the whole test, and it is
+    // read from the table rather than re-derived here, so `Integer` and `Float`
+    // cannot come to disagree with the rest of the compiler about what `1` means.
+    //
+    // `&&`/`||` cannot reach this line: no class grants them, so `refuseOperation`
+    // above has already answered. A comparison can, and `a < 1.0` under `Float` is
+    // the case it exists for.
+    const support::LiteralClass admitted =
+        support::constraintLiteralClass(types_.binderClass(binder));
+    const bool literalIsFloat = types_.get(other).kind == TypeKind::FloatLiteral;
+    if (!support::literalAdmittedBy(admitted, literalIsFloat)) {
+      refuseLiteralInBinder(otherAt, binder, other);
+      return kTypeError;
+    }
+    // The literal is **decided** as the binder, and that is what makes one body mean
+    // the right value per instance: the text is `1` in every instance, and the type
+    // is substituted at the boundary like every other type of the node.
+    setType(otherAt, binder);
+  } else if (other.valid() && !types_.isParam(other) && other != binder) {
+    // A concrete operand beside a binder. Assignability is the question, and it has
+    // one honest answer: the body is checked once, so a value is only usable here if
+    // *every* type the class admits can take it -- which is a question
+    // `checkAssignable` already answers with the sentence that fits.
+    checkAssignable(other, binder, otherAt, SemaErrorCode::InvalidOperands, " as an operand");
+  }
+
+  // The operation happens **at the binder**, and both operands are recorded against
+  // it -- for a comparison too, because `T == T` is an `icmp` at the instance's type
+  // and the record is what tells the lowering which width that is. A conversion that
+  // changes nothing is not stored (`recordOperationOperand`), so an operand that
+  // already is the binder writes nothing.
+  recordOperationOperand(expr, binderOperand, at, binder);
+  recordOperationOperand(expr, otherOperand, otherAt, binder);
+  // **Nothing is written to `info.opType`**, and that is deliberate rather than an
+  // omission: `opType` exists for the one expression where the store's type is not
+  // the operation's -- a compound assignment `x <<= n` on a `u16`, which shifts at
+  // `i32` (`ir.md`). A binary expression is performed at its operands' type, the
+  // lowering reads that from the left operand (`lowerBinary`), and a second copy here
+  // would be a fact with two sources. Storing the binder would be worse than useless:
+  // a `Param` is not a type `src/ir` may ever see, and an unused field is exactly
+  // where one would sit until something read it.
+  info.isLvalue = false;
+  info.isConstant = false;
+  info.hasIntValue = false;
+  return isComparison(kind) ? kTypeBool : binder;
+}
+
 TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
   const ast::AstId op = tokenOf(expr);
   const std::vector<ast::AstId> operands = operandsOf(expr);
@@ -1804,16 +2004,11 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
   info.isConstant = leftInfo.isConstant && rightInfo.isConstant;
 
   // A **binder** operand before any operation rule, and the order is the point:
-  // every rule below compares two concrete kinds, and the sentence a binder earns
-  // is about the constraint it has not got -- not the arithmetic rules' one about a
-  // type the reader never wrote (`generics.md`, § 6). One operand is enough: `a + b`
-  // with `a: T` is refused for `a`, and the second operand's own check will say its
-  // own thing if it has one.
+  // every rule below compares two concrete kinds, and what a binder earns is a
+  // sentence about the *class* it declared -- not the arithmetic rules' one about a
+  // type the reader never wrote (`generics.md`, § 6).
   if (types_.isParam(left) || types_.isParam(right)) {
-    const ast::AstId at = types_.isParam(left) ? lhs : rhs;
-    (void)refuseParameter(at, types_.isParam(left) ? left : right,
-                          "`" + std::string(opText(kind)) + "` on a binder needs a constraint");
-    return kTypeError;
+    return checkBinaryOnParameter(expr, kind, lhs, rhs, left, right, info);
   }
 
   if (kind == kTokAmpAmp || kind == kTokPipePipe) {

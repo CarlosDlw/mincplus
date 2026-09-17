@@ -675,10 +675,9 @@ Value Lowering::lowerPrefix(ast::AstId expr) {
       next =
           pointerOffset(old, Value{llvm::ConstantInt::get(indexType(), 1), isizeType}, !increment);
     } else {
-      llvm::Value* one = llvm::ConstantInt::get(old.v->getType(), 1);
-      next = Value{increment ? static_cast<llvm::Value*>(builder_.CreateAdd(old.v, one, "inc"))
-                             : static_cast<llvm::Value*>(builder_.CreateSub(old.v, one, "dec")),
-                   old.type};
+      // A pointer is stepped, an arithmetic value is incremented, and the two are
+      // one operator: the scaling belongs to the type, and so does the unit.
+      next = stepValue(old, increment, increment ? "inc" : "dec");
     }
     if (next.v == nullptr) {
       return {};
@@ -703,6 +702,18 @@ Value Lowering::lowerPrefix(ast::AstId expr) {
     // is the shape that would have made this a run-time question.
     if (auto* constant = llvm::dyn_cast<llvm::Constant>(value.v)) {
       return Value{negatedConstant(constant), result};
+    }
+    // **The sign of the operand's own kind**, and the reason this is a branch: a
+    // negation is two instructions with one spelling. `CreateNeg` is the integer
+    // one -- asked for a float it builds `sub 0.0, x`, which the module verifier
+    // refuses as integer arithmetic on a floating type -- so a float operand takes
+    // `fneg`. The type read is the *value's*, and not the node's, because the
+    // operand is what the instruction is built from; for a binder's `-x` both are
+    // the instance's type by the time this runs (`memory.md`, the substitution
+    // boundary), which is exactly why the check has to be made here and not in the
+    // checker.
+    if (types_.isFloat(value.type)) {
+      return Value{builder_.CreateFNeg(value.v, "fneg"), result};
     }
     return Value{builder_.CreateNeg(value.v, "neg"), result};
   case kTokPlus:
@@ -741,10 +752,7 @@ Value Lowering::lowerPostfix(ast::AstId expr) {
     const sema::TypeId isizeType = pointerIntType();
     next = pointerOffset(old, Value{llvm::ConstantInt::get(indexType(), 1), isizeType}, !increment);
   } else {
-    llvm::Value* one = llvm::ConstantInt::get(old.v->getType(), 1);
-    next = Value{increment ? static_cast<llvm::Value*>(builder_.CreateAdd(old.v, one, "inc"))
-                           : static_cast<llvm::Value*>(builder_.CreateSub(old.v, one, "dec")),
-                 old.type};
+    next = stepValue(old, increment, increment ? "inc" : "dec");
   }
   if (next.v == nullptr) {
     return {};
@@ -1445,7 +1453,7 @@ Value Lowering::lowerAssign(ast::AstId expr) {
   // is defined at `i32`, and an `AssignExpr`'s own type is the `u16` the store
   // truncates back to -- a lowering that read the assignment's type would emit an
   // out-of-range shift, which is a poison value and not a crash.
-  const sema::TypeId opType = infoOf(expr).opType;
+  const sema::TypeId opType = opTypeOf(expr);
   if (!types_.known(opType) || types_.isError(opType)) {
     fatal(spanOf(expr), IRDiagnosticCode::Internal,
           "a compound assignment reached lowering with no operation type");
@@ -1582,6 +1590,30 @@ Value Lowering::lowerCall(ast::AstId expr) {
                              ? builder_.CreateCall(functionType, calleeValue.v, arguments)
                              : builder_.CreateCall(functionType, calleeValue.v, arguments, "call");
   return Value{call, typeOf(expr)};
+}
+
+// --- the step operators ------------------------------------------------------------
+
+Value Lowering::stepValue(const Value& old, bool increment, std::string_view name) {
+  if (old.v == nullptr) {
+    return {};
+  }
+  // **One unit of the operand's own kind**, and both halves come from the type: an
+  // integer steps by an integer one and a float by a float one, and the instruction
+  // follows. Taking the one from `ConstantInt::get(old.v->getType(), 1)` -- which is
+  // what a step written once for both kinds does -- builds `add double %x, i0 0`,
+  // which the module verifier refuses as two operands of different types. The checker
+  // accepts `x++` for every arithmetic type, so this is the whole of the reason the
+  // branch has to exist here: nothing above it separates the two kinds.
+  const bool fp = types_.isFloat(old.type);
+  llvm::Value* one = fp ? static_cast<llvm::Value*>(llvm::ConstantFP::get(old.v->getType(), 1.0))
+                        : static_cast<llvm::Value*>(llvm::ConstantInt::get(old.v->getType(), 1));
+  llvm::Value* next =
+      fp ? static_cast<llvm::Value*>(increment ? builder_.CreateFAdd(old.v, one, name)
+                                               : builder_.CreateFSub(old.v, one, name))
+         : static_cast<llvm::Value*>(increment ? builder_.CreateAdd(old.v, one, name)
+                                               : builder_.CreateSub(old.v, one, name));
+  return Value{next, old.type};
 }
 
 // --- pointer arithmetic -----------------------------------------------------------

@@ -372,13 +372,37 @@ TEST(GenericsParseTest, AnEmptyListIsNamedRatherThanLeftToTheCloser) {
       << argument.errorMessages();
 }
 
-TEST(GenericsParseTest, AConstraintIsRefusedOnceAndNotIgnored) {
-  // The slot is reserved and read *with* its refusal: a constraint that parsed and
-  // was then ignored would be a declaration promising a guarantee no stage checks.
-  ParseFixture fixture("type P<T: Ordered> = (T, T);\n");
+TEST(GenericsParseTest, AConstraintIsPartOfTheBinderList) {
+  // `T: Num` used to be refused here, because a constraint that parsed and was
+  // then ignored would be a declaration promising a guarantee no stage checks.
+  // The guarantee is now checked, so the parser does the one thing it is for: it
+  // reads the shape -- the `:` and one name -- and leaves the question of whether
+  // the word is a class to the stage that has the table.
+  ParseFixture fixture("type P<T: Ordered, K> = (T, K);\n");
   ASSERT_TRUE(fixture.built());
-  expectOneError(fixture, ParseErrorCode::ConstraintNotRead);
-  EXPECT_NE(fixture.errorMessages().find("<T>"), std::string::npos) << fixture.errorMessages();
+  expectLossless(fixture);
+
+  const std::optional<syntax::SyntaxNode> list =
+      findFirst(fixture.tree().root(), SyntaxKind::GenericParams);
+  ASSERT_TRUE(list.has_value());
+  // One `Name` per binder -- the constraint is *not* a second name, which is the
+  // whole reason it is a node of its own.
+  EXPECT_EQ(binderNames(*list), (std::vector<std::string>{"T", "K"}));
+
+  const std::optional<syntax::SyntaxNode> constraint = list->childOfKind(SyntaxKind::Constraint);
+  ASSERT_TRUE(constraint.has_value());
+  EXPECT_EQ(tokenText(*constraint), ":");
+  const std::optional<syntax::SyntaxNode> klass = constraint->childOfKind(SyntaxKind::Name);
+  ASSERT_TRUE(klass.has_value());
+  EXPECT_EQ(firstTokenText(*klass), "Ordered");
+}
+
+TEST(GenericsParseTest, AConstraintWithNoClassIsOneSentence) {
+  ParseFixture fixture("type P<T: > = (T, T);\n");
+  ASSERT_TRUE(fixture.built());
+  expectOneError(fixture, ParseErrorCode::ExpectedName);
+  EXPECT_NE(fixture.errorMessages().find("constraint needs a class name"), std::string::npos)
+      << fixture.errorMessages();
 }
 
 // --- the argument list of a call ----------------------------------------------
