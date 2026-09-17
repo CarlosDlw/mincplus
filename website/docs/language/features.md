@@ -80,6 +80,17 @@ first-class types; the examples use the primitive names. See
       array with `a[l..r]` / `a[l..]` / `a[..r]` / `a[..]`, indexed with its own
       `0`, writable through, passed and returned by value, refused at an `extern`
       boundary. See [Slices](/language/slices)
+- [x] Tuples `(T, T, ...)` — a structural product of two or more types: a
+      return type (`fn (i32, bool) divmod(...)`), a binding, a parameter, an
+      element; access by position at compile time (`t.0`), destructuring into
+      real bindings (`let (q, r) = divmod(7, 2);`, `_` for a skipped member),
+      C's field order, and an unnamed composite record in `-g`. A chain of two
+      reads is written apart — `t.0 .1` — because `0.1` is one number to the
+      scanner. Refused across the C boundary: the aggregate's layout is this
+      compiler's internal convention. See
+      [`docs/architectures/tuples.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/tuples.md);
+      generics come **after** it, because a binder list is itself a sequence of
+      pairs and the store gained arity-unknown interning here
 - [ ] `struct`
 - [ ] `union`
 - [ ] `enum` constants and tagged unions `[?]`
@@ -92,7 +103,6 @@ first-class types; the examples use the primitive names. See
 - [x] `const` bindings (see *Syntax and files*); immutability is a binding
       property, not a type qualifier yet
 - [ ] Optional/nullable types and null safety `[?]`
-- [ ] Tuples `[?]`
 - [ ] Generics / parametric types `[?]`
 
 `f80` is the x87 80-bit extended format. It is in the set because that is what

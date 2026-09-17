@@ -179,7 +179,7 @@ ProvenanceKind Checker::provenanceOf(ast::AstId expr) const {
     }
     const TypeId baseType = out_.typed.typeOf(parts.base);
     if (types_.isArray(baseType)) {
-      return arrayProvenanceOf(parts.base);
+      return placeProvenanceOf(parts.base);
     }
     if (types_.isPointer(baseType)) {
       return provenanceOf(parts.base);
@@ -208,8 +208,9 @@ ProvenanceKind Checker::provenanceOf(ast::AstId expr) const {
   }
 }
 
-// The provenance of an *array* subscript (`a[i]`), which is a different question
-// from `provenanceOf`'s and is answered differently on purpose.
+// The provenance of an access *inside a place* -- an array subscript (`a[i]`), a
+// view of one (`a[1..2]`) and a product member (`t.0`) all ask this, and it is a
+// different question from `provenanceOf`'s, answered differently on purpose.
 //
 // `provenanceOf(a)` asks what allocation a *pointer value* came from, and a path
 // naming an array is not a pointer value at all -- there is nothing to ask. What
@@ -225,7 +226,7 @@ ProvenanceKind Checker::provenanceOf(ast::AstId expr) const {
 //   * `(*p)[i]` -- a pointer to an array -- is behind a pointer value, so it is
 //     `Foreign` for the same reason `p[i]` is, and only the extent survives,
 //     because the count is in the type.
-ProvenanceKind Checker::arrayProvenanceOf(ast::AstId base) const {
+ProvenanceKind Checker::placeProvenanceOf(ast::AstId base) const {
   const std::optional<resolve::DefId> def = defOfPlace(base);
   if (!def.has_value() || def->index >= defs_.defs.size()) {
     return ProvenanceKind::Foreign;

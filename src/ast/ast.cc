@@ -43,6 +43,48 @@ std::vector<AstId> LoweredFile::childrenOfKind(AstId id, NodeKind kind) const {
   return out;
 }
 
+std::vector<AstId> LoweredFile::bindingNamesOf(AstId stmt) const {
+  std::vector<AstId> out;
+  if (!stmt.valid() || stmt.index >= nodes_.size()) {
+    return out;
+  }
+  // The pattern, when there is one, holds every name: its `Name` children *are*
+  // the binding, in the order the value's members arrive in. A plain binding has
+  // the one `Name` child and no pattern, so this is not a second case -- it is the
+  // case that has no pattern and therefore one name.
+  const AstId pattern = childOfKind(stmt, NodeKind::TuplePattern);
+  if (pattern.valid()) {
+    for (const AstId child : childrenOf(pattern)) {
+      if (at(child).kind == NodeKind::Name) {
+        out.push_back(child);
+      }
+    }
+    return out;
+  }
+  const AstId name = childOfKind(stmt, NodeKind::Name);
+  if (name.valid()) {
+    out.push_back(name);
+  }
+  return out;
+}
+
+AstId LoweredFile::initializerOf(AstId stmt) const {
+  // Source order is what makes this a scan for the *last* interior operand rather
+  // than a fixed position: `let x = e`, `let (a, b): T = e` and `let x: T = e`
+  // differ in how many things precede the value, and the value is always the one
+  // that is left when the names and the annotation are taken out.
+  AstId init;
+  for (const AstId operand : childrenOf(stmt)) {
+    const Node& node = at(operand);
+    if (node.isToken() || node.kind == NodeKind::Name || node.kind == NodeKind::Type ||
+        node.kind == NodeKind::TuplePattern) {
+      continue;
+    }
+    init = operand;
+  }
+  return init;
+}
+
 SliceParts LoweredFile::slicePartsOf(AstId id) const {
   SliceParts parts;
   if (!id.valid() || id.index >= nodes_.size()) {

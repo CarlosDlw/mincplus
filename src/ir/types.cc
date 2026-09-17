@@ -201,6 +201,30 @@ llvm::Type* Lowering::llvmType(sema::TypeId id) {
     }
     return llvm::ArrayType::get(element, types_.countOf(id));
   }
+  case sema::TypeKind::Tuple: {
+    // `{ T0, T1, ... }`, **unnamed** (`StructType::get` is a literal type): a
+    // product has no name in the language, so it has none in the module, and a
+    // name on a literal struct would be a claim about identity -- two different
+    // `(i32, bool)`s from two files printed as one name, and a lie the day a
+    // `struct` with that spelling exists (`tuples.md`, decision 11).
+    //
+    // The members are their **storage** types, for the array's reason and not a
+    // new one: a `bool` inside an aggregate is a byte, not a bit, and building
+    // the shape from `storageType` gives the object exactly one representation --
+    // which is also what makes the value form and the stored form the same type,
+    // so a store of a product needs no conversion.
+    std::vector<llvm::Type*> members;
+    const std::span<const sema::TypeId> declared = types_.membersOf(id);
+    members.reserve(declared.size());
+    for (const sema::TypeId member : declared) {
+      llvm::Type* mapped = storageType(member);
+      if (mapped == nullptr) {
+        return nullptr;
+      }
+      members.push_back(mapped);
+    }
+    return llvm::StructType::get(context_, members);
+  }
   case sema::TypeKind::Slice:
     // `{ ptr, usize }` -- the descriptor, and **structural** rather than a named
     // struct type: it is one shape, there are no user structs yet, and a named

@@ -110,9 +110,14 @@ namespace {
     return punct(offset, 1, TokenKind::Question);
   case '.':
     // Longest match, and the reason `....` is `...` then `.`: three dots are one
-    // token, and a fourth is another one. A float literal cannot reach here --
-    // `.5` is scanned as a number before the punctuator table is consulted -- so
-    // there is no ambiguity between the two readings of a leading dot.
+    // token, and a fourth is another one.
+    //
+    // A leading dot is **always** this punctuator, never the start of a number
+    // (`tuples.md`): the two readings cannot both be true of one character, and
+    // the one kept is the member access the language needs -- `t.0` -- because a
+    // numeric literal that begins with a digit is the one a reader can write
+    // back (`0.5`). The refusal for `.5` is a sentence the parser owns, next to
+    // the other sentences about shapes.
     return c1 == '.' && c2 == '.' ? punct(offset, 3, TokenKind::Ellipsis)
                                   : punct(offset, 1, TokenKind::Dot);
   case '#':
@@ -218,10 +223,6 @@ Token lexOne(std::string_view text, std::uint32_t offset) {
   // be unreachable under any spelling -- a `.` in front of a digit is a number
   // only when the character before it is not a `.` (so `.5`, `1.5` and `a.5` are
   // untouched, and `1..2` is `1`, `.`, `.`, `2`).
-  if (c == '.' && offset + 1 < text.size() && isAsciiDigit(static_cast<Byte>(text[offset + 1])) &&
-      (offset == 0 || text[offset - 1] != '.')) {
-    return detail::scanNumber(text, offset);
-  }
   if (isIdentifierStart(byte)) {
     return scanIdentifier(text, offset);
   }

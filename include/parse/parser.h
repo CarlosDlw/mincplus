@@ -194,6 +194,11 @@ public:
   // separates the clauses. One implementation, so the two spellings of a
   // binding cannot drift apart.
   void parseBinding();
+  // `(a, b)`: the left-hand side of a destructuring binding. One `Name` child per
+  // position, and `_` for a member that is skipped -- which is a `Name` too, so
+  // every later stage reads it with the code it already had (`tuples.md`,
+  // decision 6).
+  void parseBindingPattern();
   void parseReturnStmt();
   void parseExprStmt();
   void parseIfStmt();
@@ -207,7 +212,15 @@ public:
   // zero-width node of that kind.
   void parseForClause(SyntaxKind wrapper);
   void parseJumpStmt(SyntaxKind kind);
-  void parseType();        // type-only position (after `:`)
+  void parseType(); // type-only position (after `:`)
+  // One run of a type position: the constructors, the words, and the `(T, U)`
+  // groups, stopping at the first token that cannot continue a type. Shared by a
+  // whole position and by one member of a product, which is why it is not folded
+  // into `parseType` (`tuples.md`, decision 15).
+  void parseTypeRun();
+  // `(T, U)`: a product. Its members are runs, so this is the one place the type
+  // grammar is recursive, and it is guarded like the expression grammar is.
+  void parseTypeGroup();
   void parseTypeAndName(); // `fn` return type followed by the function name
   // The type of a cast, in either spelling. Not `parseType`: a cast's type is
   // followed by an *expression*, so a `*` after the type's last word is the
@@ -254,16 +267,46 @@ public:
   // is what `atCastStart` decides, and this builds the node.
   CompletedMarker parseCastPrefix();
   [[nodiscard]] bool atCastStart() const;
+  // The same scan asked one more question: the group is a complete type run and
+  // the type is a **product** (a comma at the group's own level). `(i32, bool)x`
+  // is the one cast shape the language refuses by name (`tuples.md`).
+  [[nodiscard]] bool atProductCastStart() const;
+  // That refusal: one diagnostic at the group, and a `CastExpr` holding the whole
+  // expression, so the operand is not read as a second mistake.
+  CompletedMarker parseProductCastRefusal();
   // A literal written against an identifier: `10z`. Reported and consumed as an
   // `Error` child so one slip costs one diagnostic instead of a cascade from
   // whatever expected the expression to end.
   [[nodiscard]] bool atLiteralSuffixRun() const;
+  // `.0` / `.field`, the one postfix that reads a component of a value
+  // (`tuples.md`). Decided by a token of lookahead -- a digit is a position of a
+  // product, a name is a field of a `struct` when one lands -- and the two are the
+  // same node, because they are the same question.
+  CompletedMarker parseFieldPostfix(CompletedMarker base);
+  // `(a, b)`, the product literal. Decided by the comma and nothing else: the
+  // first expression is parsed either way, and the `,` that follows it is what
+  // makes the group a product rather than the parenthesised value it has always
+  // been (`tuples.md`, decision 7). The `(` and the first element are already
+  // read when this is called, which is what makes the decision free.
+  CompletedMarker parseTupleLiteral(Marker group);
   CompletedMarker parsePostfix();
   CompletedMarker parsePrimary();
   void parseArgList();
 
   // -- recovery -------------------------------------------------------------
   void recoverStatement();
+  // One token the grammar could not use, wrapped in an `Error` node and consumed.
+  // The node is what makes the *rest* of the construct parse on: a token left in
+  // the stream is re-read by whatever comes next, which turns one mistake into a
+  // second sentence about a shape nobody wrote (`ast` skips the region, and every
+  // reader below it answers the poison silently). `recoverStatement` is the whole
+  // statement's version of the same idea.
+  void consumeAsError();
+  // Does the current token end the expression rather than continue it? A `.` at the
+  // end of one is followed by `;`, `)`, `]`, `,` or `}` -- and there the honest
+  // sentence belongs to the construct that wanted the expression to end, which is
+  // why nothing is consumed.
+  [[nodiscard]] bool atExpressionEnd() const;
   void recoverItem();
   void bailOut(std::string message);
 

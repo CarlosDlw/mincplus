@@ -215,6 +215,14 @@ void Checker::collectGlobals() {
     if (kind != ast::NodeKind::LetStmt && kind != ast::NodeKind::ConstStmt) {
       continue;
     }
+    // A *pattern* at file scope is refused a stage earlier (`ast-`
+    // `pattern-at-file-scope`), and it is skipped here for the reason that
+    // refusal exists: it has no single name, so there is no object to publish and
+    // nothing for the initializer rule below to be about. Reporting a second time
+    // would be two diagnostics for one mistake (`tuples.md`, decision 6).
+    if (childOf(decl, ast::NodeKind::TuplePattern).valid()) {
+      continue;
+    }
     GlobalBinding binding;
     binding.decl = decl;
     binding.init = initializerOf(decl);

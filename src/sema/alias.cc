@@ -145,10 +145,14 @@ void Checker::checkBlockAlias(ast::AstId decl) {
   // outer one, exactly as `typedef T T;` does in C), and with none it is a
   // circle, because there is no other name it could mean. The file scope never
   // has this question: there, every name is decided before anything is read.
+  // The words of the target, with a product's members opened and their words in
+  // order (`typeRunWords`): a name written inside `(T, U)` is a name this
+  // declaration mentions, and missing it would let `type T = (T, i32);` inside a
+  // block read the outer `T` as if the circle were not there.
   bool self = false;
   if (!word.empty() && binding.target.valid() && findTypeName(aliasNames_, word) == nullptr) {
-    for (const TypePart& part : typeParts(binding.target)) {
-      if (!part.isStar && !part.isArray && !part.isBang && part.word == word) {
+    for (const std::string_view mentioned : typeRunWords(typeParts(binding.target))) {
+      if (mentioned == word) {
         self = true;
         break;
       }
@@ -201,10 +205,16 @@ void Checker::runAliases() {
 
   // One frame per alias being decided: which one, how far into its words the walk
   // has read, and the words themselves -- read once, when the frame starts.
+  //
+  // The words are **flattened**, with a product's members spliced in where the
+  // group sits (`typeRunWords`), because a dependency is a name and a name is in
+  // the members as much as beside a `*`: `type A = (B, i32);` above
+  // `type B = i32;` is legal, and a walk over the top level only would decide `A`
+  // first and then fail to read it.
   struct Frame {
     std::size_t index;
     std::size_t nextWord;
-    std::vector<TypePart> parts;
+    std::vector<std::string_view> words;
   };
 
   std::vector<Mark> mark(aliases_.size(), Mark::White);
@@ -263,7 +273,7 @@ void Checker::runAliases() {
       continue;
     }
     mark[start] = Mark::Grey;
-    stack.push_back(Frame{start, 0, typeParts(aliases_[start].target)});
+    stack.push_back(Frame{start, 0, typeRunWords(typeParts(aliases_[start].target))});
 
     while (!stack.empty()) {
       Frame& frame = stack.back();
@@ -273,13 +283,10 @@ void Checker::runAliases() {
       // before this one can be -- and for the one that closes a circle.
       std::size_t dependency = aliases_.size();
       std::size_t cycle = aliases_.size();
-      while (frame.nextWord < frame.parts.size()) {
-        const TypePart& part = frame.parts[frame.nextWord];
+      while (frame.nextWord < frame.words.size()) {
+        const std::string_view word = frame.words[frame.nextWord];
         ++frame.nextWord;
-        if (part.isStar || part.isArray) {
-          continue; // a constructor is not a name
-        }
-        const auto found = aliasIndexBySpelling_.find(part.word);
+        const auto found = aliasIndexBySpelling_.find(word);
         if (found == aliasIndexBySpelling_.end()) {
           continue; // not a name of this unit
         }
@@ -316,7 +323,7 @@ void Checker::runAliases() {
 
       if (dependency < aliases_.size()) {
         mark[dependency] = Mark::Grey;
-        stack.push_back(Frame{dependency, 0, typeParts(aliases_[dependency].target)});
+        stack.push_back(Frame{dependency, 0, typeRunWords(typeParts(aliases_[dependency].target))});
         continue;
       }
 

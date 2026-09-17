@@ -50,6 +50,16 @@ inline constexpr ast::NodeKind kIdentifierNode = parse::toSyntaxKind(lex::TokenK
 // `*` it reads beside them.
 inline constexpr Tag kTokLBracket = tagOf(lex::TokenKind::LBracket);
 inline constexpr Tag kTokRBracket = tagOf(lex::TokenKind::RBracket);
+// A product's grouping tokens (`tuples.md`): `(`...`)` with `,` between the
+// members. The same three tokens every list in the language is written with, and
+// the same ones this file already names for an argument list.
+inline constexpr Tag kTokLParen = tagOf(lex::TokenKind::LParen);
+inline constexpr Tag kTokRParen = tagOf(lex::TokenKind::RParen);
+inline constexpr Tag kTokComma = tagOf(lex::TokenKind::Comma);
+// `.`, which reads a member of a value: a position of a product, and a name of a
+// `struct` when one lands. One token, one meaning -- `a.b` -- because a numeric
+// literal begins with a digit (`tuples.md`, and `lexer.cc`'s `.` case).
+inline constexpr Tag kTokDot = tagOf(lex::TokenKind::Dot);
 // `;`, which separates a filled initializer's value from its count. The one
 // token that tells a fill from a list, so the checker asks for it by name.
 inline constexpr Tag kTokSemicolon = tagOf(lex::TokenKind::Semicolon);

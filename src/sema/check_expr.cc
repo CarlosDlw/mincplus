@@ -266,6 +266,12 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
   case ast::NodeKind::CallExpr:
     type = checkCall(expr, info);
     break;
+  case ast::NodeKind::TupleExpr:
+    type = checkTupleExpr(expr, expected, info);
+    break;
+  case ast::NodeKind::FieldExpr:
+    type = checkField(expr, info);
+    break;
   case ast::NodeKind::ArrayLiteral:
     type = checkArrayLiteral(expr, expected, info);
     break;
@@ -924,7 +930,7 @@ TypeId Checker::checkIndex(ast::AstId expr, ExprInfo& info) {
     // The record carries the element type *and the count*, which is the extent
     // the checked build bounds-checks against when the base is an object this
     // unit named (26).
-    recordAccess(expr, element, arrayProvenanceOf(base), count, ExtentKind::Count);
+    recordAccess(expr, element, placeProvenanceOf(base), count, ExtentKind::Count);
     return element;
   }
   // `s[i]` on a **slice**: the element of the view, which is a load through the
@@ -1304,6 +1310,200 @@ bool Checker::foldBinary(Tag op, const ExprInfo& left, const ExprInfo& right, Ex
 
 // --- array literals ----------------------------------------------------------
 
+TypeId Checker::checkTupleExpr(ast::AstId expr, TypeId expected, ExprInfo& info) {
+  // `(a, b)`: a **product**, whose members the *position* types. It is not the
+  // array literal: an array's element type comes from the context because the
+  // count is part of its type and a list has no type of its own, while a product
+  // carries every member type it has and stands alone.
+  //
+  // What the context decides is therefore only *which* type each member is, and
+  // it decides it per position: `let p: (i64, i64) = (1, 2);` is two `i64`s, and
+  // `let p: (i64, i32) = (1, 2);` is one of each. That is the rule every other
+  // literal position already obeys (a binding, a call argument, an element), and
+  // a product is its fourth position rather than an exception to it
+  // (`tuples.md`, decision 8).
+  //
+  // What the context cannot do is change a literal's *class*: an integer literal
+  // in a `f64` member stays an `i32` -- `decideAt`'s rule, which is the whole
+  // reason `let p: (f64, f64) = (1, 2);` is refused and `(1.0, 2.0)` is what has
+  // to be written. Silent integer-to-float is the conversion this language does
+  // not have (`casts.md`), and being inside a product is not an exception to it.
+  const std::vector<ast::AstId> elements = operandsOf(expr);
+  if (elements.size() < 2) {
+    // The parser owns the sentences for a group of one (and for `()`); this is
+    // the defensive half, with no second diagnostic.
+    info = ExprInfo{};
+    return kTypeError;
+  }
+
+  // The expected type, when it is a product of the same arity: the members are
+  // then typed *against their own position*, which is what makes a literal adapt
+  // (`1` in an `f64` member) while a non-literal value never narrows in silence.
+  std::span<const TypeId> expectedMembers;
+  if (types_.known(expected) && types_.isTuple(expected) &&
+      types_.membersOf(expected).size() == elements.size()) {
+    expectedMembers = types_.membersOf(expected);
+  }
+
+  std::vector<TypeId> members;
+  members.reserve(elements.size());
+  for (std::size_t i = 0; i < elements.size(); ++i) {
+    const TypeId wanted = expectedMembers.empty() ? kInvalidType : expectedMembers[i];
+    TypeId member = checkExpr(elements[i], wanted);
+    if (types_.isError(member)) {
+      // One bad member poisons the product: the members are a *type*, and a type
+      // with a hole in it is not one the store can build. The member's own
+      // sentence is the one that was printed.
+      info = ExprInfo{};
+      return kTypeError;
+    }
+    // Nothing decided a member whose type its context had not: an untyped literal
+    // is an `i32` (an `f64` for a float), which is the same answer `let x = 1;`
+    // gets.
+    member = defaultValue(member);
+    if (!types_.isObject(member)) {
+      // `void` and `!` are the two that reach here: a member is *stored*, so it
+      // has to be a type that can be stored. A call that produces nothing and a
+      // call that never returns are both statements, not members.
+      error(elements[i], SemaErrorCode::InvalidAssignment,
+            "`" + types_.spelling(member) +
+                "` cannot be a member of a product: a member is stored, so it has to be a type "
+                "that can be stored");
+      info = ExprInfo{};
+      return kTypeError;
+    }
+    members.push_back(member);
+  }
+
+  // The product's size is checked *before* the intern so the sentences can differ:
+  // a product larger than the target can address is a fact about the program, and
+  // the type budget is a fact about the unit.
+  if (!types_.tupleSize(members).has_value()) {
+    error(expr, SemaErrorCode::InvalidAssignment,
+          "this product of " + std::to_string(members.size()) +
+              " members is larger than this target can address");
+    info = ExprInfo{};
+    return kTypeError;
+  }
+  const TypeId product = types_.tupleOf(members);
+  if (!product.valid()) {
+    reportLimit(expr);
+    info = ExprInfo{};
+    return kTypeError;
+  }
+  info.isLvalue = false;
+  info.isConstant = false;
+  info.hasIntValue = false;
+  return product;
+}
+
+TypeId Checker::checkField(ast::AstId expr, ExprInfo& info) {
+  // `t.0`: a member of a product, chosen **by position**, and the position is
+  // settled here -- the access is not an index and has no runtime form
+  // (`tuples.md`, decision 3).
+  const std::vector<ast::AstId> children = operandsOf(expr);
+  if (children.empty()) {
+    return kTypeError;
+  }
+  const ast::AstId base = children.front();
+  const TypeId baseType = checkExpr(base, kInvalidType);
+  if (types_.isError(baseType)) {
+    return kTypeError;
+  }
+  // The member token: the `.` is punctuation and the member is what follows it.
+  // A tree with no member is the parser's finding (it reports one), so this
+  // answers without a second sentence.
+  const std::span<const ast::AstId> all = file_.childrenOf(expr);
+  ast::AstId member;
+  for (std::size_t i = 0; i < all.size(); ++i) {
+    const ast::Node& node = file_.at(all[i]);
+    if (node.isToken() && tagOf(node.kind) == kTokDot && i + 1 < all.size()) {
+      member = all[i + 1];
+      break;
+    }
+  }
+  if (!member.valid()) {
+    return kTypeError;
+  }
+  const ast::Node& memberNode = file_.at(member);
+  // A member the *parser* refused -- a chain it could not tell from one number
+  // (`t.0.1`), a token that is not a member at all -- is not this stage's finding.
+  // The region is marked and its sentence is already printed, and answering it a
+  // second time would be two diagnostics for one mistake (`tuples.md`, decision 3).
+  if (memberNode.inError) {
+    return kTypeError;
+  }
+  const bool isPosition = tagOf(memberNode.kind) == kTokIntegerLiteral;
+  const bool isName = file_.at(member).is(kIdentifierNode);
+
+  if (!types_.isTuple(baseType)) {
+    // Today every value here is an array, a slice, a pointer or a scalar, and
+    // none of them has members. The sentence says what a member *is* rather than
+    // only that this is not one, because the reader who wrote `.len` is asking a
+    // question this record has an answer for (`slices.md` decision 15).
+    const std::string what = isName ? "`" + std::string(spelling(member)) + "`" : "a position";
+    error(expr, SemaErrorCode::UnknownMember,
+          "`" + types_.spelling(baseType) + "` has no members, so " + what +
+              " is not one: `.` reads a member of a product, and lengths and views arrive with "
+              "the operations the stdlib is where to find");
+    return kTypeError;
+  }
+
+  // A product's members are named by *position* and by nothing else, so a name
+  // after the dot is the wrong kind of component rather than an unknown one.
+  if (!isPosition) {
+    const std::size_t count = types_.membersOf(baseType).size();
+    error(member, SemaErrorCode::UnknownMember,
+          "a product's members have no names: `" + types_.spelling(baseType) + "` has " +
+              std::to_string(count) + " of them, reached as `t.0` to `t." +
+              std::to_string(count == 0 ? 0 : count - 1) + "`");
+    return kTypeError;
+  }
+
+  // The position, folded where its spelling is: `t.0` is one member whatever
+  // base the digits were written in, and a suffix (`t.0u8`) is a *value* and not
+  // a position -- the reader would be asking for member `u8`, which is not a
+  // number.
+  const support::IntegerLiteral position =
+      support::parseIntegerLiteral(spelling(member), support::IntegerBaseRule::DecimalLeadingZero);
+  const std::size_t count = types_.membersOf(baseType).size();
+  if (!position.ok || position.value.bits >= count) {
+    error(member, SemaErrorCode::IndexOutOfRange,
+          "this product has " + std::to_string(count) + " members, reached as `t.0` to `t." +
+              std::to_string(count == 0 ? 0 : count - 1) + "`");
+    return kTypeError;
+  }
+
+  // A member of a place **is** a place: `t.0 = 9` stores into the first member of
+  // `t`, which is the same rule `a[0] = 9` obeys. And a member of a value is a
+  // value, so the two questions stay answered by the base.
+  const ExprInfo& baseInfo = out_.typed.infoOf(base);
+  info.isLvalue = baseInfo.isLvalue;
+  info.isConstant = baseInfo.isConstant;
+  info.hasIntValue = false;
+  const TypeId memberType =
+      types_.membersOf(baseType)[static_cast<std::size_t>(position.value.bits)];
+
+  // The access record, written the same way the array subscript writes its own
+  // (`access.cc`): a member of a **place** is reached through an address, and the
+  // checked build guards that address -- null, and alignment -- exactly as it
+  // guards `a[0]`. A member of a *value* is not an access at all: it is an
+  // `extractvalue` out of an aggregate in registers, and nothing is reached
+  // through a pointer, so recording one would put an obligation in the artifact
+  // for an access that does not exist.
+  //
+  // The extent is the arity and the kind is `Count`, which is the honest answer to
+  // "how large is the object this access is inside" -- but there is no range to
+  // test: the position is a *constant* the two refusals above already bounded
+  // against that very count, so the lowering emits no bounds comparison for it
+  // (`tuples.md`, decision 11). The record still carries the number, which is what
+  // the dump and a future shadow memory read.
+  if (info.isLvalue) {
+    recordAccess(expr, memberType, placeProvenanceOf(base), count, ExtentKind::Count);
+  }
+  return memberType;
+}
+
 TypeId Checker::checkArrayLiteral(ast::AstId expr, TypeId expected, ExprInfo& info) {
   // `[1, 2, 3]`: the list form, whose type the **context** gives it -- the same
   // rule the number literals follow, and the reason a `let` can write a binding's
@@ -1600,6 +1800,17 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
       // Equality is defined for arithmetic values, and for two `bool`s or two
       // `str`s. `str == str` is refused with everything else: C's `s1 == s2`
       // compares addresses, and this operator does not mean that.
+      // A product is not comparable, and the sentence says what to write: `==`
+      // on two products would have to mean "every member `==`", which would be a
+      // built-in rule for an operator the language gives per type through a
+      // declared interface (`tuples.md`, decision 17).
+      if (types_.isTuple(left) || types_.isTuple(right)) {
+        error(expr, SemaErrorCode::InvalidOperands,
+              "`" + std::string(opText(kind)) +
+                  "` has no meaning for a product: compare the members, as in `a.0 == b.0 && a.1 "
+                  "== b.1`");
+        return kTypeError;
+      }
       const bool arithmetic = types_.isArithmetic(left) && types_.isArithmetic(right);
       const bool sameScalar = left == right && (types_.get(left).kind == TypeKind::Bool ||
                                                 types_.get(left).kind == TypeKind::Str);

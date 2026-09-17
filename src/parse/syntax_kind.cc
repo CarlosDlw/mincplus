@@ -17,10 +17,15 @@ struct NodeKindInfo {
   const char* name;
 };
 
-constexpr std::array<NodeKindInfo, 40> kNodeKindInfos{{
+constexpr std::array<NodeKindInfo, 44> kNodeKindInfos{{
     {SyntaxKind::File, "File"},
     {SyntaxKind::Error, "Error"},
     {SyntaxKind::FnDecl, "FnDecl"},
+    // The row `type Name = T;` was missing from this table, which made
+    // `toString(TypeAliasDecl)` answer "Unknown" in every dump that named one.
+    // Found while adding the rows below; the test that checks every node kind has
+    // a row did not exist either, and now does.
+    {SyntaxKind::TypeAliasDecl, "TypeAliasDecl"},
     {SyntaxKind::ParamList, "ParamList"},
     {SyntaxKind::Param, "Param"},
     {SyntaxKind::VariadicParam, "VariadicParam"},
@@ -52,9 +57,12 @@ constexpr std::array<NodeKindInfo, 40> kNodeKindInfos{{
     {SyntaxKind::CallExpr, "CallExpr"},
     {SyntaxKind::IndexExpr, "IndexExpr"},
     {SyntaxKind::SliceExpr, "SliceExpr"},
+    {SyntaxKind::TupleExpr, "TupleExpr"},
+    {SyntaxKind::FieldExpr, "FieldExpr"},
     {SyntaxKind::ArgList, "ArgList"},
     {SyntaxKind::ArrayLiteral, "ArrayLiteral"},
     {SyntaxKind::TypedInitializer, "TypedInitializer"},
+    {SyntaxKind::TuplePattern, "TuplePattern"},
     {SyntaxKind::MacroCall, "MacroCall"},
     {SyntaxKind::TokenTree, "TokenTree"},
     {SyntaxKind::Attribute, "Attribute"},

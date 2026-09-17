@@ -112,7 +112,79 @@ void Lowering::lowerStatement(ast::AstId stmt) {
   }
 }
 
+// `let (a, b) = t;`: the value is lowered **once**, into a product, and each name
+// gets its member out of it (`tuples.md`, decision 6). One evaluation, one
+// `alloca` per name, and no alias between them -- the copy is what makes the
+// pattern a binding and not a view.
+//
+// A member is extracted for a name that *exists*: `_` was not declared by
+// `resolve`, so it has no slot and its member is simply never taken. The value is
+// still lowered, because a call in the initializer is a call the reader wrote.
+void Lowering::lowerDestructuring(ast::AstId stmt) {
+  const std::vector<ast::AstId> names = file_.bindingNamesOf(stmt);
+  const ast::AstId init = file_.initializerOf(stmt);
+
+  // The member types are the *value's*, which is what the checker published for
+  // each name. A name whose type is not known is a name the checker refused, and
+  // the unit does not reach this stage then -- the guard is the same one
+  // `lowerBinding` has.
+  std::vector<sema::TypeId> memberTypes;
+  memberTypes.reserve(names.size());
+  for (const ast::AstId name : names) {
+    const sema::TypeId type = typeOf(name);
+    if (!types_.known(type) || types_.isError(type)) {
+      return;
+    }
+    memberTypes.push_back(type);
+  }
+
+  Value product;
+  if (init.valid()) {
+    product = lowerOperand(stmt, init);
+    if (product.v == nullptr) {
+      return;
+    }
+  }
+
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    const ast::AstId name = names[i];
+    const std::optional<resolve::DefId> def = defAtName(name);
+    if (!def.has_value()) {
+      continue; // `_`: the position is not bound, so there is nothing to store
+    }
+    std::string_view spelling{};
+    if (def->index < defs_.defs.size() && defs_.defs[def->index].name != support::kInvalidSym) {
+      spelling = symbols_.lookup(defs_.defs[def->index].name);
+    }
+    // The name's own node, not the statement's: each binding is its own
+    // declaration in the debug record, so `gdb` reports where *that* name is
+    // written and not where the pattern began.
+    llvm::AllocaInst* slot = declareLocal(*def, memberTypes[i], spelling, name, 0, AliasName{});
+    if (slot == nullptr) {
+      continue;
+    }
+    if (product.v == nullptr) {
+      // `let (a, b): (i32, bool);` -- two objects with no value, assigned later.
+      continue;
+    }
+    llvm::Value* member =
+        builder_.CreateExtractValue(product.v, {static_cast<unsigned>(i)}, "member");
+    // The member comes out in its **storage** shape (`i8` for a `bool`) and the
+    // binding's type is the checker's, so it is normalised exactly as the member of
+    // an array is on a load -- `bool` is the one that moves.
+    storePlace(Place{slot, memberTypes[i]}, fromStorage(Value{member, memberTypes[i]}),
+               ast::AstId{});
+  }
+}
+
 void Lowering::lowerBinding(ast::AstId stmt) {
+  // The pattern node is how the statement says *which* kind of binding it is; the
+  // names themselves are read off the statement (`bindingNamesOf`), so nothing
+  // here needs the node -- only the answer to "is this the several-binding form".
+  if (childOf(stmt, ast::NodeKind::TuplePattern).valid()) {
+    lowerDestructuring(stmt);
+    return;
+  }
   const ast::AstId nameNode = childOf(stmt, ast::NodeKind::Name);
   const std::optional<resolve::DefId> def = defAtName(nameNode);
   if (!def.has_value()) {
@@ -143,15 +215,9 @@ void Lowering::lowerBinding(ast::AstId stmt) {
     return;
   }
 
-  // The initializer is the operand that is neither the name nor the type
-  // annotation, which is the same rule the checker uses to find it.
-  const ast::AstId typeNode = childOf(stmt, ast::NodeKind::Type);
-  ast::AstId init;
-  for (const ast::AstId operand : operandsOf(stmt)) {
-    if (operand != nameNode && operand != typeNode) {
-      init = operand;
-    }
-  }
+  // The initializer comes from the file's own reader, which is the same answer
+  // the checker worked from (`ast::LoweredFile::initializerOf`).
+  const ast::AstId init = file_.initializerOf(stmt);
   if (!init.valid()) {
     // `let x: i32;` -- a slot with no value. Nothing is stored, and the
     // definite-assignment pass is what proves it is never read before some

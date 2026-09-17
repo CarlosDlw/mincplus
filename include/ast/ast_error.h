@@ -38,6 +38,13 @@ enum class AstErrorCode : std::uint8_t {
   // is a binding that can never be read, so the language forbids it; the parser
   // sees two independent optional clauses and cannot tell.
   ConstantWithoutInitializer,
+  // `let (a, b) = ...;` outside a function. A file-scope binding is one *object*
+  // with one name and one initializer, and the item table -- what every later
+  // stage reads a file-scope declaration through -- records one name per
+  // declaration. A pattern is several names from one value, which is a shape that
+  // table does not have yet, so it is refused by name instead of producing an
+  // item no stage can name (`tuples.md`, decision 6).
+  PatternAtFileScope,
   // Past `support::kMaxAstNodesPerUnit`. A hazard bound, not a language rule.
   NodeLimit,
 };

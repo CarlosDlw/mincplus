@@ -15,7 +15,7 @@ namespace {
 // compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' code tables.
-constexpr std::array<SemaErrorCodeInfo, 53> kSemaErrorCodeInfos{{
+constexpr std::array<SemaErrorCodeInfo, 57> kSemaErrorCodeInfos{{
     {SemaErrorCode::UnknownType, "sema-unknown-type", false},
     {SemaErrorCode::MalformedType, "sema-malformed-type", false},
     {SemaErrorCode::TypeAliasCycle, "sema-type-alias-cycle", false},
@@ -38,6 +38,8 @@ constexpr std::array<SemaErrorCodeInfo, 53> kSemaErrorCodeInfos{{
     {SemaErrorCode::FunctionRedefinition, "sema-function-redefinition", false},
     {SemaErrorCode::SignatureMismatch, "sema-signature-mismatch", false},
     {SemaErrorCode::ExternAggregate, "sema-extern-aggregate", false},
+    {SemaErrorCode::UnknownMember, "sema-unknown-member", true},
+    {SemaErrorCode::VariadicAggregate, "sema-variadic-aggregate", true},
     {SemaErrorCode::SliceNotViewable, "sema-slice-not-viewable", false},
     {SemaErrorCode::SlicePointerNeedsBothBounds, "sema-slice-pointer-needs-both-bounds", false},
     {SemaErrorCode::SliceBoundsReversed, "sema-slice-bounds-reversed", false},
@@ -69,6 +71,8 @@ constexpr std::array<SemaErrorCodeInfo, 53> kSemaErrorCodeInfos{{
     {SemaErrorCode::CastLoses, "sema-cast-loses", true},
     {SemaErrorCode::ProvenanceCast, "sema-provenance-cast", true},
     {SemaErrorCode::AddressFromConstant, "sema-address-from-constant", false},
+    {SemaErrorCode::DestructuringArity, "sema-destructuring-arity", false},
+    {SemaErrorCode::DestructuringNotProduct, "sema-destructuring-not-product", false},
 }};
 // NOLINTEND(readability-identifier-naming)
 

@@ -110,6 +110,26 @@ struct TypeSpecResult {
 // orders, with no second grammar to remember (`arrays.md`, *The surface*).
 struct TypePart {
   bool isStar = false;
+  // `(...)`: a **product** (`tuples.md`). It is a *base* of the run and not a
+  // prefix over it -- `(i32, bool)` is a whole type, so `*(i32, bool)` is a
+  // pointer to one and `(i32, bool)*` has the `*` on the wrong side, exactly as
+  // `i32*` does.
+  //
+  // The members are parts of their own, in source order, because a member is a
+  // type position like any other: `([3]i32, *(i32, bool))` nests, and each
+  // member's run is read by this same reader. The nesting is why the reader is
+  // recursive in exactly one place.
+  bool isTuple = false;
+  // The nesting of this group went past the compiler's bound while it was being
+  // built. The parser's `DepthGuard` bounds the *tree*, and a flat type run can
+  // nest inside one node without deepening it, so the bound is enforced where the
+  // nesting is created (the AST reader) and reported here as one sentence -- a
+  // pathological type is a diagnostic, never a stack overflow.
+  bool tooDeep = false;
+  // One entry per member, each a run of its own parts. Empty for every other
+  // kind, which is what keeps a word from carrying a heap allocation it never
+  // uses in the common case: only the member vectors of a tuple allocate.
+  std::vector<std::vector<TypePart>> members;
   // `[N]`: the array constructor. `count` is the N, already folded.
   bool isArray = false;
   // Whether a number was written between the brackets at all. `[]` and `[0]`
@@ -174,6 +194,16 @@ struct TypePart {
 // Every spelling the reader accepts, for a "did you mean ...?" suggestion.
 // Names only, not the valid *combinations*: a suggestion is about one word.
 [[nodiscard]] std::span<const std::string_view> typeNames();
+
+// The **words** of a type position, in source order: the constructors left out
+// and, for a product, its members' words spliced in where the group sits.
+//
+// The alias pass walks this to decide which names a target depends on
+// (`type_alias.md`), and it has to see a name inside a product exactly like a
+// name beside a `*`: `type A = (B, i32);` written above `type B = i32;` is legal
+// at file scope, and a walk that only looked at the top level would decide `A`
+// before `B` and then fail to read it.
+[[nodiscard]] std::vector<std::string_view> typeRunWords(std::span<const TypePart> parts);
 
 // Whether this one word in the table is a type **on this target**. The table is
 // the reader's vocabulary and the target decides one entry of it: `f80` names the

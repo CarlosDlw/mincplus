@@ -167,6 +167,20 @@ public:
   // `kInvalidAst` when there is no child of that kind.
   [[nodiscard]] AstId childOfKind(AstId id, NodeKind kind) const;
   [[nodiscard]] std::vector<AstId> childrenOfKind(AstId id, NodeKind kind) const;
+  // The names a `let`/`const` introduces, in source order: the single `Name` of a
+  // plain binding, or one `Name` per position of a `TuplePattern` (`tuples.md`,
+  // decision 6). Four stages ask this question -- the validator, the flow pass,
+  // the checker and the lowering -- and a second reader of the pattern shape is
+  // how one of them comes to disagree with the others about what a binding is.
+  //
+  // `_` is a `Name` here like any other: whether a position introduces a binding
+  // is a *name-resolution* question and not a shape one, so it is answered where
+  // the definitions are made (`resolve`).
+  [[nodiscard]] std::vector<AstId> bindingNamesOf(AstId stmt) const;
+  // The initializer of a `let`/`const`: the operand that is neither a bound name
+  // (nor a pattern) nor the annotation. Invalid when the statement has none
+  // (`let x: i32;`), which is a declaration of an object that is assigned later.
+  [[nodiscard]] AstId initializerOf(AstId stmt) const;
   // The three operands of a `SliceExpr`, in the order the reader wrote them.
   [[nodiscard]] SliceParts slicePartsOf(AstId id) const;
   // The interned spelling of a name-bearing node, as text.

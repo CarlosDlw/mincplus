@@ -31,6 +31,14 @@ namespace minc::parse {
 // spelling that can disagree with itself.
 inline constexpr std::string_view kInferredCount = "_";
 
+// The other grammar word whose spelling is the rule, and the same character with
+// a different job: `_` in a pattern position is the member nobody wants --
+// `let (q, _) = divmod(7, 2);` -- so the position introduces no binding
+// (`tuples.md`, decision 6). It is an `Identifier` like every name, so only the
+// spelling tells the two apart, and the two rules are decided in different
+// stages (the type reader owns the count, `resolve` owns the binding).
+inline constexpr std::string_view kSkippedName = "_";
+
 // Token kinds are all below this; node kinds are all at or above it. It is 256
 // rather than "just past the last token" so that adding token kinds never
 // renumbers a node kind -- numbers that appear in tests and golden files.
@@ -118,6 +126,18 @@ enum class SyntaxKind : std::uint16_t {
   // index, and the brackets that delimit it) and the index is a full
   // expression of its own. Children are `base`, `[`, `index`, `]`.
   IndexExpr,
+  // `(a, b)`: a **product value** (`tuples.md`). It is not a `ParenExpr`: the
+  // comma is what tells them apart, and the two mean different things -- a group
+  // of one value is that value, a product of two is an object with two members.
+  // Children are `(`, the elements, `)`; the commas stay in the tree, because a
+  // reader that wanted the elements back has to be able to see where one ended.
+  TupleExpr,
+  // `t.0`, and (when `struct` lands) `s.field`: **one node for a component of a
+  // value**, whatever the component is called. Children are `base`, `.`, and the
+  // member token -- a number for a product's position, a name for a field. The
+  // two spellings are one operation, so the checker asks one question ("what is
+  // this member of this value") and the lowering has one case to write.
+  FieldExpr,
   // `a[1..2]`, `a[1..]`, `a[..2]`, `a[..]`: the **view**, which is not an index
   // with a funny index but its own expression with its own two operands, either
   // of which may be absent.
@@ -138,6 +158,12 @@ enum class SyntaxKind : std::uint16_t {
   // flag -- a reader asks for the type *by name* rather than remembering when the
   // first child happens to be one.
   TypedInitializer,
+
+  // `let (a, b) = t;`: the pattern of a destructuring binding. Children are `(`,
+  // the names (one `Name` each, in order), `)`. It is **not** a `TupleExpr`: a
+  // pattern introduces bindings and a value computes a result, and the tree says
+  // which one a reader wrote so no later stage has to guess.
+  TuplePattern,
 
   // Reserved: names are fixed now, the syntax that produces them is not.
   MacroCall,

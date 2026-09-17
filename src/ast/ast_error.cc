@@ -16,9 +16,10 @@ namespace {
 // input. The count is explicit so a code added to the enum without a row -- or a
 // row added twice -- is a compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): the table name is a convention.
-constexpr std::array<AstErrorCodeInfo, 3> kAstErrorCodeInfos{{
+constexpr std::array<AstErrorCodeInfo, 4> kAstErrorCodeInfos{{
     {AstErrorCode::MissingTypeOrInitializer, "ast-missing-type"},
     {AstErrorCode::ConstantWithoutInitializer, "ast-const-without-value"},
+    {AstErrorCode::PatternAtFileScope, "ast-pattern-at-file-scope"},
     {AstErrorCode::NodeLimit, "ast-node-limit"},
 }};
 // NOLINTEND(readability-identifier-naming)

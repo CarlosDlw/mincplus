@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <string>
 
+#include "token_class.h"
+
 namespace minc::parse {
 
 // `fn Type Name(...) Block`, and the declaration form `extern fn Type
@@ -233,18 +235,87 @@ void Parser::parseParam() {
 // not be the group the reader wrote and the tokens after it would be read as the
 // element type. A tree that does not hold the source is a tree that cannot be
 // diagnosed from.
-[[nodiscard]] static std::uint32_t typeRunLength(const Parser& parser) {
+// What the scan of one type run found. It answers the two questions the
+// declaration reader has -- how many tokens the run occupies, and where its last
+// *word* ends -- in one walk, because a second walk is a second rule about what a
+// word is (`tuples.md`).
+struct TypeRunScan {
+  // Tokens the run occupies, from here.
+  std::uint32_t tokens = 0;
+  // Words at the *top level* of the run: an identifier, or a whole `(T, U)`
+  // group. The identifiers **inside** a group are not words of this run, which is
+  // what keeps `fn (i32, bool) f()` from reading `bool` (or `f`) as the wrong
+  // word -- the name of a function is the last word of the run, and a product is
+  // one word.
+  std::uint32_t words = 0;
+  // One past the last word.
+  std::uint32_t lastWordEnd = 0;
+  // That last word was a `(T, U)` group and not an identifier: a run that ends
+  // this way has no name in it, and the reader has to say so.
+  bool lastWordIsGroup = false;
+};
+
+[[nodiscard]] static TypeRunScan scanTypeRun(const Parser& parser) {
+  TypeRunScan run;
   std::uint32_t tokens = 0;
   while (true) {
-    if (parser.nth(tokens) == lex::TokenKind::Star ||
-        parser.nth(tokens) == lex::TokenKind::Identifier ||
+    const lex::TokenKind kind = parser.nth(tokens);
+    if (kind == lex::TokenKind::Star || kind == lex::TokenKind::Identifier ||
         // `!`, the bottom type. It is a type *token* rather than a word, which
         // is why it is listed beside the two the grammar already had: a run is
         // still what a type position holds, and `!` takes part in it exactly
         // where a word would -- `fn ! f()` is a return type and a name, and the
         // reader below splits the run the same way it splits `fn i32 f()`.
-        parser.nth(tokens) == lex::TokenKind::Bang) {
+        kind == lex::TokenKind::Bang) {
+      if (kind == lex::TokenKind::Identifier) {
+        // The one place a *word* is counted, so "how many words" and "where does
+        // the last one end" cannot disagree.
+        run.words += 1;
+        run.lastWordEnd = tokens + 1;
+        run.lastWordIsGroup = false;
+      }
       ++tokens;
+      continue;
+    }
+    // A `(T, U)` product, walked as one balanced group: **one word**, whose
+    // closing `)` is found by counting. Nothing inside is judged here -- the type
+    // reader one stage down is the only place that decides what a member may be,
+    // and a scan that tried to would be a second copy of that rule
+    // (`tuples.md`, decision 15).
+    //
+    // Two conditions, and both are about `fn`, which is the only thing this scan
+    // is for. A `(` continues the run **only at its start** (`run.words == 0`),
+    // because after a word the `(` is the *parameter list*: `fn i32 main(` has its
+    // type and its name behind it, and reading the list as a product would make
+    // `main` the return type. And the group must be non-empty, so `fn *(` is still
+    // the missing name it was before a product existed rather than an empty
+    // group that reads as a type.
+    if (kind == lex::TokenKind::LParen && run.words == 0 &&
+        parser.nth(tokens + 1) != lex::TokenKind::RParen) {
+      std::uint32_t depth = 0;
+      while (true) {
+        const lex::TokenKind in = parser.nth(tokens);
+        // Past the end, `nth` answers the end-of-file token (the source clamps),
+        // so an unterminated group ends the run here and the group's own reader
+        // reports the missing `)`.
+        if (in == lex::TokenKind::EndOfFile) {
+          break;
+        }
+        ++tokens;
+        if (in == lex::TokenKind::LParen) {
+          ++depth;
+          continue;
+        }
+        if (in == lex::TokenKind::RParen) {
+          --depth;
+          if (depth == 0) {
+            break;
+          }
+        }
+      }
+      run.words += 1;
+      run.lastWordEnd = tokens;
+      run.lastWordIsGroup = true;
       continue;
     }
     // `[N]`, `[]`, or the bracket alone.
@@ -272,7 +343,8 @@ void Parser::parseParam() {
     }
     break;
   }
-  return tokens;
+  run.tokens = tokens;
+  return run;
 }
 
 void Parser::parseTypeAndName() {
@@ -280,14 +352,27 @@ void Parser::parseTypeAndName() {
   // the only token that separates them from the rest of the declaration is `(`.
   // So the last identifier before `(` is the name and everything before it --
   // stars included -- is the type.
-  const std::uint32_t tokens = typeRunLength(*this);
-  std::uint32_t words = 0;
-  std::uint32_t lastWord = 0;
-  for (std::uint32_t i = 0; i < tokens; ++i) {
-    if (nth(i) == lex::TokenKind::Identifier) {
-      ++words;
-      lastWord = i + 1; // one past the last identifier
+  const TypeRunScan run = scanTypeRun(*this);
+  const std::uint32_t tokens = run.tokens;
+  const std::uint32_t words = run.words;
+  const std::uint32_t lastWord = run.lastWordEnd;
+
+  if (run.lastWordIsGroup) {
+    // The run ends in a `(T, U)` and holds no identifier after it, so there is no
+    // name: `fn (i32, bool) (` has the type and not the name. The whole run is the
+    // `Type` and the `Name` is empty, because a tree that dropped the group here
+    // is a tree that lost the return type a reader wrote.
+    error(words == 1 ? "expected a return type before the function name"
+                     : "expected a function name",
+          words == 1 ? ParseErrorCode::ExpectedType : ParseErrorCode::ExpectedName);
+    Marker type = start();
+    for (std::uint32_t i = 0; i < tokens; ++i) {
+      bump();
     }
+    type.complete(SyntaxKind::Type);
+    Marker name = start();
+    name.complete(SyntaxKind::Name);
+    return;
   }
 
   if (words == 1 && lastWord <= 1) {
@@ -396,7 +481,7 @@ void Parser::parseTypeAlias() {
 
 void Parser::parseType() {
   Marker type = start();
-  if (typeRunLength(*this) == 0) {
+  if (!isTypeStart(current())) {
     error("expected a type", ParseErrorCode::ExpectedType);
     type.complete(SyntaxKind::Type);
     return;
@@ -406,11 +491,16 @@ void Parser::parseType() {
   // where the position is known: this stage answers "what shape is written", and
   // `let x: !` is a shape -- a wrong one, with a sentence about why, produced by
   // the only stage that knows an object cannot have that type (`never.md`).
-  //
-  // The loop is driven by the tokens rather than by the run length above, so a
-  // malformed group -- which the length function counts differently -- still
-  // consumes exactly the tokens it read.
-  while (true) {
+  parseTypeRun();
+  type.complete(SyntaxKind::Type);
+}
+
+void Parser::parseTypeRun() {
+  // One run, from the current token: the constructors, the words, and the groups.
+  // It stops at the first token that cannot continue a type, which is what makes
+  // it reusable both for a whole position and for one member of a product -- the
+  // member's run ends at a `,` or a `)` and needs no second loop.
+  while (!bailedOut_ && !atEnd()) {
     if (at(lex::TokenKind::Identifier) || at(lex::TokenKind::Star) || at(lex::TokenKind::Bang)) {
       bump();
       continue;
@@ -419,9 +509,64 @@ void Parser::parseType() {
       parseArrayCount();
       continue;
     }
+    if (at(lex::TokenKind::LParen)) {
+      parseTypeGroup();
+      continue;
+    }
     break;
   }
-  type.complete(SyntaxKind::Type);
+}
+
+void Parser::parseTypeGroup() {
+  // Precondition: the current token is `(`.
+  //
+  // `(T, U)`, a product. The parser's job here is the *shape*: the group is
+  // closed, its members are runs, and a member with nothing written in it is one
+  // mistake. What a member may be -- an object, not `void`, not `!` -- is the type
+  // reader's question, one stage down, and it answers with a sentence about the
+  // member it refused (`tuples.md`, decision 15).
+  DepthGuard depth(*this);
+  if (!depth.ok()) {
+    tooDeep();
+    return;
+  }
+  bump(); // `(`
+  if (at(lex::TokenKind::RParen)) {
+    // `()`: an empty group, named here because the two things it could have been
+    // are a parameter list (which is not a type position) and a product (which
+    // has at least two members). `void` is the type with no value, and the
+    // sentence says so (`tuples.md`, decision 2).
+    error("a product has at least two members, `(T, U)`; for the type with no value write `void`",
+          ParseErrorCode::ExpectedType);
+    bump(); // `)`
+    return;
+  }
+  if (!at(lex::TokenKind::RParen)) {
+    while (!bailedOut_ && !atEnd()) {
+      if (!isTypeStart(current())) {
+        error("expected the type of this member: a product is written `(T, U)`",
+              ParseErrorCode::ExpectedType);
+        break;
+      }
+      parseTypeRun();
+      if (at(lex::TokenKind::Comma)) {
+        bump();
+        if (at(lex::TokenKind::RParen)) {
+          // `(T,)`: the trailing comma is kept in the tree and the reader refuses
+          // the one-member product by name -- the same sentence for `(T)` in a type
+          // position, because it is the same mistake (`tuples.md`, decision 2).
+          break;
+        }
+        continue;
+      }
+      break;
+    }
+  }
+  if (at(lex::TokenKind::RParen)) {
+    bump();
+    return;
+  }
+  error("expected `)` to close this product", ParseErrorCode::ExpectedTypeGroupClose);
 }
 
 } // namespace minc::parse

@@ -141,6 +141,10 @@ private:
   [[nodiscard]] ast::AstId reachableReturn(ast::AstId node) const;
   // The value of a `let`/`const`, or an invalid id when it has none.
   [[nodiscard]] ast::AstId initializerOf(ast::AstId stmt) const;
+  // `let (a, b) = t;` (`tuples.md`, decision 6). The pattern's names become real
+  // bindings, each typed by the member it takes, and the count of names against
+  // the count of members is checked here -- the one place both numbers exist.
+  void checkDestructuring(ast::AstId stmt, ast::AstId pattern, bool isConst);
   // Is this loop guaranteed to leave only through a `return`? True for a
   // constant-true condition with no `break` aimed at *this* loop -- a `break`
   // inside a nested loop belongs to that loop and does not count.
@@ -218,12 +222,13 @@ private:
   // through a pointer, which have no number to give (`checks.md`).
   void recordAccess(ast::AstId place, TypeId type, ProvenanceKind provenance,
                     std::uint64_t extent = 0, ExtentKind extentKind = ExtentKind::Unknown);
-  // The provenance of an array subscript, which is not `provenanceOf`'s
-  // question: `provenanceOf` asks what allocation a *pointer value* came from,
-  // and an array is not a pointer value. This asks what allocation the *place*
-  // `a[i]` is inside, which is the object `a` names -- unless `a` is a
-  // parameter, whose storage came in from the caller (`arrays.md` decision 26).
-  [[nodiscard]] ProvenanceKind arrayProvenanceOf(ast::AstId base) const;
+  // The provenance of an access that sits *inside a place* -- `a[i]`, `a[1..2]`,
+  // `t.0` -- which is not `provenanceOf`'s question: `provenanceOf` asks what
+  // allocation a *pointer value* came from, and a path naming an array or a
+  // product is not a pointer value. This asks what allocation the *place* `a[i]`
+  // is inside, which is the object `a` names -- unless `a` is a parameter, whose
+  // storage came in from the caller (`arrays.md` decision 26).
+  [[nodiscard]] ProvenanceKind placeProvenanceOf(ast::AstId base) const;
 
   // --- the two questions about a place ----------------------------------------
   //
@@ -277,6 +282,12 @@ private:
   //
   // The parts of a `Type` node, in source order: its `*` tokens and its words.
   [[nodiscard]] std::vector<TypePart> typeParts(ast::AstId typeNode) const;
+  // One run of a type position, starting at `i`, stopping at a `,`, a `)` or the
+  // end. A product's members are runs, and this is where that recursion lives
+  // (`tuples.md`, decision 15): the type layer of the language is a run of parts
+  // with two constructors, and a product is a base whose members are runs.
+  void typePartsInto(std::span<const ast::AstId> children, std::size_t& i, std::uint32_t depth,
+                     std::vector<TypePart>& parts) const;
   [[nodiscard]] TypeId resolveTypeNode(ast::AstId typeNode);
   // The type a binding has when nothing constrained it: `i32` / `f64` for a
   // deferred literal, the type itself otherwise.
@@ -376,6 +387,13 @@ private:
   [[nodiscard]] TypeId checkDeref(ast::AstId expr, ExprInfo& info);
   // `a[i]`, which the language defines as `*(a + i)`.
   [[nodiscard]] TypeId checkIndex(ast::AstId expr, ExprInfo& info);
+  // `(a, b)`: a product value. The members are typed *by position*, against the
+  // context when it is a product of the same arity (`tuples.md`, decision 8).
+  [[nodiscard]] TypeId checkTupleExpr(ast::AstId expr, TypeId expected, ExprInfo& info);
+  // `t.0`: a member of a product, chosen at compile time. The member of a place
+  // is a place, and a position past the arity is a diagnostic rather than a
+  // runtime read (`tuples.md`, decisions 3 and 9).
+  [[nodiscard]] TypeId checkField(ast::AstId expr, ExprInfo& info);
   // `a[1..2]`, `a[1..]`, `a[..2]`, `a[..]`: the view. Three bases (array, slice,
   // pointer), two bounds, and the one rule about both of them -- a bound is an
   // integer index and the end is one past the last element (`slices.md`).

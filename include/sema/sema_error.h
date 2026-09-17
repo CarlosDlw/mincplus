@@ -171,6 +171,18 @@ enum class SemaErrorCode : std::uint8_t {
   // is not this code: it is the access's extent, which the checked build guards
   // (`arrays.md` decisions 7 and 26).
   IndexOutOfRange,
+  // `.` where the thing to its left has no members at all, or where a product's
+  // member was written as a *name*: a product's members are positions, and the
+  // value's type decides which of the two sentences it is (`tuples.md`, decision
+  // 3). One code for both because the fix is one thing -- read the member the way
+  // this type spells it -- and the sentence names which spelling that is.
+  UnknownMember,
+  // An aggregate passed as a variadic argument. The default argument promotions
+  // have no answer for a value that is not one word wide, so the call has no ABI
+  // to obey and the sentence names what to pass instead (`tuples.md`, decision
+  // 18). Distinct from `ExternAggregate`: that one is a *signature* this compiler
+  // would have to promise, and this one is a value at a call site.
+  VariadicAggregate,
   // Two pointer types that do not meet: a comparison of `*i32` with `*u8`, a
   // subtraction of unrelated pointees, a `?:` with no common pointer type, or an
   // initializer/argument of one pointee type where the other is required. The
@@ -230,6 +242,15 @@ enum class SemaErrorCode : std::uint8_t {
   // and naming an address is an assertion about where the value came from -- which
   // a constant cannot make (`casts.md`, decision 11b).
   AddressFromConstant,
+  // A destructuring whose name count and whose value's member count disagree:
+  // `let (a, b) = t;` on a product of three. Both numbers are in the sentence,
+  // because either one may be the mistake and the reader is the only one who
+  // knows which one they meant (`tuples.md`, decision 20).
+  DestructuringArity,
+  // A destructuring of something that is not a product at all: `let (a, b) = 5;`,
+  // or an annotation that names a single type. The fix is one of two spellings --
+  // bind the value whole, or take a product apart -- so the sentence names both.
+  DestructuringNotProduct,
 };
 
 struct SemaErrorCodeInfo {

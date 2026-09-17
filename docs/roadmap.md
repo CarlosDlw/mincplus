@@ -901,6 +901,25 @@ the two cannot disagree about what the pipeline means.
       [`architectures/type_alias.md`](architectures/type_alias.md). It was the
       first slice of the item below on purpose: it needs nothing from the type
       store, which is what the aggregate types do need
+- [x] **Tuples** `(T, T, ...)`: the first type with no fixed arity, and the
+      product that makes "this function returns two things" a *type*
+      (`fn (i32, bool) divmod(a: i32, b: i32)`), not a call syntax. `(T, U)` in any
+      type position, `(a, b)` as a value whose members the position types,
+      members read by position at compile time (`t.0`; `t[i]`, `t.len` and a
+      comparison are each refused by name), destructuring that introduces **real
+      bindings** — copies, not aliases — with `_` for a member nobody wants, C's
+      field order, an unnamed `DW_TAG_structure_type` with `__0`… members under
+      `-g`, and `sema-extern-aggregate` at the boundary of the C ABI, whose
+      aggregate layout is this compiler's internal convention. Two shipped
+      spellings moved to make room for it: a decimal literal begins with a digit
+      (`.5` is refused with the one-character fix), and a chain of two member
+      reads is written apart (`t.0 .1`), because `0.1` is one number to the
+      scanner. The design, the market evidence (Rust's `t.0` and `repr(Rust)`
+      reordering, Swift's non-stable tuple ABI, C++'s alias bindings, Go's choice
+      to have no tuples at all), the layout rule and every refusal are in
+      [`architectures/tuples.md`](architectures/tuples.md). It lands before
+      generics on purpose: a binder list is itself a sequence of pairs, and the
+      store gained arity-unknown interning here
 - [ ] Top-level types: `struct`, `enum`, and `union`, with **nominal**
       identity across modules (`architectures/modules.md`, seam S4 — the type
       store interns by structure today, which is right for scalars and wrong for

@@ -152,28 +152,26 @@ void Checker::flowStatement(ast::AstId stmt) {
   switch (kindOf(stmt)) {
   case ast::NodeKind::LetStmt:
   case ast::NodeKind::ConstStmt: {
-    const ast::AstId nameNode = childOf(stmt, ast::NodeKind::Name);
-    const ast::AstId typeNode = childOf(stmt, ast::NodeKind::Type);
-
-    // The initializer is checked first, and it cannot see the binding it belongs
-    // to: resolution scopes a `let` from the statement after it, so the name in
-    // its own initializer is the outer one, and the outer one is what is read.
-    ast::AstId init = ast::AstId{};
-    for (const ast::AstId operand : operandsOf(stmt)) {
-      if (operand != nameNode && operand != typeNode) {
-        init = operand;
-      }
-    }
+    // The initializer is checked first, and it cannot see the bindings it belongs
+    // to: resolution scopes a `let` from the statement after it, so a name in its
+    // own initializer is the outer one, and the outer one is what is read.
+    const ast::AstId init = initializerOf(stmt);
     if (init.valid()) {
       flowExpression(init);
     }
 
     // A binding with an initializer holds a value from here; one without holds
     // nothing until an assignment reaches it on every path that gets here.
+    //
+    // **Every name the statement binds** and not the one it usually binds: a
+    // destructuring assigns all of its names at once, because the value they are
+    // taken from is one value and it is evaluated once (`tuples.md`, decision 6).
     if (init.valid()) {
-      if (const std::optional<resolve::DefId> def = defAtName(nameNode)) {
-        if (def->index < assigned_.size()) {
-          assigned_[def->index] = true;
+      for (const ast::AstId name : file_.bindingNamesOf(stmt)) {
+        if (const std::optional<resolve::DefId> def = defAtName(name)) {
+          if (def->index < assigned_.size()) {
+            assigned_[def->index] = true;
+          }
         }
       }
     }

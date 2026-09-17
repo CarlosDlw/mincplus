@@ -151,6 +151,19 @@ TypeId Checker::checkVariadicArgument(ast::AstId consumer, std::uint8_t operand,
   // `1.0` is an `f64`), which is `defaultOf`, and that is the same answer the
   // language gives anywhere else nothing decides the type.
   const TypeId from = decideAt(child, kInvalidType);
+  // An aggregate has no default promotion and no slot to arrive in: C's variadic
+  // calling convention is built from values that fit one register or one pair,
+  // and a product or an array is neither. Refused by name, and the fix is a
+  // pointer -- the same answer the `extern` boundary gives a signature
+  // (`tuples.md`, decision 18).
+  if (types_.isAggregate(from)) {
+    error(child, SemaErrorCode::VariadicAggregate,
+          "`" + types_.spelling(from) +
+              "` cannot be a variadic argument: the promotions a variadic call applies are for "
+              "values that fit a register. Pass `&" +
+              types_.spelling(from) + "`, or the members one by one");
+    return from;
+  }
   const TypeId to = promotedArgument(from);
   // A conversion that changes nothing is not recorded, and for most arguments
   // the promotion *is* nothing: `i32`, `i64`, a pointer and a `str` pass as they

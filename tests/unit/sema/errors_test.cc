@@ -622,6 +622,16 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       // being declared can be a circle at all (`type_alias.md`).
       {"type A = B;\ntype B = A;\nfn i32 main() { return 0; }\n", false},
       {"fn i32 main() { type A = *[4]A; return 0; }\n", false},
+      // The product codes. A member read of something with no members, a product
+      // at a variadic boundary, and the two ways a destructuring's two numbers can
+      // disagree -- with the value's members and with the annotation's
+      // (`tuples.md` decisions 3, 18 and 20).
+      {"fn i32 main() { let x: i32 = 1; return x.0; }\n", false},
+      {"extern fn i32 printf(fmt: str, ...);\n"
+       "fn i32 main() { let p = (1, 2); return printf(\"%d\\n\", p); }\n",
+       false},
+      {"fn i32 main() { let p = (1, 2, 3); let (a, b) = p; return a; }\n", false},
+      {"fn i32 main() { let (a, b) = 5; return a; }\n", false},
   };
 
   for (const Case& one : cases) {

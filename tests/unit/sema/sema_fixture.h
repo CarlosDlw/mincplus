@@ -189,6 +189,12 @@ public:
   [[nodiscard]] bool hasAstError() const {
     return !astErrorCodes_.empty();
   }
+  // The structural pass's findings, sentences included: `hasAstError` answers
+  // *whether* the pass reported anything, and a test about one shape asks for the
+  // message it produced -- the sentence is what a reader repairs from.
+  [[nodiscard]] const std::vector<ast::AstError>& astErrors() const {
+    return structural_;
+  }
 
   // --- queries ---------------------------------------------------------------
 
@@ -346,9 +352,25 @@ private:
     }
     return ids;
   }
+  // A binding *statement* has one name or a pattern of them, and the pair is what
+  // this answers -- so a test about a destructuring asks the same question a test
+  // about `let x = 1;` does. `LoweredFile::bindingNamesOf` is the reader: the
+  // question "which names does this statement introduce" is asked by the validator,
+  // the flow pass, the checker and the lowering too, and a test that answered it a
+  // fifth way would be a fifth rule to keep in step.
   [[nodiscard]] ast::AstId findBindingName(std::string_view name) const {
-    const ast::AstId decl = findBindingDecl(name);
-    return decl.valid() ? lowered().childOfKind(decl, ast::NodeKind::Name) : ast::AstId{};
+    for (const ast::AstId id : allNodes()) {
+      const ast::NodeKind kind = lowered().at(id).kind;
+      if (kind != ast::NodeKind::LetStmt && kind != ast::NodeKind::ConstStmt) {
+        continue;
+      }
+      for (const ast::AstId candidate : lowered().bindingNamesOf(id)) {
+        if (lowered().spellingOf(candidate) == name) {
+          return candidate;
+        }
+      }
+    }
+    return ast::AstId{};
   }
   [[nodiscard]] ast::AstId findBindingDecl(std::string_view name) const {
     for (const ast::AstId id : allNodes()) {
@@ -356,9 +378,10 @@ private:
       if (kind != ast::NodeKind::LetStmt && kind != ast::NodeKind::ConstStmt) {
         continue;
       }
-      const ast::AstId nameNode = lowered().childOfKind(id, ast::NodeKind::Name);
-      if (nameNode.valid() && lowered().spellingOf(nameNode) == name) {
-        return id;
+      for (const ast::AstId candidate : lowered().bindingNamesOf(id)) {
+        if (lowered().spellingOf(candidate) == name) {
+          return id;
+        }
       }
     }
     return ast::AstId{};

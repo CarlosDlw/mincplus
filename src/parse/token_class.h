@@ -111,6 +111,23 @@ inline constexpr std::size_t kBinaryOpCount = sizeof(kBinaryOps) / sizeof(kBinar
          kind == lex::TokenKind::LParen || isPrefixOperator(kind);
 }
 
+// A token a type position can begin with: the two constructors, a word, `!`, and
+// a `(T, U)` group. The parser asks this to tell "a type is written here" from
+// "there is no type here", which is one question with five spellings and must not
+// be five comparisons in two files (`tuples.md`).
+[[nodiscard]] inline bool isTypeStart(lex::TokenKind kind) {
+  switch (kind) {
+  case lex::TokenKind::Identifier:
+  case lex::TokenKind::Star:
+  case lex::TokenKind::Bang:
+  case lex::TokenKind::LBracket:
+  case lex::TokenKind::LParen:
+    return true;
+  default:
+    return false;
+  }
+}
+
 [[nodiscard]] inline bool isStatementStart(lex::TokenKind kind) {
   // The control-flow keywords are one list, owned by the lexer, so a keyword
   // that heads a statement is classified there once and recognized here without

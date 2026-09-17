@@ -1,0 +1,81 @@
+// A **product** -- `(T, U)` -- and the destructuring binding.
+//
+// A product is an *object* and an *aggregate*: it has a size and an alignment, it
+// can be stored, passed, returned and addressed, and its members keep the order
+// they were written in (`tuples.md`). It is not a record: the members have no
+// names, and a member is reached by **position**, at compile time -- `t.0`,
+// never `t[i]`.
+//
+// The spelling is the whole surface:
+//
+//   * the **type** is `(T, U)`, in any position a type can be in;
+//   * the **value** is `(a, b)`, and its type follows from its members;
+//   * a **member** is `t.0`, and a member of a place *is* a place
+//     (`t.0 = 9`, `&t.0`);
+//   * a **pattern** is `(a, b)` on the left of a `let`/`const`, and it declares one
+//     real binding per member -- each a copy, with the same mutability rules as any
+//     `let`. `_` is the member nobody wants.
+
+type Pair = (i32, bool);
+
+// A function that returns two things. The product is the return type and nothing
+// new is added to the grammar for it: a signature has one return type, and a
+// product is one type.
+fn Pair divmod(a: i32, b: i32) {
+  return (a / b, a > b);
+}
+
+// A product is passed by value and crossed by a call like any other value. A
+// *product of one* is its member, so `(i32)` is `i32` -- the comma is what makes
+// the group a product at all.
+fn i32 first(p: (i32, bool)) {
+  return p.0;
+}
+
+// The three ways a product is taken apart, in one function.
+fn i32 report(a: i32, b: i32) {
+  // 1. A binding that holds the whole thing. Inference works, and the annotation
+  //    would work the same way: `let p: Pair = divmod(a, b);`.
+  let p = divmod(a, b);
+
+  // 2. A member read. `p` is a *place*, so `p.1` is a place too: assigning to it
+  //    writes the member, and `&p.0` is an address inside the object.
+  let over: bool = p.1;
+  p.1 = over;
+
+  // 3. A destructuring binding: one name per member, each a copy. `_` skips the
+  //    member nobody wants.
+  let (quotient, _) = p;
+
+  // The members are ordinary values of their own types, so they take part in
+  // everything their type does: arithmetic, a cast, a call, an element of an array.
+  let q: i64 = quotient as i64;
+  let flags: [2]bool = [over, p.1];
+
+  return first((quotient, over)) + (q as i32) + (flags[0] ? 1 : 0);
+}
+
+// A `const` pattern whose value is a literal publishes each member the same way a
+// single `const` does, so `W` and `H` are compile-time values here. A *file-scope*
+// pattern is refused by name: a global is one object with one name.
+fn i32 area() {
+  const (W, H) = (16, 9);
+  return W * H;
+}
+
+fn i32 main() {
+  let a = report(7, 2);
+  let b = area();
+
+  // A product nests like any other type: a member may itself be a product, and a
+  // product may be the element of an array.
+  let grid: [2](i32, i32) = [(1, 2), (3, 4)];
+  let nested = ((1, 2), true);
+  // Two member reads in a row are separated by a space (or wrapped), because
+  // `0.1` written together is one *number* to the scanner: `nested.0 .1` and
+  // `(nested.0).1` are the same member, and the second is how a chain reads when
+  // the reader prefers it visibly grouped.
+  let inner: i32 = nested.0 .1;
+
+  return a + b + grid[1].0 + inner;
+}

@@ -811,6 +811,21 @@ warnings inside them are dropped at the report step while errors are not.
   instead. `len(x)` and `sizeof(x)` are the reading operators a view and an array
   still want, and each is its own step rather than a gap in the design.
 
+  **Tuples** (`(T, T, ...)`) are the first type with no fixed arity: the product
+  that makes "this function returns two things" a *type* rather than a call
+  syntax. `(T, U)` in any type position, `(a, b)` as a value, members reached by
+  position at compile time (`t.0`, never `t[i]`), destructuring that introduces
+  real bindings (`let (q, r) = divmod(7, 2);`, with `_` for a member nobody
+  wants), C's field order, an unnamed `DW_TAG_structure_type` with `__0`… members
+  under `-g`, and `sema-extern-aggregate` at the C boundary — the layout is this
+  compiler's internal convention and is stated rather than promised. One decision
+  in it reached back into a shipped spelling: a decimal literal now begins with a
+  digit, because `t.0` and `.5` cannot both be true of the same character, and a
+  *chain* of two reads is written apart (`t.0 .1`) for the same reason
+  ([`architectures/tuples.md`](architectures/tuples.md)). Generics come after it:
+  a binder list is itself a sequence of pairs, and the store gained
+  arity-unknown interning here.
+
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which
   error, and the decisions the language had to make with it. `mincc check` is

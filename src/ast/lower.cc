@@ -344,8 +344,13 @@ private:
     for (std::uint32_t i = 0; i < node.childCount; ++i) {
       const AstId child = children_[node.firstChild + i];
       const Node& kid = nodes_[child.index];
+      // The names, the annotation and the pattern are not the value; the value is
+      // the one child left. The same rule as `LoweredFile::initializerOf`, which
+      // is what every stage above reads -- kept here because the item's body is
+      // computed *while* the nodes are still being built and the file does not
+      // exist yet.
       if (kid.isToken() || kid.kind == parse::SyntaxKind::Name ||
-          kid.kind == parse::SyntaxKind::Type) {
+          kid.kind == parse::SyntaxKind::Type || kid.kind == parse::SyntaxKind::TuplePattern) {
         continue;
       }
       return child;

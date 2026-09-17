@@ -39,6 +39,8 @@ std::string_view toString(TypeKind kind) {
     return "array";
   case TypeKind::Slice:
     return "slice";
+  case TypeKind::Tuple:
+    return "tuple";
   }
   return "unknown";
 }

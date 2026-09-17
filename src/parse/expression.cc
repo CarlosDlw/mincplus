@@ -188,6 +188,15 @@ bool Parser::atCastStart() const {
       ++i;
       continue;
     }
+    if (kind == lex::TokenKind::Comma) {
+      // `(i32, bool)`: a **product** type, which the scan accepts so the refusal
+      // that names it can fire at the call site (`tuples.md`, decision 19). What
+      // is not accepted is a cast to one -- the group is a complete type followed
+      // by an expression, and the only thing missing from it is the fact that a
+      // cast names one type.
+      ++i;
+      continue;
+    }
     if (!sawWord && kind == lex::TokenKind::LBracket) {
       // A `[N]` or `[]` group, walked whole. The count is left to the type
       // reader: `[x]i32` is refused by the answer with a sentence, and a scan
@@ -214,6 +223,95 @@ bool Parser::atCastStart() const {
   // is a parenthesised type name, and the sentence for it comes from the stage
   // that can say "a type is not a value; did you mean to cast?".
   return isExpressionStart(nth(i + 1));
+}
+
+bool Parser::atProductCastStart() const {
+  // Precondition: `atCastStart()` is true, so what is ahead is a complete type run
+  // in parentheses and an expression after it. This asks the one further question
+  // -- is the type a *product* -- by looking for a comma at the group's own level.
+  // A comma inside a member's nested group is that member's business, which is
+  // what the depth counter is for.
+  std::uint32_t depth = 0;
+  for (std::uint32_t i = 0;; ++i) {
+    const lex::TokenKind kind = nth(i);
+    if (kind == lex::TokenKind::EndOfFile) {
+      return false;
+    }
+    if (kind == lex::TokenKind::LParen) {
+      ++depth;
+      continue;
+    }
+    if (kind == lex::TokenKind::RParen) {
+      --depth;
+      if (depth == 0) {
+        return false;
+      }
+      continue;
+    }
+    if (kind == lex::TokenKind::Comma && depth == 1) {
+      return true;
+    }
+  }
+}
+
+CompletedMarker Parser::parseProductCastRefusal() {
+  // `(i32, bool)x`: one diagnostic, at the group, and a tree that holds the whole
+  // expression -- the group's tokens and the operand -- so the recovery does not
+  // hand the next rule a token that belongs to this one. The parser is the stage
+  // that can see the cast *shape*; the sentence names what to write instead
+  // (`tuples.md`, decision 19).
+  Marker cast = start();
+  error("a cast names one type, and `(T, U)` is a product: take the value whole, or cast each "
+        "member where it is used",
+        ParseErrorCode::CastToProduct);
+  std::uint32_t depth = 0;
+  while (!atEnd() && !bailedOut_) {
+    const lex::TokenKind kind = current();
+    bump();
+    if (kind == lex::TokenKind::LParen) {
+      ++depth;
+      continue;
+    }
+    if (kind == lex::TokenKind::RParen) {
+      --depth;
+      if (depth == 0) {
+        break;
+      }
+    }
+  }
+  parsePrefix();
+  return cast.complete(SyntaxKind::CastExpr);
+}
+
+CompletedMarker Parser::parseTupleLiteral(Marker group) {
+  // Precondition: `(` and the first element have been read; the current token is
+  // `,`. The commas stay in the tree -- they are what tells a product from a
+  // group, and a reader of the tree has to be able to see where an element ended.
+  std::uint32_t elements = 1;
+  while (at(lex::TokenKind::Comma)) {
+    bump(); // `,`
+    if (at(lex::TokenKind::RParen)) {
+      // `(a,)`: the trailing comma, which is the writing of a one-member product.
+      // Kept in the tree and refused below, because both halves -- the shape and
+      // the sentence -- belong to the stage that can see the comma (`tuples.md`,
+      // decision 2).
+      break;
+    }
+    if (!isExpressionStart(current())) {
+      error("expected the value of this member: a product is written `(a, b)`",
+            ParseErrorCode::ExpectedExpression);
+      break;
+    }
+    parseExpr();
+    ++elements;
+  }
+  expect(lex::TokenKind::RParen);
+  if (elements < 2) {
+    error("a product of one value is that value: write the value, or give the product a second "
+          "member",
+          ParseErrorCode::ExpectedExpression);
+  }
+  return group.complete(SyntaxKind::TupleExpr);
 }
 
 CompletedMarker Parser::parseCastPrefix() {
@@ -285,6 +383,41 @@ CompletedMarker Parser::parsePostfix() {
           expr = index.complete(SyntaxKind::IndexExpr);
         }
       }
+    } else if (at(lex::TokenKind::Dot) && nth(1) != lex::TokenKind::Dot) {
+      // `t.0`, and `s.field` when `struct` lands: one node for a component of a
+      // value (`tuples.md`, decision 16). A `.` **followed by another `.`** is not
+      // this node: inside brackets, `a[1..2]` is the range the slice reads, and the
+      // index reader that owns it asks for the two dots by hand.
+      Marker field = expr.precede();
+      bump(); // `.`
+      if (at(lex::TokenKind::IntegerLiteral) || at(lex::TokenKind::Identifier)) {
+        bump();
+      } else if (at(lex::TokenKind::FloatLiteral) && text(0).find('.') != 0) {
+        // **A member chain that the scanner glued into one number.** `t.0.1` is two
+        // member reads, and the scanner sees `0.1` -- a fraction, because a `.`
+        // followed by a digit belongs to the number before it. The two readings are
+        // indistinguishable *as a token*, and this is the one place the language
+        // pays for spelling a member with a dot: the chain has to be separated by
+        // something the scanner can see. Named here with both fixes rather than left
+        // as "expected a member", which teaches nothing about the character to add.
+        error("`" + std::string(text(0)) +
+                  "` is one number, so this is not two member reads: write the second member "
+                  "apart from the first, as `t.0 .1` or `(t.0).1`",
+              ParseErrorCode::ExpectedName);
+        consumeAsError();
+      } else if (!bailedOut_) {
+        // A `.` with nothing to read: the member is the one token the node exists
+        // for, so it is named here rather than left to whatever expected the
+        // expression to end. A token that ends the expression instead of starting a
+        // member (`;`, `)` ...) is *not* consumed: the statement's own "expected `;`"
+        // is the true sentence for a dot written at the end of one.
+        error("expected a member after `.`: a position (`t.0`) or a field name",
+              ParseErrorCode::ExpectedName);
+        if (!atExpressionEnd()) {
+          consumeAsError();
+        }
+      }
+      expr = field.complete(SyntaxKind::FieldExpr);
     } else if (at(lex::TokenKind::PlusPlus) || at(lex::TokenKind::MinusMinus)) {
       Marker postfix = expr.precede();
       bump();
@@ -337,15 +470,33 @@ CompletedMarker Parser::parsePrimary() {
   }
   case lex::TokenKind::LParen: {
     // `(i32)x` and `(x) + 1` are one token apart and two different programs, and
-    // the difference is decided here, once, by `atCastStart`.
+    // the difference is decided here, once, by `atCastStart`. A `(T, U)` group is
+    // a *third* reading, and the one refusal it earns is named here rather than
+    // left to the cast path (`tuples.md`, decision 19).
     if (atCastStart()) {
-      return parseCastPrefix();
+      return atProductCastStart() ? parseProductCastRefusal() : parseCastPrefix();
     }
-    Marker paren = start();
+    // A group, a product, or nothing at all. The first expression is parsed either
+    // way and the `,` that follows it is what decides -- a comma is not an
+    // expression token in this grammar, so nothing is looked at twice and nothing
+    // is backtracked (`tuples.md`, decision 7).
+    if (nth(1) == lex::TokenKind::RParen) {
+      Marker empty = start();
+      bump(); // `(`
+      bump(); // `)`
+      error("`()` is not a value: a call with no arguments and an empty parameter list are both "
+            "written `()`, and a function that returns nothing says `void`",
+            ParseErrorCode::ExpectedExpression);
+      return empty.complete(SyntaxKind::TupleExpr);
+    }
+    Marker group = start();
     bump(); // `(`
     parseExpr();
+    if (at(lex::TokenKind::Comma)) {
+      return parseTupleLiteral(group);
+    }
     expect(lex::TokenKind::RParen);
-    return paren.complete(SyntaxKind::ParenExpr);
+    return group.complete(SyntaxKind::ParenExpr);
   }
   case lex::TokenKind::LBracket: {
     // `[` opens both literal forms, and the one thing that tells them apart is
@@ -360,6 +511,22 @@ CompletedMarker Parser::parsePrimary() {
   // cannot follow -- an element of an initializer (`parseElement`) and the value
   // of an annotated binding (`statement.cc`) -- and not at the general position,
   // where it would turn one missing condition into four messages.
+  case lex::TokenKind::Dot: {
+    // `.5`: a number whose token began with the point. The lexer stopped reading
+    // one when member access arrived -- a `.` after a value is `t.0` (`tuples.md`)
+    // -- so this is the sentence for the spelling that used to be a float, and it
+    // is here rather than in the scanner because it names the fix a reader of a
+    // *program* needs. The number is consumed, so one slip is one diagnostic.
+    Marker number = start();
+    bump(); // `.`
+    if (at(lex::TokenKind::IntegerLiteral)) {
+      bump();
+    }
+    error("a number begins with a digit: `.5` is written `0.5` -- a `.` after a value reads a "
+          "member of it (`t.0`)",
+          ParseErrorCode::LeadingPointNumber);
+    return number.complete(SyntaxKind::Error);
+  }
   default: {
     error("expected an expression", ParseErrorCode::ExpectedExpression);
     // An empty `Error` node keeps the tree total without consuming anything;

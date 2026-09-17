@@ -588,7 +588,13 @@ private:
     for (std::size_t i = kids.size(); i > 0; --i) {
       const AstId child = kids[i - 1];
       const Node& node = file_.at(child);
-      if (node.isToken() || node.kind == NodeKind::Name || node.kind == NodeKind::Type) {
+      // The names and the annotation are not part of the value: the annotation is
+      // a type, and the names -- one, or the whole pattern -- are what the
+      // statement *declares*, which the declaration step has already done. Walking
+      // them here would resolve them before they exist, so `let (a, b) = a;` would
+      // read the outer `a` and not report itself.
+      if (node.isToken() || node.kind == NodeKind::Name || node.kind == NodeKind::Type ||
+          node.kind == NodeKind::TuplePattern) {
         continue;
       }
       stack.push_back(Step{Step::Op::Visit, child, scope});
@@ -600,20 +606,44 @@ private:
     if (self.inError) {
       return;
     }
-    const AstId nameNode = file_.childOfKind(stmt, NodeKind::Name);
-    if (!nameNode.valid()) {
-      return;
-    }
-    const Node& name = file_.at(nameNode);
-    if (name.name == support::kInvalidSym) {
-      return; // the parser reported the missing name
-    }
     // What this statement declares, from the one table that says -- so a form
     // added to it is bound here without a second list to keep in sync. A
     // statement that declares nothing has nothing to insert.
     const std::optional<DefKind> kind = defKindOf(self.kind);
     if (!kind.has_value()) {
       return;
+    }
+    // The declaration is *read* before the name is looked for, because a pattern
+    // has no single `Name` child to find (`tuples.md`, decision 6).
+    const AstId nameNode = file_.childOfKind(stmt, NodeKind::Name);
+
+    // A *pattern* declares one binding per name, and they are declared together:
+    // the value they come from is one value, evaluated once, so `a` and `b` come
+    // into existence at the same point in the block (`tuples.md`, decision 6).
+    //
+    // `_` is the exception and it is the whole reason the spelling exists: it says
+    // "this member is not wanted", so it introduces nothing. Declaring it would
+    // make `_` a name a program can read, which is the one thing it is for saying
+    // it cannot be.
+    if (const AstId pattern = file_.childOfKind(stmt, NodeKind::TuplePattern); pattern.valid()) {
+      for (const AstId child : file_.childrenOf(pattern)) {
+        const Node& name = file_.at(child);
+        if (name.kind != NodeKind::Name || name.name == support::kInvalidSym) {
+          continue;
+        }
+        if (nameOf(name.name) == parse::kSkippedName) {
+          continue;
+        }
+        reportReservedName(name.origin, name.name);
+        (void)insertDef(scope, namespaceOf(*kind), name.name, self.origin, name.origin, name.unit,
+                        *kind, Linkage::None, self.inError || name.inError);
+      }
+      return;
+    }
+
+    const Node& name = file_.at(nameNode);
+    if (name.name == support::kInvalidSym) {
+      return; // the parser reported the missing name
     }
     reportReservedName(name.origin, name.name);
     (void)insertDef(scope, namespaceOf(*kind), name.name, self.origin, name.origin, name.unit,

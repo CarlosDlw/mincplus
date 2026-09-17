@@ -206,13 +206,21 @@ void Parser::parseLetStmt(bool isConst) {
 void Parser::parseBinding() {
   bump(); // `let` or `const`
 
-  Marker name = start();
-  if (at(lex::TokenKind::Identifier)) {
-    bump();
+  // Two spellings of the left-hand side, and the token after the word says
+  // which: a name is one binding, a `(` is a *pattern* of names
+  // (`tuples.md`, decision 6). Nothing below this point has to know which one it
+  // got -- the annotation and the initializer are read the same way for both.
+  if (at(lex::TokenKind::LParen)) {
+    parseBindingPattern();
   } else {
-    error("expected a variable name", ParseErrorCode::ExpectedName);
+    Marker name = start();
+    if (at(lex::TokenKind::Identifier)) {
+      bump();
+    } else {
+      error("expected a variable name", ParseErrorCode::ExpectedName);
+    }
+    name.complete(SyntaxKind::Name);
   }
-  name.complete(SyntaxKind::Name);
 
   if (at(lex::TokenKind::Colon)) {
     bump();
@@ -235,6 +243,57 @@ void Parser::parseBinding() {
   }
 }
 
+// `(a, b)`: the names a `let`/`const` introduces, in the order the value's
+// members arrive in. Each name is a `Name` node like any other, so every later
+// stage reads a pattern's names with the code it already had for one name.
+//
+// The commas stay in the tree and a trailing one is refused: `(a, b,)` would
+// otherwise be a pattern whose arity depends on a rule about commas, and the
+// arity is the one number this node is about. The count is therefore exactly the
+// number of `Name` children, which is also what a pattern of two *looks* like.
+void Parser::parseBindingPattern() {
+  Marker pattern = start();
+  bump(); // `(`
+
+  for (;;) {
+    Marker name = start();
+    if (at(lex::TokenKind::Identifier)) {
+      bump();
+      name.complete(SyntaxKind::Name);
+    } else {
+      // One sentence for the whole position, naming the two things that can
+      // stand there: a name, or `_` for "this member is not wanted".
+      error("a pattern lists the names this binding introduces: write a name, or `_` to skip "
+            "a member",
+            ParseErrorCode::ExpectedName);
+      // **Recovery: consume the position.** A group left half-read is a group the
+      // next construct re-reads as something else -- `(, b) = f()` would report the
+      // comma, the missing `)`, the missing initializer, and then the tokens of the
+      // initializer as statements. The run to the group's own `)` (or to whatever
+      // ends the pattern first) turns that into one message and a tree that still
+      // reconstructs, which is the whole reason the group is read as a unit.
+      while (!atEnd() && !bailedOut_ && !at(lex::TokenKind::Comma) && !at(lex::TokenKind::RParen) &&
+             !at(lex::TokenKind::Colon) && !at(lex::TokenKind::Equal) &&
+             !at(lex::TokenKind::Semicolon)) {
+        bump();
+      }
+      if (at(lex::TokenKind::Comma)) {
+        bump();
+        continue;
+      }
+      break;
+    }
+    if (at(lex::TokenKind::Comma)) {
+      bump();
+      continue;
+    }
+    break;
+  }
+
+  expect(lex::TokenKind::RParen);
+  pattern.complete(SyntaxKind::TuplePattern);
+}
+
 void Parser::parseReturnStmt() {
   Marker stmt = start();
   bump(); // `return`
@@ -250,6 +309,27 @@ void Parser::parseExprStmt() {
   parseExpr();
   expect(lex::TokenKind::Semicolon);
   stmt.complete(SyntaxKind::ExprStmt);
+}
+
+void Parser::consumeAsError() {
+  Marker junk = start();
+  bump();
+  junk.complete(SyntaxKind::Error);
+}
+
+bool Parser::atExpressionEnd() const {
+  switch (current()) {
+  case lex::TokenKind::Semicolon:
+  case lex::TokenKind::RParen:
+  case lex::TokenKind::RBracket:
+  case lex::TokenKind::RBrace:
+  case lex::TokenKind::Comma:
+  case lex::TokenKind::Colon:
+  case lex::TokenKind::EndOfFile:
+    return true;
+  default:
+    return false;
+  }
 }
 
 void Parser::recoverStatement() {

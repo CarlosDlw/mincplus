@@ -132,6 +132,12 @@ private:
   [[nodiscard]] sema::TypeId typeOf(ast::AstId id) const {
     return typed_.typeOf(id);
   }
+  // The member position of a `FieldExpr`, read from the token the source wrote:
+  // `t.0` is the member at the *constant* index this answers, and the checker
+  // refused every access whose position is not a written-out number inside the
+  // arity -- so a `nullopt` here is internal, like the other shape guards
+  // (`tuples.md`, decision 3).
+  [[nodiscard]] std::optional<unsigned> fieldIndex(ast::AstId expr) const;
   [[nodiscard]] const sema::ExprInfo& infoOf(ast::AstId id) const {
     return typed_.infoOf(id);
   }
@@ -436,6 +442,19 @@ private:
   // view of a temporary is the class of dangling this language does not hand out
   // (`slices.md` decisions 6 and 11).
   [[nodiscard]] Value lowerSlice(ast::AstId expr);
+  // `(a, b)`: a product in **value** form -- a constant when every member is
+  // one, an `insertvalue` chain from poison otherwise. There is no object form
+  // and no `alloca`: a product is a value (`tuples.md`, decision 7).
+  [[nodiscard]] Value lowerTupleExpr(ast::AstId expr);
+  // `let (a, b) = t;`: one evaluation of the value, one slot per bound name, and
+  // a member extracted into each (`tuples.md`, decision 6). `_` is skipped
+  // because `resolve` never made a binding for it.
+  void lowerDestructuring(ast::AstId stmt);
+  // `t.0` and, later, `s.field`: the one postfix member access. A member of a
+  // **place** is a place and a member of a **value** is an extract, and which
+  // one this is comes from the checker's record, not from re-asking the base
+  // (`tuples.md`, decision 9).
+  [[nodiscard]] Value lowerField(ast::AstId expr);
   // The two operands of a view resolved into a place and a length, or a refusal.
   // Split out because the four forms and the three bases would otherwise be
   // twelve arms of one function.

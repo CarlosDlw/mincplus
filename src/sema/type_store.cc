@@ -49,7 +49,7 @@ TypeStore::TypeStore(TargetInfo target, std::size_t maxTypes)
     type.isSigned = isSigned;
     type.bits = bits;
     const TypeId id{static_cast<std::uint32_t>(types_.size())};
-    index_.emplace(hashOf(type), id);
+    index_.emplace(hashOf(type, {}), id);
     types_.push_back(type);
   };
 
@@ -78,37 +78,54 @@ TypeStore::TypeStore(TargetInfo target, std::size_t maxTypes)
   add(TypeKind::Never, false, 0);
 }
 
-std::uint64_t TypeStore::hashOf(const Type& type) const {
+std::span<const TypeId> TypeStore::partsOf(const Type& type) const {
+  if (type.paramCount == 0) {
+    return {};
+  }
+  return std::span<const TypeId>(params_.data() + type.firstParam, type.paramCount);
+}
+
+std::uint64_t TypeStore::hashOf(const Type& type, std::span<const TypeId> parts) const {
   std::uint64_t hash = kFnvOffset;
   hash = mix(hash, static_cast<std::uint64_t>(type.kind));
   hash = mix(hash, type.isSigned ? 1U : 0U);
   hash = mix(hash, type.bits);
   hash = mix(hash, type.pointee.index);
   // The count is part of the identity, so it is part of the hash. A count left
-  // out here would put `[4]i32` and `[8]i32` in one bucket and `equal` would
-  // have to sort them out -- which is fine, but a store whose *hash* says two
-  // types are the same is a store one `equal` bug away from handing out the
-  // wrong `TypeId` (`arrays.md` decision 19).
+  // out here would put `[4]i32` and `[8]i32` in one bucket and the comparison
+  // would have to sort them out -- which is fine, but a store whose *hash* says
+  // two types are the same is a store one comparison bug away from handing out
+  // the wrong `TypeId` (`arrays.md` decision 19).
   hash = mix(hash, type.count);
   hash = mix(hash, type.returnType.index);
   hash = mix(hash, type.paramCount);
-  // The parameter list is part of the structure; without it every `fn f(a)` and
-  // `fn f(b)` would be one type, which is the bug that makes a call site
-  // type-check against the wrong signature.
-  for (std::uint32_t i = 0; i < type.paramCount; ++i) {
-    hash = mix(hash, params_[type.firstParam + i].index);
+  // `variadic` and `name` are part of what a type *is*, and they are mixed here
+  // even though a tuple leaves both at their defaults: one hash function for
+  // every kind means no kind can be hashed by a rule the others do not share --
+  // which is exactly how a `f(i32)` and a `f(i32, ...)` end up in two buckets for
+  // one call site (`sema/type.h`).
+  hash = mix(hash, type.variadic ? 1U : 0U);
+  hash = mix(hash, type.name);
+  // The member sequence is part of the structure; without it every `fn f(a)` and
+  // `fn f(b)` would be one type, and so would `(i32, bool)` and `(bool, i32)`.
+  for (const TypeId part : parts) {
+    hash = mix(hash, part.index);
   }
   return hash;
 }
 
-bool TypeStore::equal(const Type& a, const Type& b) const {
-  if (a.kind != b.kind || a.isSigned != b.isSigned || a.bits != b.bits || a.pointee != b.pointee ||
-      a.count != b.count || a.returnType != b.returnType || a.name != b.name ||
-      a.paramCount != b.paramCount) {
+bool TypeStore::equalFields(const Type& a, const Type& b) const {
+  return a.kind == b.kind && a.isSigned == b.isSigned && a.bits == b.bits &&
+         a.pointee == b.pointee && a.count == b.count && a.returnType == b.returnType &&
+         a.name == b.name && a.variadic == b.variadic && a.paramCount == b.paramCount;
+}
+
+bool TypeStore::equalParts(const Type& type, std::span<const TypeId> parts) const {
+  if (type.paramCount != parts.size()) {
     return false;
   }
-  for (std::uint32_t i = 0; i < a.paramCount; ++i) {
-    if (params_[a.firstParam + i] != params_[b.firstParam + i]) {
+  for (std::uint32_t i = 0; i < type.paramCount; ++i) {
+    if (params_[type.firstParam + i] != parts[i]) {
       return false;
     }
   }
@@ -116,10 +133,15 @@ bool TypeStore::equal(const Type& a, const Type& b) const {
 }
 
 TypeId TypeStore::intern(const Type& type) {
-  const std::uint64_t hash = hashOf(type);
+  return internSequence(type, partsOf(type));
+}
+
+TypeId TypeStore::internSequence(const Type& type, std::span<const TypeId> parts) {
+  const std::uint64_t hash = hashOf(type, parts);
   const auto range = index_.equal_range(hash);
   for (auto it = range.first; it != range.second; ++it) {
-    if (equal(types_[it->second.index], type)) {
+    const Type& candidate = types_[it->second.index];
+    if (equalFields(candidate, type) && equalParts(candidate, parts)) {
       return it->second;
     }
   }
@@ -128,7 +150,12 @@ TypeId TypeStore::intern(const Type& type) {
   if (types_.size() >= maxTypes_) {
     return kInvalidType;
   }
+  // The sequence is appended only now, and `type.firstParam` is the position it
+  // will have: a caller that repeated an existing type never reached this line, so
+  // a signature written twice does not grow the arena (`function`'s rule, and now
+  // the tuple's as well).
   const TypeId id{static_cast<std::uint32_t>(types_.size())};
+  params_.insert(params_.end(), parts.begin(), parts.end());
   types_.push_back(type);
   index_.emplace(hash, id);
   return id;
@@ -213,60 +240,109 @@ TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params, bo
   Type type;
   type.kind = TypeKind::Function;
   type.returnType = returnType;
+  // The position the parameters *would* take, and the one the comparison below
+  // reads for the candidates that are already in the arena. The append happens in
+  // `internSequence`, after the search -- so a repeated signature does not grow
+  // the arena, which is why this cannot be a plain `intern`.
   type.firstParam = static_cast<std::uint32_t>(params_.size());
   type.paramCount = static_cast<std::uint32_t>(params.size());
-  type.variadic = variadic;
-  // Look for an existing one *before* copying the parameters, so a repeated
-  // signature does not grow the parameter arena.
-  //
-  // `variadic` is in the hash and in the comparison below because it is part of
-  // what a function type *is*: interning `f(i32)` and `f(i32, ...)` to one id
+  // `variadic` is part of the fields the comparison asks about because it is part
+  // of what a function type *is*: interning `f(i32)` and `f(i32, ...)` to one id
   // would make the lowering emit one LLVM signature for two different calls.
-  const std::uint64_t hash = [&] {
-    std::uint64_t h = kFnvOffset;
-    h = mix(h, static_cast<std::uint64_t>(type.kind));
-    h = mix(h, type.returnType.index);
-    h = mix(h, type.paramCount);
-    h = mix(h, type.variadic ? 1u : 0u);
-    for (const TypeId param : params) {
-      h = mix(h, param.index);
-    }
-    return h;
-  }();
-  const auto range = index_.equal_range(hash);
-  for (auto it = range.first; it != range.second; ++it) {
-    const Type& candidate = types_[it->second.index];
-    if (candidate.kind != TypeKind::Function || candidate.returnType != returnType ||
-        candidate.paramCount != params.size() || candidate.variadic != variadic) {
-      continue;
-    }
-    bool same = true;
-    for (std::uint32_t i = 0; i < candidate.paramCount && same; ++i) {
-      same = params_[candidate.firstParam + i] == params[i];
-    }
-    if (same) {
-      return it->second;
-    }
-  }
-  if (types_.size() >= maxTypes_) {
+  type.variadic = variadic;
+  return internSequence(type, params);
+}
+
+TypeId TypeStore::tupleOf(std::span<const TypeId> members) {
+  // The three refusals, all before the intern, so an ill-formed product never
+  // enters the store: a type the rest of the pipeline can only misunderstand is
+  // worse than a refusal here, and the caller has the members' nodes to point a
+  // sentence at (`tuples.md`, decision 1).
+  if (members.size() < 2) {
     return kInvalidType;
   }
-  params_.insert(params_.end(), params.begin(), params.end());
-  const TypeId id{static_cast<std::uint32_t>(types_.size())};
-  types_.push_back(type);
-  index_.emplace(hash, id);
-  return id;
+  for (const TypeId member : members) {
+    if (!isObject(member)) {
+      return kInvalidType;
+    }
+  }
+  // The layout arithmetic, for the same reason the array does it: a product whose
+  // size does not fit `size_t` is refused where it is built, so `sizeOf` below is
+  // a number and not a question. It also means the size and every member offset
+  // are computed once per type and never overflow anywhere else.
+  if (!tupleSize(members).has_value()) {
+    return kInvalidType;
+  }
+  Type type;
+  type.kind = TypeKind::Tuple;
+  type.firstParam = static_cast<std::uint32_t>(params_.size());
+  type.paramCount = static_cast<std::uint32_t>(members.size());
+  return internSequence(type, members);
+}
+
+std::optional<std::size_t> TypeStore::tupleSize(std::span<const TypeId> members) const {
+  std::size_t align = 1;
+  std::size_t size = 0;
+  for (const TypeId member : members) {
+    const std::size_t memberAlign = alignOf(member);
+    const std::size_t memberSize = sizeOf(member);
+    if (memberAlign == 0 || memberSize == 0) {
+      return std::nullopt;
+    }
+    // The padding before this member: the size so far rounded up to this
+    // member's alignment.
+    if (size > std::numeric_limits<std::size_t>::max() - (memberAlign - 1U)) {
+      return std::nullopt;
+    }
+    size = ((size + memberAlign - 1U) / memberAlign) * memberAlign;
+    if (memberSize > std::numeric_limits<std::size_t>::max() - size) {
+      return std::nullopt;
+    }
+    size += memberSize;
+    align = std::max(align, memberAlign);
+  }
+  // The whole object, padded to its own alignment -- the C rule, measured
+  // (`tuples.md`, decision 4): `{char, int}` is eight bytes and `{int, char}` is
+  // eight, while `{char, char}` is two.
+  if (size > std::numeric_limits<std::size_t>::max() - (align - 1U)) {
+    return std::nullopt;
+  }
+  return ((size + align - 1U) / align) * align;
+}
+
+std::size_t TypeStore::memberOffset(TypeId id, std::uint32_t index) const {
+  if (!isTuple(id) || index >= get(id).paramCount) {
+    return 0;
+  }
+  const std::span<const TypeId> members = membersOf(id);
+  std::size_t size = 0;
+  for (std::uint32_t i = 0; i < members.size(); ++i) {
+    // A member has an object -- `tupleOf` refuses anything else -- so its alignment
+    // is at least one. The floor is what makes that a fact the arithmetic below can
+    // carry rather than a fact a reader (or an analysis) has to hold in mind: every
+    // tuple was laid out by `tupleSize` before it was interned, and that function
+    // refused any whose layout could not be computed.
+    const std::size_t memberAlign = std::max<std::size_t>(alignOf(members[i]), 1U);
+    if (i == index) {
+      return ((size + memberAlign - 1U) / memberAlign) * memberAlign;
+    }
+    size = ((size + memberAlign - 1U) / memberAlign) * memberAlign + sizeOf(members[i]);
+  }
+  return 0;
+}
+
+std::span<const TypeId> TypeStore::membersOf(TypeId id) const {
+  if (!isTuple(id)) {
+    return {};
+  }
+  return partsOf(get(id));
 }
 
 std::span<const TypeId> TypeStore::paramsOf(TypeId id) const {
-  if (!known(id)) {
+  if (!known(id) || get(id).kind != TypeKind::Function) {
     return {};
   }
-  const Type& type = get(id);
-  if (type.kind != TypeKind::Function) {
-    return {};
-  }
-  return std::span<const TypeId>(params_.data() + type.firstParam, type.paramCount);
+  return partsOf(get(id));
 }
 
 bool TypeStore::isVariadic(TypeId id) const {
@@ -325,12 +401,16 @@ bool TypeStore::isArray(TypeId id) const {
 bool TypeStore::isSlice(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Slice;
 }
+bool TypeStore::isTuple(TypeId id) const {
+  return known(id) && get(id).kind == TypeKind::Tuple;
+}
 bool TypeStore::isAggregate(TypeId id) const {
-  // Two kinds and not one, because `isArray` is asked wherever the *storage* is
+  // Three kinds and not one, because `isArray` is asked wherever the *storage* is
   // the subject (`sizeof` of the object, an element count, a copy) and a view is
   // not storage. What they share is that a load, a store or a copy moves them as
-  // one object (`slices.md`).
-  return isArray(id) || isSlice(id);
+  // one object (`slices.md`), and a product is storage with no single element
+  // type: `(i32, bool)` copies as one object and has no `[i]`.
+  return isArray(id) || isSlice(id) || isTuple(id);
 }
 bool TypeStore::isObject(TypeId id) const {
   if (!known(id)) {
@@ -341,6 +421,14 @@ bool TypeStore::isObject(TypeId id) const {
     // A view is an object in the only sense this predicate asks: it has a
     // representation, so it can be a binding, a parameter, an element of an
     // array, or the source of a copy. What it cannot be is `isArray`.
+    return true;
+  }
+  if (kind == TypeKind::Tuple) {
+    // Every member was checked when the type was built (`tupleOf`), so a tuple
+    // that is in the store has a size -- which is the whole of what this
+    // predicate asks. What it is *not* is scalar: it is more than one word, so
+    // every consumer that needs a register-sized value has to ask a different
+    // question.
     return true;
   }
   // `isScalar` minus the deferred literals: they are scalar-*shaped* and have no
@@ -429,6 +517,21 @@ std::string TypeStore::spelling(TypeId id) const {
     // view is what `slices.md` reserved and what a reader types back. There is no
     // length to print, which is the whole difference from the line above.
     return "[]" + spelling(type.pointee);
+  case TypeKind::Tuple: {
+    // `(i32, bool)`, in the order written: the canonical spelling is what a
+    // reader can type back, and the order is part of the type -- which is why the
+    // members are printed and not summarized as a count (`tuples.md`, decision 1).
+    std::string text = "(";
+    const std::span<const TypeId> members = membersOf(id);
+    for (std::size_t i = 0; i < members.size(); ++i) {
+      if (i != 0) {
+        text += ", ";
+      }
+      text += spelling(members[i]);
+    }
+    text += ")";
+    return text;
+  }
   case TypeKind::Function: {
     std::string text = "fn " + spelling(type.returnType) + "(";
     const std::span<const TypeId> params = paramsOf(id);
@@ -495,6 +598,11 @@ std::size_t TypeStore::sizeOf(TypeId id) const {
     // cannot overflow: the pointer width is 16, 32 or 64 bits, so the product is
     // at most 16 bytes.
     return static_cast<std::size_t>(target_.pointerBits / 8U) * 2U;
+  case TypeKind::Tuple:
+    // The one layout rule, asked of the same function the builder used to refuse
+    // a product that does not fit: a tuple that is *in* the store has a size, so
+    // the `value_or` is unreachable and says so rather than pretending.
+    return tupleSize(membersOf(id)).value_or(0);
   case TypeKind::Error:
   case TypeKind::Void:
   case TypeKind::Never:
@@ -545,6 +653,17 @@ std::size_t TypeStore::alignOf(TypeId id) const {
     // -- not like its element. `[]u8` is eight-byte aligned on a 64-bit target,
     // and a `struct` that holds one gets the padding a C compiler would give it.
     return target_.pointerBits / 8U;
+  case TypeKind::Tuple: {
+    // The largest member alignment, and never zero: every member is an object
+    // (`tupleOf`), and an object has an alignment. A product is aligned like its
+    // strictest member, which is what makes `(i8, i64)` a sixteen-byte object
+    // starting at an eight-byte boundary.
+    std::size_t align = 1;
+    for (const TypeId member : membersOf(id)) {
+      align = std::max(align, alignOf(member));
+    }
+    return align;
+  }
   default:
     return 0;
   }

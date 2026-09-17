@@ -86,6 +86,18 @@ enum class TypeKind : std::uint8_t {
   // `[]i32` are different types, and which of the two a reader has is answered
   // by the kind rather than inferred from a length.
   Slice,
+  // `(T, U, ...)`: a **product** of two or more types, in the order written
+  // (`tuples.md`). It is the one kind whose arity is not fixed, and it holds its
+  // members in the same sequence a function holds its parameters -- both are
+  // "the types this type is made of", so identity, interning, the arity bound
+  // and the dump shape are one mechanism and not two.
+  //
+  // Structural, with no name of its own: `(i32, bool)` is one id whatever
+  // spelled it, which is what makes it usable as a return type, a parameter and
+  // an element without a declaration anywhere. A product *with* names is a
+  // `struct`, and that is a nominal kind when it lands -- it must not be this
+  // one with a flag.
+  Tuple,
 };
 
 [[nodiscard]] std::string_view toString(TypeKind kind);
@@ -106,7 +118,10 @@ struct Type {
   // (`arrays.md` decisions 19 and 20).
   std::uint64_t count = 0;
   // Function: what it returns, and its parameters, which live in the store's
-  // parameter array at `[firstParam, firstParam + paramCount)`.
+  // member array at `[firstParam, firstParam + paramCount)`. Tuple: the members,
+  // in the same array and the same shape -- a tuple has no return type and a
+  // function has no member list, so one pair of fields covers both and the
+  // identity rule (`hashOf`/`equalParts`) never has to ask which kind it has.
   TypeId returnType;
   std::uint32_t firstParam = 0;
   std::uint32_t paramCount = 0;

@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -144,6 +145,12 @@ Value Lowering::lowerExpr(ast::AstId expr) {
     break;
   case ast::NodeKind::SliceExpr:
     result = lowerSlice(expr);
+    break;
+  case ast::NodeKind::TupleExpr:
+    result = lowerTupleExpr(expr);
+    break;
+  case ast::NodeKind::FieldExpr:
+    result = lowerField(expr);
     break;
   case ast::NodeKind::TypedInitializer:
   case ast::NodeKind::ArrayLiteral:
@@ -352,6 +359,42 @@ Place Lowering::lowerPlace(ast::AstId expr) {
       return {};
     }
     return Place{pointer.v, pointee};
+  }
+  case ast::NodeKind::FieldExpr: {
+    // `t.0` as a place: a `getelementptr` at a **constant** member index, which
+    // is the whole difference from an index -- the position is not a value and
+    // nothing is multiplied by a member size (`tuples.md`, decision 3). The first
+    // index steps over the struct (always 0, because the object is here) and the
+    // second selects the member, exactly as the array's two-index form does.
+    const std::vector<ast::AstId> operands = operandsOf(expr);
+    if (operands.empty()) {
+      fatal(spanOf(expr), IRDiagnosticCode::Internal, "a member access has no base");
+      return {};
+    }
+    const Place basePlace = lowerPlace(operands.front());
+    if (basePlace.addr == nullptr) {
+      return {};
+    }
+    const std::optional<unsigned> index = fieldIndex(expr);
+    if (!index.has_value()) {
+      return {};
+    }
+    llvm::Type* shape = storageType(basePlace.type);
+    if (shape == nullptr) {
+      return {};
+    }
+    // The two index types are not the same, and this is not a style choice: the
+    // first index walks the pointer (`indexType()`, the address width) and the
+    // second selects a **struct** member, which LLVM requires to be a constant
+    // `i32` -- `getelementptr %T, ptr %p, i64 0, i64 0` is rejected with "invalid
+    // getelementptr indices" (measured on LLVM 22; a struct's members are
+    // numbered, not addressed, so the width of an address has nothing to say
+    // about them).
+    llvm::Value* zero = llvm::ConstantInt::get(indexType(), 0);
+    llvm::Value* member = llvm::ConstantInt::get(llvm::Type::getInt32Ty(builder_.getContext()),
+                                                 static_cast<std::uint64_t>(*index));
+    llvm::Value* address = builder_.CreateGEP(shape, basePlace.addr, {zero, member}, "member");
+    return Place{address, types_.membersOf(basePlace.type)[*index]};
   }
   case ast::NodeKind::IndexExpr: {
     const std::vector<ast::AstId> operands = operandsOf(expr);
@@ -709,6 +752,128 @@ Value Lowering::lowerPostfix(ast::AstId expr) {
   storePlace(place, next, operand);
   // The *old* value: that is the whole difference between `x++` and `++x`.
   return old;
+}
+
+Value Lowering::lowerTupleExpr(ast::AstId expr) {
+  // `(a, b)`: a product value, built member by member -- the array's shape with
+  // one difference that is the whole of the type: the members have **different**
+  // types, so each is converted to its own storage type rather than to one
+  // element type.
+  const sema::TypeId type = typeOf(expr);
+  if (!types_.isTuple(type)) {
+    return {};
+  }
+  auto* shape = llvm::dyn_cast<llvm::StructType>(llvmType(type));
+  const std::span<const sema::TypeId> members = types_.membersOf(type);
+  if (shape == nullptr || shape->getNumElements() != members.size()) {
+    // Unreachable: the checker built the type this node has, and the mapper maps
+    // it to exactly this shape. A `return` and not a diagnostic, like the other
+    // internal-shape guards.
+    return {};
+  }
+  const std::vector<ast::AstId> elements = operandsOf(expr);
+  if (elements.size() != members.size()) {
+    return {};
+  }
+
+  std::vector<llvm::Value*> pieces;
+  pieces.reserve(members.size());
+  for (std::size_t i = 0; i < members.size(); ++i) {
+    const Value value = lowerOperand(expr, elements[i]);
+    if (value.v == nullptr) {
+      return {};
+    }
+    // The same rule the array's element gets, and for the same reason: the
+    // aggregate's member is storage-shaped, so an `i1` from a comparison is a
+    // byte here before either path below can see it -- a `ConstantStruct` whose
+    // member type disagrees with the struct's is a constant `llvm-as` refuses.
+    const Value stored = toStorage(Value{value.v, members[i]});
+    if (stored.v == nullptr) {
+      return {};
+    }
+    pieces.push_back(stored.v);
+  }
+
+  bool allConstant = true;
+  for (llvm::Value* piece : pieces) {
+    if (!llvm::isa<llvm::Constant>(piece)) {
+      allConstant = false;
+      break;
+    }
+  }
+  if (allConstant) {
+    std::vector<llvm::Constant*> constants;
+    constants.reserve(pieces.size());
+    for (llvm::Value* piece : pieces) {
+      constants.push_back(llvm::cast<llvm::Constant>(piece));
+    }
+    return Value{llvm::ConstantStruct::get(shape, constants), type};
+  }
+
+  // Not every member is known at compile time: build the aggregate in *value*
+  // form, from a poison whole. The alternative -- an alloca plus a load -- would
+  // materialise storage that the consumer is about to load anyway and would give
+  // a product two shapes (a value and an object) where it has one.
+  llvm::Value* built = llvm::PoisonValue::get(shape);
+  for (std::size_t i = 0; i < pieces.size(); ++i) {
+    built = builder_.CreateInsertValue(built, pieces[i], static_cast<unsigned>(i), "product");
+  }
+  return Value{built, type};
+}
+
+std::optional<unsigned> Lowering::fieldIndex(ast::AstId expr) const {
+  // The position is a *token* in the tree, not a number in the type: the source
+  // wrote `.0`, and the spelling of that token is the whole answer. It is the
+  // same reading `types.cc` does for an array length, and it is the only place
+  // the IR parses anything -- `sema` already refused a position that is not a
+  // written-out number inside the arity, so this cannot disagree with the type
+  // except through a defect here.
+  for (const ast::AstId child : file_.childrenOf(expr)) {
+    const ast::Node& node = file_.at(child);
+    if (!node.isToken() || tagOf(node.kind) != kTokIntegerLiteral) {
+      continue;
+    }
+    const support::IntegerLiteral position = support::parseIntegerLiteral(
+        file_.spellingOf(child), support::IntegerBaseRule::DecimalLeadingZero);
+    if (!position.ok || position.value.bits > std::numeric_limits<unsigned>::max()) {
+      return std::nullopt;
+    }
+    return static_cast<unsigned>(position.value.bits);
+  }
+  return std::nullopt;
+}
+
+Value Lowering::lowerField(ast::AstId expr) {
+  // `t.0`: a member of a **place** is a place (it is read through its address),
+  // and a member of a **value** is an extract (the product exists in registers
+  // and nothing has an address). Which one this is was decided by the checker --
+  // it marked the node a place or not -- and this reads that answer rather than
+  // asking the base again (`tuples.md`, decision 9).
+  const std::vector<ast::AstId> operands = operandsOf(expr);
+  if (operands.empty()) {
+    return {};
+  }
+  const ast::AstId base = operands.front();
+  if (infoOf(expr).isLvalue) {
+    const Place place = lowerPlace(expr);
+    if (place.addr == nullptr) {
+      return {};
+    }
+    return loadPlace(place, expr);
+  }
+  const Value value = lowerExpr(base);
+  if (value.v == nullptr) {
+    return {};
+  }
+  const std::optional<unsigned> index = fieldIndex(expr);
+  if (!index.has_value()) {
+    return {};
+  }
+  llvm::Value* member = builder_.CreateExtractValue(value.v, {*index}, "member");
+  // The member comes out of the aggregate in its **storage** shape (`i8` for a
+  // `bool`), and the expression's type is what the checker gave it, so the value
+  // is normalised back the same way an element of an array is on a load.
+  return fromStorage(Value{member, typeOf(expr)});
 }
 
 Value Lowering::lowerArrayInitializer(ast::AstId expr) {

@@ -93,6 +93,20 @@ enum class ParseErrorCode : std::uint8_t {
   // "expected an expression" at a token that starts an expression everywhere
   // else, which teaches nothing about the characters to change.
   BraceWithoutType,
+  // `(T, U` with the closing `)` missing -- the product's peer of
+  // `ExpectedArrayCountClose`, and the sentence a reader who left a group open
+  // needs: it names the character to type and the group it closes.
+  ExpectedTypeGroupClose,
+  // A number written without its leading digit: `.5`, and the same in an exponent
+  // position. **A decimal literal begins with a digit** (`tuples.md`), because a
+  // `.` after a value reads a member of it (`t.0`) and the two cannot both be
+  // true of the same character. The sentence is the whole fix: `0.5`.
+  LeadingPointNumber,
+  // A `(T, U)` group followed straight by an expression: `(i32, bool)x`, which is
+  // a cast to a *product* -- two parenthesised forms that look alike and mean
+  // different things. Refused by name rather than left to the next token's
+  // "expected `;`", which teaches nothing about what to write instead.
+  CastToProduct,
   // A literal written *against* an identifier: `10z`, `1.5u8x`, `'a'u8`.
   //
   // The scanner claims a trailing run only when the run is a suffix the language

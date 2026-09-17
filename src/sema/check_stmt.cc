@@ -166,6 +166,20 @@ void Checker::reportLimit(ast::AstId at) {
 
 // --- tree access -------------------------------------------------------------
 
+// The noun an aggregate is called by in a boundary sentence. One function, so the
+// two `extern` messages cannot describe one kind two ways -- and so a kind added
+// to `isAggregate` is described here rather than falling through to "an array",
+// which is what a product used to be called (`tuples.md`, decision 12).
+[[nodiscard]] std::string_view aggregateNoun(const TypeStore& types, TypeId type) {
+  if (types.isSlice(type)) {
+    return "a slice";
+  }
+  if (types.isTuple(type)) {
+    return "a product";
+  }
+  return "an array";
+}
+
 std::vector<ast::AstId> Checker::operandsOf(ast::AstId id) const {
   std::vector<ast::AstId> out;
   if (!id.valid()) {
@@ -299,8 +313,25 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
   if (!typeNode.valid()) {
     return parts;
   }
-  const std::span<const ast::AstId> children = file_.childrenOf(typeNode);
-  for (std::size_t i = 0; i < children.size(); ++i) {
+  std::size_t i = 0;
+  typePartsInto(file_.childrenOf(typeNode), i, /*depth=*/0, parts);
+  return parts;
+}
+
+// One *run* of a type position, starting at `i` and stopping at a `,`, a `)` or
+// the end of the children. A tuple's members are runs, which is the whole of why
+// this is a function: `([3]i32, *(i32, bool))` is a group whose second member is
+// a group, and each level reads with the same rules as the top one -- an element
+// count is folded, a `*` is a part, a name is a word.
+//
+// `depth` is the parser's own nesting bound applied to the *parts*: a type run is
+// one syntax node, so a deeply nested product does not deepen the tree the
+// parser's `DepthGuard` measures, and the bound has to be enforced where the
+// nesting is created (`tuples.md`, decision 15). A group that goes past it is
+// marked and refused by the reader, which is a sentence and not a stack overflow.
+void Checker::typePartsInto(std::span<const ast::AstId> children, std::size_t& i,
+                            std::uint32_t depth, std::vector<TypePart>& parts) const {
+  for (; i < children.size();) {
     const ast::AstId child = children[i];
     // A word first, and before the token test below: an `Identifier` *is* a token
     // (leaves and interior nodes share one tag space), so asking "is it a token"
@@ -309,6 +340,7 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
       TypePart word;
       word.word = file_.spellingOf(child);
       parts.push_back(word);
+      ++i;
       continue;
     }
     // The punctuators a type position can hold: `*`, `!` and one `[N]` group.
@@ -316,9 +348,17 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
     // and the grammar accepted nothing else here either -- so it is skipped
     // rather than guessed at.
     if (!file_.at(child).isToken()) {
+      ++i;
       continue;
     }
     const Tag tag = tagOf(kindOf(child));
+    // The end of this run, which only a member of a product can reach: a `,`
+    // separates members and a `)` closes the group. At the top level neither can
+    // appear, and stopping on one anyway is what makes this function total over
+    // the tree it was handed rather than over the tree it expects.
+    if (tag == kTokComma || tag == kTokRParen) {
+      return;
+    }
     if (tag == kTokStar || tag == kTokBang) {
       TypePart punctuation;
       // Exactly one of the two, which is what `readType` reads them by: a `*` is
@@ -326,6 +366,43 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
       punctuation.isStar = tag == kTokStar;
       punctuation.isBang = tag == kTokBang;
       parts.push_back(punctuation);
+      ++i;
+      continue;
+    }
+    if (tag == kTokLParen) {
+      // `(T, U)`: a product, and a *base* of the run rather than a prefix over
+      // it, which is exactly how `readType` reads the part this builds.
+      TypePart tuple;
+      tuple.isTuple = true;
+      ++i; // `(`
+      if (depth >= support::kMaxNestingDepth) {
+        // The bound, marked on the group whose members were not read. The reader
+        // turns this into one sentence; nothing recurses further, so a file that
+        // nests a thousand products deep costs one diagnostic and not a stack.
+        tuple.tooDeep = true;
+        parts.push_back(std::move(tuple));
+        return;
+      }
+      while (i < children.size() && tagOf(kindOf(children[i])) != kTokRParen) {
+        std::vector<TypePart> member;
+        typePartsInto(children, i, depth + 1, member);
+        // A member the reader cannot make sense of is still a member: the group
+        // is what the source wrote, and the sentences come from the reader over
+        // this structure rather than from a second scan here.
+        tuple.members.push_back(std::move(member));
+        if (i < children.size() && tagOf(kindOf(children[i])) == kTokComma) {
+          ++i;
+          continue;
+        }
+        break;
+      }
+      // Closed by what is *found*, like the `[N]` group above: a missing `)` is
+      // the parser's finding, and the group this loop read is the group the tree
+      // holds.
+      if (i < children.size() && tagOf(kindOf(children[i])) == kTokRParen) {
+        ++i;
+      }
+      parts.push_back(std::move(tuple));
       continue;
     }
     if (tag == kTokLBracket) {
@@ -336,17 +413,22 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
       // the source wrote it (`arrays.md` decision 19).
       TypePart array;
       array.isArray = true;
-      if (i + 1 < children.size() && kindOf(children[i + 1]) == kIdentifierNode &&
-          file_.spellingOf(children[i + 1]) == parse::kInferredCount) {
+      // `cursor` is the token after the `[`, and it walks to just past the `]`:
+      // one place advances the reader's position, so a group with a count and a
+      // group without one cannot disagree about where they ended.
+      std::size_t cursor = i + 1;
+      if (cursor < children.size() && kindOf(children[cursor]) == kIdentifierNode &&
+          file_.spellingOf(children[cursor]) == parse::kInferredCount) {
         // `[_]`: the count is the initializer's, so nothing is folded here and
         // `hasCount` stays false -- which is what makes `[_]` a *different part*
         // from `[]` and not the same one with a flag missing.
         array.countInferred = true;
-        ++i;
-      } else if (i + 1 < children.size() && tagOf(kindOf(children[i + 1])) == kTokIntegerLiteral) {
+        ++cursor;
+      } else if (cursor < children.size() &&
+                 tagOf(kindOf(children[cursor])) == kTokIntegerLiteral) {
         array.hasCount = true;
         const support::IntegerLiteral count = support::parseIntegerLiteral(
-            file_.spellingOf(children[i + 1]), support::IntegerBaseRule::DecimalLeadingZero);
+            file_.spellingOf(children[cursor]), support::IntegerBaseRule::DecimalLeadingZero);
         // `bits` rather than a cast of the value: the count is a `uint64_t` and
         // the reader's negative case is its own error, which the same reader
         // reports here as "does not fit".
@@ -355,18 +437,23 @@ std::vector<TypePart> Checker::typeParts(ast::AstId typeNode) const {
         } else {
           array.countOverflow = true;
         }
-        ++i;
+        ++cursor;
       }
       // A `]` that is not there is the parser's finding, which is why the group
       // is closed by what is found rather than by what is expected: this loop
       // reads the tree it was given, not the tree that should have been built.
-      if (i + 1 < children.size() && tagOf(kindOf(children[i + 1])) == kTokRBracket) {
-        ++i;
+      if (cursor < children.size() && tagOf(kindOf(children[cursor])) == kTokRBracket) {
+        ++cursor;
       }
+      i = cursor;
       parts.push_back(array);
+      continue;
     }
+    // Anything else the builder left inside the type node is not part of a type,
+    // and the grammar accepted nothing else here either -- so it is skipped
+    // rather than guessed at.
+    ++i;
   }
-  return parts;
 }
 
 std::string Checker::suggestTypeName(std::string_view word) const {
@@ -453,8 +540,11 @@ TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
   // at). This is the fact the debug info needs to name a variable's type the way
   // the source did, and the fact an editor's hover needs; recording it where it is
   // decided is what keeps either of them from re-deriving it (`type_alias.md`).
+  // A product is excluded for the same reason a `*` is: there is no single name
+  // on the position to point at, and the members' own names were recorded where
+  // *their* runs were read (`tuples.md`, `type_alias.md`).
   if (parts.size() == 1 && !parts.front().isStar && !parts.front().isArray &&
-      !parts.front().isBang) {
+      !parts.front().isBang && !parts.front().isTuple) {
     // The *row that answered*, not a second lookup by spelling: the table is a
     // stack, so a block's name and a file's name of the same spelling are two
     // rows, and the one that decided this position's type is the one this points
@@ -786,7 +876,7 @@ void Checker::runSignatures() {
         error(typeNode.valid() ? typeNode : decl, SemaErrorCode::ExternAggregate,
               "`extern` says this function is defined somewhere this compiler is not looking, "
               "and " +
-                  std::string(types_.isSlice(returnType) ? "a slice" : "an array") + " `" +
+                  std::string(aggregateNoun(types_, returnType)) + " `" +
                   types_.spelling(returnType) +
                   "` returns here as a shape this compiler "
                   "chose: " +
@@ -803,7 +893,8 @@ void Checker::runSignatures() {
         std::string message =
             "`extern` says this function is defined somewhere this compiler is not looking, "
             "and ";
-        message += types_.isSlice(declared) ? "a slice `" : "an array `";
+        message += aggregateNoun(types_, declared);
+        message += " `";
         message += types_.spelling(declared);
         message += types_.isSlice(declared)
                        ? "` is passed here as a descriptor whose layout this compiler chose: "
@@ -1025,19 +1116,158 @@ bool Checker::diverges(ast::AstId expr) const {
 }
 
 ast::AstId Checker::initializerOf(ast::AstId stmt) const {
-  // A `let`/`const`'s operands are its name, its annotation and its value, in
-  // source order, so "neither of the first two" is the value. One reader for the
-  // two places that need it -- the declaration's own check and the flow rule
-  // above -- so they cannot come to different answers about the same statement.
-  const ast::AstId nameNode = childOf(stmt, ast::NodeKind::Name);
+  // The file's own reader, and not a second walk here: the same question is asked
+  // by the validator, the flow pass, this stage and the lowering, and a shape read
+  // four times is a shape that disagrees with itself once a form is added.
+  return file_.initializerOf(stmt);
+}
+
+// `let (a, b) = t;`: **real bindings, each a copy** of its member (`tuples.md`,
+// decision 6). The value is taken apart after it is evaluated -- one expression,
+// one evaluation, one member per name -- and the two numbers a reader has to get
+// right (how many names, how many members) are compared here, where both are
+// known, rather than discovered by the lowering.
+void Checker::checkDestructuring(ast::AstId stmt, ast::AstId pattern, bool isConst) {
+  const std::vector<ast::AstId> names = file_.bindingNamesOf(stmt);
+  const std::size_t arity = names.size();
   const ast::AstId typeNode = childOf(stmt, ast::NodeKind::Type);
-  ast::AstId init;
-  for (const ast::AstId operand : operandsOf(stmt)) {
-    if (operand != nameNode && operand != typeNode) {
-      init = operand;
+  const ast::AstId init = file_.initializerOf(stmt);
+
+  // The members the names take their types from: the annotation's when one was
+  // written, the value's otherwise. `kTypeError` is what a name keeps when its
+  // type could not be established, which is the same poison a failed binding gets.
+  std::vector<TypeId> bound(arity, kTypeError);
+  TypeId declared = kInvalidType;
+  // Read once, where the value is checked: an annotation that was already refused
+  // must not be used as the thing the value is checked *against*.
+  bool blocked = false;
+
+  if (typeNode.valid()) {
+    declared = resolveTypeNode(typeNode);
+    if (types_.isError(declared)) {
+      blocked = true; // the sentence was the type reader's
+    } else if (!types_.isTuple(declared)) {
+      // A container the language can *iterate* is not the same thing as a product
+      // it can take apart, and this is the boundary: `[]i32` and `[3]i32` have one
+      // element type and a runtime length, which is a loop's business.
+      error(typeNode, SemaErrorCode::DestructuringNotProduct,
+            "this binds " + std::to_string(arity) +
+                " names, so the annotation has to be a "
+                "product of " +
+                std::to_string(arity) + ": `" + types_.spelling(declared) +
+                "` cannot be taken apart");
+      blocked = true;
+    } else {
+      const std::span<const TypeId> members = types_.membersOf(declared);
+      if (members.size() != arity) {
+        error(pattern, SemaErrorCode::DestructuringArity,
+              "this pattern has " + std::to_string(arity) + " names, and `" +
+                  types_.spelling(declared) + "` has " + std::to_string(members.size()) +
+                  " members");
+        blocked = true;
+      } else {
+        for (std::size_t i = 0; i < arity; ++i) {
+          bound[i] = members[i];
+        }
+      }
     }
   }
-  return init;
+
+  TypeId initType = kInvalidType;
+  if (!blocked && init.valid()) {
+    if (declared.valid()) {
+      // The annotation is what the value is *against*, so each member is typed
+      // against its own position -- `let (x, y): (f64, f64) = (1, 2);` is two
+      // `f64`s and not two `i32`s converted afterwards (`tuples.md`, decision 8).
+      initType = checkOperand(stmt, 0, init, declared);
+      if (!types_.isError(initType)) {
+        checkAssignable(initType, declared, init, SemaErrorCode::InvalidAssignment,
+                        " in this destructuring", typeNode);
+      }
+    } else {
+      // `checkOperand` and not `checkExpr`: a deferred literal with nothing to
+      // decide it becomes its class's default here, exactly as `let x = 1;` does --
+      // `(1, 2)` is a `(i32, i32)` and its members are decided *inside* the literal,
+      // while a bare `5` on the right of a pattern is decided by this line. Without
+      // it the deferred type would leak to the arity check below and the sentence
+      // would name `<integer literal>`.
+      //
+      // None of the refusals below sets `blocked`, because nothing reads it again:
+      // `bound` starts as the poison and is written only where a member's type was
+      // established, so a refusal *is* the absence of a write. A flag that is set
+      // and never read looks like a rule that decides something.
+      initType = checkOperand(stmt, 0, init, kInvalidType);
+      if (types_.isVoid(initType)) {
+        error(init, SemaErrorCode::TypeNotValue,
+              "this expression is `void`, so it is not a value an object can have");
+      } else if (types_.isNever(initType)) {
+        error(init, SemaErrorCode::TypeNotValue,
+              "this expression never produces a value, so there is nothing to bind; "
+              "write the type the value would have had, as in `let (a, b): (i32, bool) = ...`");
+      } else if (!types_.isError(initType) && !types_.isTuple(initType)) {
+        // The two ways to write this that the reader probably meant, and neither is
+        // guessing: bind the value whole, or take a product apart.
+        error(init, SemaErrorCode::DestructuringNotProduct,
+              "`" + types_.spelling(initType) +
+                  "` has no members to bind: a pattern takes a "
+                  "**product** apart. Write `let x: " +
+                  types_.spelling(initType) + " = ...` to bind it whole");
+      } else if (types_.isTuple(initType)) {
+        const std::span<const TypeId> members = types_.membersOf(initType);
+        if (members.size() != arity) {
+          error(pattern, SemaErrorCode::DestructuringArity,
+                "this pattern has " + std::to_string(arity) + " names, and `" +
+                    types_.spelling(initType) + "` has " + std::to_string(members.size()) +
+                    " members");
+        } else {
+          for (std::size_t i = 0; i < arity; ++i) {
+            bound[i] = members[i];
+          }
+        }
+      }
+    }
+  }
+
+  // Each name gets its member's type, published where every other answer about a
+  // declaration lives (`defTypes_`), so no later stage has to walk the pattern to
+  // ask what `a` is.
+  //
+  // `_` is the position nobody wanted: no definition was made for it (`resolve`),
+  // so there is nothing to publish -- and the member's value is simply not taken.
+  std::vector<ast::AstId> initMembers;
+  if (isConst && init.valid() && kindOf(init) == ast::NodeKind::TupleExpr) {
+    // A `const` pattern whose value is a literal, all of whose members are
+    // literals, publishes the same compile-time values a single `const` does -- so
+    // `const (W, H) = (16, 9);` can size a `[W]i32`. Only the *literal* case: a
+    // member of a value that was computed has no value this stage can name, which
+    // is exactly what a constant has to have.
+    for (const ast::AstId member : operandsOf(init)) {
+      initMembers.push_back(member);
+    }
+  }
+
+  for (std::size_t i = 0; i < arity; ++i) {
+    const ast::AstId name = names[i];
+    setType(name, bound[i]);
+    const std::optional<resolve::DefId> def = defAtName(name);
+    if (!def.has_value() || def->index >= defTypes_.size()) {
+      continue;
+    }
+    defTypes_[def->index] = bound[i];
+    defIsConst_[def->index] = isConst;
+    if (isConst && i < initMembers.size()) {
+      const ExprInfo& facts = out_.typed.infoOf(initMembers[i]);
+      if (facts.isConstant && facts.hasIntValue) {
+        defConstValues_[def->index] = facts.value;
+        defHasConstValue_[def->index] = true;
+      }
+    }
+  }
+
+  // The statement's own type is the value it took apart, which is the only honest
+  // answer for a node that binds several: every *binding* has its own type, and
+  // this is what a consumer sees when it asks about the statement.
+  setType(stmt, initType.valid() ? initType : kTypeError);
 }
 
 ast::AstId Checker::reachableReturn(ast::AstId node) const {
@@ -1314,6 +1544,14 @@ void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {
   case ast::NodeKind::LetStmt:
   case ast::NodeKind::ConstStmt: {
     const bool isConst = kindOf(stmt) == ast::NodeKind::ConstStmt;
+    // The pattern, when the left-hand side was a `(...)`: the same statement, the
+    // same annotation and the same initializer, with several bindings instead of
+    // one. Split out because *nothing* below is shared -- a single binding has one
+    // type to be, and a pattern has one per name (`tuples.md`, decision 6).
+    if (const ast::AstId pattern = childOf(stmt, ast::NodeKind::TuplePattern); pattern.valid()) {
+      checkDestructuring(stmt, pattern, isConst);
+      return;
+    }
     const ast::AstId nameNode = childOf(stmt, ast::NodeKind::Name);
     const ast::AstId typeNode = childOf(stmt, ast::NodeKind::Type);
 

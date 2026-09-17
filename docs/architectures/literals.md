@@ -121,6 +121,32 @@ what the other means.
 | **7** | **A float may be written without an integer part**: `0x.8p3`, and `.5` in decimal | C parity for the hex case, and the case that made the rule above necessary: with no digits before the point the scanner has to accept `.` as the start of the fraction. `0x.8` is the same shape as `.5`, one radix over. The two shapes also share the *rest* of the grammar — one `scanFloatTail` reads the exponent and the suffix for every float spelling — because the first version of this scanner returned as soon as the fraction was read, which made `.5e3` a refusal while `1.5e3` was the same number written in an accepted shape |
 | **8** | **`5.` is not a float.** `5.` lexes as `5` and `.` | A trailing `.` is the one spelling whose meaning would change when the language grows member access: `5.foo` and `5.` are one character apart, and a lexer that guessed would decide, once, for every future `struct`. Rust refuses it for the same reason; `5.0` costs one character and says what it means |
 | **9** | **The suffix table is unchanged**, and a separator may not touch it (`10_u8`, `1.5_f32` are refusals) | The suffix is the *type* of the literal and the digits are its *value*; a separator that reaches into the suffix is grouping the wrong thing. `casts.md` owns the table |
+
+### The premise of 6 and 7 expires with member access
+
+Decisions 6 and 7 rest on one sentence — *"a `.` followed by a digit cannot be
+anything else in this language: there is no member whose name is a number"* — and
+decision 8 already spent the *trailing* point for exactly the reason that
+sentence gives. Tuples retire the sentence for the *leading* point, because
+tuples have members whose names are numbers: measured today,
+`return t.0;` lexes as `Identifier t` then `FloatLiteral .0`, so the access the
+market spells with a dot **cannot be written at all** and no later stage can
+repair it (`docs/architectures/tuples.md` records the measurement and the three
+answers).
+
+The answer taken there is the one that gives each character a single meaning: a
+**decimal literal begins with a digit**, so `.5` becomes a refusal whose sentence
+is one character long to obey (`0.5`), and the dot always means "a member of the
+value to its left". `0x.8p3` is untouched — that token begins with `0`, and only
+a token that begins with `.` is affected, so the hex half of decision 7 and its
+C-parity reason survive intact.
+
+**Landed.** The decimal half of decision 7 and the spellings table above changed
+with the tuple record's first step: `.5` is scanned as `.` `5` and refused by the
+parser (`parse-leading-point-number`) with the one-character fix, `0x.8p3` is
+untouched, and `examples/005_literals.mx` writes `0.5`. This note stays as the
+record of *why* the character moved, and the rule that came with it: a decimal
+literal begins with a digit, in every position, everywhere.
 | **10** | **A 128-bit literal is read in the lowering, and the reader there strips the suffix and the separators explicitly** | `sema` deliberately keeps no value for a literal wider than its 64-bit core, so `src/ir` reads the digits. It was passing the whole spelling to `llvm::APInt` and relying on that reader to stop at the first non-digit: `…455u128` worked *by accident*, and separators would have made it stop at the first `_` — one bug and one coincidence, both removed by passing digits |
 
 ### What a number may be, in one table

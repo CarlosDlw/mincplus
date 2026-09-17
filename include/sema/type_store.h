@@ -94,6 +94,33 @@ public:
   // count to check and no product that could overflow -- which is exactly why the
   // *view* needs no arithmetic and the array does.
   [[nodiscard]] TypeId sliceOf(TypeId element);
+  // `(T, U, ...)`: a **product** of two or more types, in the order written
+  // (`tuples.md`).
+  //
+  // Three refusals, all asked *before* the intern, and each is the rule the
+  // caller's sentence is about:
+  //
+  //  - **arity < 2** (`kInvalidType`): a product of one member *is* its member,
+  //    so admitting it would hand two ids to one type -- which is the rule this
+  //    whole store is built on. A product of zero is not a type at all: `()` is
+  //    an empty parameter list, and "no value" is `void`.
+  //  - **a member that is not an object** (`isObject`): a member is stored, so a
+  //    member has to have a size. Same rule as an array element, for the same
+  //    reason.
+  //  - **a product whose size does not fit `size_t`**: the bound the array has,
+  //    checked at the same place, so no later stage meets a type whose size is
+  //    not a number.
+  //
+  // Interned: `(i32, bool)` is one id whatever spelled it, and the *order* is
+  // part of the identity -- `(i32, bool)` and `(bool, i32)` are two types, which
+  // is why the members are a sequence and not a set.
+  [[nodiscard]] TypeId tupleOf(std::span<const TypeId> members);
+  // The size of a product *before* it is built, so a caller can say *why* it is
+  // refusing -- the peer of `arraySize`, for the same reason: a sentence needs to
+  // name the number it is about, and the store is the one place that knows the
+  // layout rule. `nullopt` when a member has no object representation or when the
+  // padded total does not fit `std::size_t`.
+  [[nodiscard]] std::optional<std::size_t> tupleSize(std::span<const TypeId> members) const;
   // The parameters are copied into the store; the caller's span need not
   // outlive the call.
   // `variadic` is required rather than defaulted: every caller is a signature,
@@ -115,7 +142,14 @@ public:
   [[nodiscard]] const Type& get(TypeId id) const {
     return types_[id.index];
   }
+  // A function's parameters, or `{}` for everything else -- including a tuple,
+  // whose members are asked for by `membersOf`. The two are separate accessors on
+  // purpose: "what may I call this with" and "what is this made of" are different
+  // questions, and an accessor that answered both would let one be passed where
+  // the other is meant.
   [[nodiscard]] std::span<const TypeId> paramsOf(TypeId id) const;
+  // A tuple's members, in the order written, or `{}` for everything else.
+  [[nodiscard]] std::span<const TypeId> membersOf(TypeId id) const;
   // True for a function type whose parameter list ends in `...`. False for
   // everything that is not a function, so a caller never has to ask the kind
   // first -- the question "may this call pass more arguments" has one answer.
@@ -157,6 +191,10 @@ public:
   // elements. The distinction from `isArray` is the one every consumer of a view
   // asks about: an array is the storage, a slice names storage.
   [[nodiscard]] bool isSlice(TypeId id) const;
+  // `(T, U, ...)`: a product. Not a view and not storage of one element type:
+  // its members may have different types, so there is no *element* type for an
+  // index to produce (`membersOf` is the way in).
+  [[nodiscard]] bool isTuple(TypeId id) const;
   // An aggregate: `[N]T` and `[]T` today, a `struct` when that lands. The types a
   // load, a store or a copy moves as one *object* rather than as one value, which
   // is the distinction the lowering needs and the reason this is not `isScalar`.
@@ -206,17 +244,43 @@ public:
   // silently believe it.
   [[nodiscard]] std::size_t sizeOf(TypeId id) const;
   [[nodiscard]] std::size_t alignOf(TypeId id) const;
+  // The byte offset of a tuple's member `index`, by the one layout rule the type
+  // has: members in the order written, each at its own alignment, the whole
+  // object padded to the largest member's (`tuples.md`, decision 4). 0 for
+  // anything that is not a tuple, or for an index past the end -- the callers
+  // that care (`sizeOf`, the debug record) walk the members they were given.
+  //
+  // It lives here and not in `ir` because it is a *property of the type*, and the
+  // lowering must not be the second place that knows how a product is laid out.
+  [[nodiscard]] std::size_t memberOffset(TypeId id, std::uint32_t index) const;
   // What a deferred literal becomes when nothing decided it: `i32`, `f64`. Not
   // `const`: answering it interns the default, because the answer is a type like
   // any other and must be the *same* `TypeId` everywhere it is asked.
   [[nodiscard]] TypeId defaultOf(TypeId id);
 
 private:
+  // The type's members, read out of the arena for a type that is *already*
+  // interned. The span the arena yields and the span a caller hands to
+  // `tupleOf`/`function` are the same thing by construction; this is the one that
+  // reads it where it lives.
+  [[nodiscard]] std::span<const TypeId> partsOf(const Type& type) const;
+  // The one hash, over the fields *and* the member sequence. It reads the
+  // sequence from a span rather than from the arena because the type being hashed
+  // may not be in the arena yet -- that is the whole case `function` and
+  // `tupleOf` are, and answering it with a second hash function is how two ids
+  // end up meaning one type.
+  [[nodiscard]] std::uint64_t hashOf(const Type& type, std::span<const TypeId> parts) const;
+  // The fields two types must agree on -- the same list the hash mixes, minus the
+  // sequence. Split from the walk below for the reason above.
+  [[nodiscard]] bool equalFields(const Type& a, const Type& b) const;
+  [[nodiscard]] bool equalParts(const Type& type, std::span<const TypeId> parts) const;
+  // A simple kind: no member sequence, so the sequence is whatever the type's own
+  // fields say (empty for every kind that has none).
   [[nodiscard]] TypeId intern(const Type& type);
-  // A member rather than a free function: a function type's hash includes its
-  // parameters, which live in this store's arena.
-  [[nodiscard]] std::uint64_t hashOf(const Type& type) const;
-  [[nodiscard]] bool equal(const Type& a, const Type& b) const;
+  // A kind built from a member sequence that is not in the arena yet: hash it,
+  // confirm the candidates, and only then append the sequence. The order is the
+  // rule -- a repeated signature must not grow the arena.
+  [[nodiscard]] TypeId internSequence(const Type& type, std::span<const TypeId> parts);
 
   TargetInfo target_;
   std::size_t maxTypes_ = support::kMaxTypesPerUnit;

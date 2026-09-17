@@ -164,6 +164,35 @@ std::span<const std::string_view> typeNames() {
   return names;
 }
 
+namespace {
+
+void collectWords(std::span<const TypePart> parts, std::vector<std::string_view>& out) {
+  for (const TypePart& part : parts) {
+    if (part.isStar || part.isArray) {
+      continue; // a constructor is not a name
+    }
+    if (part.isTuple) {
+      // A member is a type position, so its words are words of this run: the
+      // dependency walk has to see them, and in the order they were written.
+      for (const std::vector<TypePart>& member : part.members) {
+        collectWords(member, out);
+      }
+      continue;
+    }
+    if (!part.word.empty()) {
+      out.push_back(part.word);
+    }
+  }
+}
+
+} // namespace
+
+std::vector<std::string_view> typeRunWords(std::span<const TypePart> parts) {
+  std::vector<std::string_view> out;
+  collectWords(parts, out);
+  return out;
+}
+
 bool typeNameOnTarget(std::string_view name, const TargetInfo& target) {
   const Primitive* primitive = findPrimitive(name);
   // Every word that is not a primitive is a type on every target: the C
@@ -174,81 +203,18 @@ bool typeNameOnTarget(std::string_view name, const TargetInfo& target) {
   return primitive == nullptr || primitive->bits != 80 || target.hasFloat80();
 }
 
-TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
-                        std::span<const TypeName> names,
-                        std::optional<std::uint64_t> inferredCount) {
-  // `!` first, because it is the one accepted spelling that is not a run of
-  // words under some stars: it is a whole type on its own, and anything beside
-  // it is a spelling with no meaning to give.
-  //
-  // The two messages are different on purpose. `!` as the whole run is a type;
-  // `*!`, `!i32` and `! !` are attempts to combine it, and the fix is to stop
-  // combining -- usually by naming the type the expression would have had, or
-  // by calling the function for its effect and not for its value.
-  if (parts.size() == 1 && parts.front().isBang) {
-    return ok(kTypeNever);
-  }
-  for (const TypePart& part : parts) {
-    if (part.isBang) {
-      return fail("`!` is a type on its own: it cannot be combined with a type name or a `*`");
-    }
-  }
+namespace {
 
-  // The constructors, then the words. Both constructors are prefixes over
-  // everything to their right, so one rule reads both orders: `*[4]i32` is a
-  // pointer to an array, `[4]*i32` is an array of pointers, and neither needs a
-  // grammar of its own (`arrays.md`, *The surface*).
-  std::vector<const TypePart*> constructors;
-  constructors.reserve(parts.size());
-  std::vector<std::string_view> words;
-  words.reserve(parts.size());
-  bool sawWord = false;
-  for (const TypePart& part : parts) {
-    if (part.isStar || part.isArray) {
-      if (sawWord) {
-        // A constructor *after* the words: `i32*` and `i32[4]` are the two
-        // shapes, and both are one mistake with one fix. Refused here rather than
-        // left to produce "`[` is not a type" about a token the parser already
-        // accepted as part of the type, because the reader's intent is not in
-        // doubt -- only the side the constructor belongs on.
-        return fail(part.isArray
-                        ? "an array type is written `[N]T`, with the `[N]` before the element type"
-                        : "a pointer type is written `*T`, with the `*` before the type it "
-                          "points to");
-      }
-      constructors.push_back(&part);
-      continue;
-    }
-    sawWord = true;
-    words.push_back(part.word);
-  }
-  if (words.empty() && !constructors.empty()) {
-    // A constructor with nothing under it (`*`, `[4]`). The base reader would
-    // answer "expected a type name", which is true and does not say which one:
-    // the fix is to write the type the constructor is building around.
-    return fail(constructors.back()->isArray
-                    ? "expected the element type of the array: an array is written `[N]T`"
-                    : "expected the type the pointer points to: a pointer is written `*T`");
-  }
-
-  // Not `const`: the failure path returns it, and a const local would force a
-  // copy where the move is the point (`performance-no-automatic-move`).
-  TypeSpecResult base = readTypeSpec(words, types, names);
-  if (!base.ok) {
-    return base;
-  }
-  if (!base.type.valid()) {
-    // `ok` with no type, and the two reasons are different sentences the caller
-    // owns: the store refusing the run is the type budget, while a name whose
-    // expansion already failed was reported where it failed. **The flag travels
-    // through here**, and this line is why: answering a fresh `ok(kInvalidType)`
-    // would turn every use of a broken name into "too many distinct types", which
-    // is a lie about a program that has three.
-    return base.brokenName ? base : ok(kInvalidType);
-  }
-  // Applied inside out: the constructor nearest the words is the innermost, so the
-  // list is walked in reverse. `**i32` is a pointer to a pointer to `i32`, and
-  // `[2][3]i32` is two arrays of three.
+// The constructors of a run, applied **inside out**: the one nearest the words is
+// the innermost, so the list is walked in reverse and `**i32` is a pointer to a
+// pointer while `[2][3]i32` is two arrays of three.
+//
+// Shared by both bases a run can have -- a sequence of words and a product --
+// because `*i32` and `*(i32, bool)` are the same construction, and the array's
+// four refusals must not exist twice.
+TypeSpecResult applyConstructors(const TypeSpecResult& base,
+                                 const std::vector<const TypePart*>& constructors, TypeStore& types,
+                                 std::optional<std::uint64_t> inferredCount) {
   TypeId result = base.type;
   for (auto it = constructors.rbegin(); it != constructors.rend(); ++it) {
     const TypePart& part = **it;
@@ -267,6 +233,7 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
     // in the stage that has the count and the element in hand, so no later stage
     // ever meets an array whose size is not a number (`arrays.md` decisions 4, 5,
     // 17, 20).
+    //
     // The count, from the one of the three places it can come from: the source,
     // or the initializer for a `_`. Checked in the order of "what was written",
     // so a `[]` is never blamed on a missing initializer and a `[_]` never reads
@@ -325,6 +292,177 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
     }
   }
   return ok(result);
+}
+
+} // namespace
+
+TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
+                        std::span<const TypeName> names,
+                        std::optional<std::uint64_t> inferredCount) {
+  // `!` first, because it is the one accepted spelling that is not a run of
+  // words under some stars: it is a whole type on its own, and anything beside
+  // it is a spelling with no meaning to give.
+  //
+  // The two messages are different on purpose. `!` as the whole run is a type;
+  // `*!`, `!i32` and `! !` are attempts to combine it, and the fix is to stop
+  // combining -- usually by naming the type the expression would have had, or
+  // by calling the function for its effect and not for its value.
+  if (parts.size() == 1 && parts.front().isBang) {
+    return ok(kTypeNever);
+  }
+  for (const TypePart& part : parts) {
+    if (part.isBang) {
+      return fail("`!` is a type on its own: it cannot be combined with a type name or a `*`");
+    }
+  }
+
+  // The constructors, then the words. Both constructors are prefixes over
+  // everything to their right, so one rule reads both orders: `*[4]i32` is a
+  // pointer to an array, `[4]*i32` is an array of pointers, and neither needs a
+  // grammar of its own (`arrays.md`, *The surface*).
+  std::vector<const TypePart*> constructors;
+  constructors.reserve(parts.size());
+  std::vector<std::string_view> words;
+  words.reserve(parts.size());
+  const TypePart* tuplePart = nullptr;
+  bool sawWord = false;
+  for (const TypePart& part : parts) {
+    if (part.isStar || part.isArray) {
+      if (sawWord) {
+        // A constructor *after* the words: `i32*` and `i32[4]` are the two
+        // shapes, and both are one mistake with one fix. Refused here rather than
+        // left to produce "`[` is not a type" about a token the parser already
+        // accepted as part of the type, because the reader's intent is not in
+        // doubt -- only the side the constructor belongs on.
+        return fail(part.isArray
+                        ? "an array type is written `[N]T`, with the `[N]` before the element type"
+                        : "a pointer type is written `*T`, with the `*` before the type it "
+                          "points to");
+      }
+      constructors.push_back(&part);
+      continue;
+    }
+    if (part.isTuple) {
+      // The nesting bound, reported where the group was built: a type that nests
+      // deeper than the parser's own limit is a refusal, not a recursion this
+      // reader performs on a tree that came from somewhere else.
+      if (part.tooDeep) {
+        return fail("this type nests deeper than the compiler follows: name the inner type "
+                    "with a `type` declaration, or flatten the product a level");
+      }
+      if (tuplePart != nullptr) {
+        // `(i32, i32)(bool, bool)`: two products in one run have no meaning to
+        // give -- there is no operation that would join them.
+        return fail("a type position holds one type: two products cannot sit next to each "
+                    "other");
+      }
+      if (sawWord) {
+        // A product beside a type name or a primitive, in either order. A tuple is
+        // a whole type: the fix is to name what the two were meant to be.
+        return fail("`(T, U)` is a whole type: it cannot be combined with a type name in the "
+                    "same type position");
+      }
+      tuplePart = &part;
+      sawWord = true;
+      continue;
+    }
+    if (tuplePart != nullptr) {
+      // The words came *after* the product (`(i32, bool) i32`).
+      return fail("`(T, U)` is a whole type: it cannot be combined with a type name in the "
+                  "same type position");
+    }
+    sawWord = true;
+    words.push_back(part.word);
+  }
+  if (words.empty() && !constructors.empty() && tuplePart == nullptr) {
+    // A constructor with nothing under it (`*`, `[4]`). The base reader would
+    // answer "expected a type name", which is true and does not say which one:
+    // the fix is to write the type the constructor is building around.
+    return fail(constructors.back()->isArray
+                    ? "expected the element type of the array: an array is written `[N]T`"
+                    : "expected the type the pointer points to: a pointer is written `*T`");
+  }
+
+  // The product, built member by member: each member's run is read by this same
+  // reader, with the same `names`, so an alias inside a product resolves exactly
+  // as it does anywhere else and `type Pair = (Meters, bool);` needs no rule of
+  // its own (`tuples.md`, decision 14).
+  //
+  // The two refusals are the store's, asked here because this is the stage that
+  // can name the member: a product of one member *is* that member, and a member
+  // that cannot be stored (an array of no elements cannot reach here -- it is
+  // refused where its count is read) has no size to contribute.
+  if (tuplePart != nullptr) {
+    // The two arities a product cannot have, and they are two sentences because
+    // they are two mistakes with two fixes: `()` is the empty group (a parameter
+    // list, or the type with no value), and `(T,)` -- or `(T)` in a type position,
+    // which is the same shape -- is a product of one member, which *is* that
+    // member (`tuples.md`, decision 2).
+    if (tuplePart->members.empty()) {
+      return fail("a product has at least two members, `(T, U)`; for the type with no value "
+                  "write `void`");
+    }
+    if (tuplePart->members.size() == 1) {
+      return fail("a product of one member is that member: write the member's type, not "
+                  "`(T,)`");
+    }
+    std::vector<TypeId> members;
+    members.reserve(tuplePart->members.size());
+    for (const std::vector<TypePart>& member : tuplePart->members) {
+      TypeSpecResult read = readType(member, types, names, std::nullopt);
+      if (!read.ok) {
+        return read;
+      }
+      if (!read.type.valid()) {
+        // `ok` with no type: either the store refused the member (the budget, the
+        // caller's diagnostic) or the member names an expansion that already
+        // failed (reported where it failed, and the flag has to travel).
+        return read.brokenName ? read : ok(kInvalidType);
+      }
+      if (!types.isObject(read.type)) {
+        return fail("`" + types.spelling(read.type) +
+                    "` cannot be a member of a product: a member is stored, so it has to be "
+                    "a type that can be stored");
+      }
+      members.push_back(read.type);
+    }
+    const TypeId product = types.tupleOf(members);
+    if (!product.valid()) {
+      // The three reasons `tupleOf` answers no: an arity under two (impossible
+      // here, the reader refused it above), a member that is not an object
+      // (impossible here too), and a product larger than the target can address --
+      // which is the one this line is for, and the caller's token is the place to
+      // say it.
+      return fail("a product of " + std::to_string(members.size()) +
+                  " members is larger than this target can address");
+    }
+    TypeSpecResult productResult;
+    productResult.type = product;
+    productResult.ok = true;
+    // The constructors *around* the product go through the same rule as around a
+    // run of words: `*[3](i32, bool)` is an array of products, and a `[_]` that
+    // is outermost here really is the initializer's count. A `_` *inside* a
+    // member was read as a member's own run, where it has no initializer to
+    // count -- which is the sentence the member's read already produced.
+    return applyConstructors(productResult, constructors, types, inferredCount);
+  }
+
+  // Not `const`: the failure path returns it, and a const local would force a
+  // copy where the move is the point (`performance-no-automatic-move`).
+  TypeSpecResult base = readTypeSpec(words, types, names);
+  if (!base.ok) {
+    return base;
+  }
+  if (!base.type.valid()) {
+    // `ok` with no type, and the two reasons are different sentences the caller
+    // owns: the store refusing the run is the type budget, while a name whose
+    // expansion already failed was reported where it failed. **The flag travels
+    // through here**, and this line is why: answering a fresh `ok(kInvalidType)`
+    // would turn every use of a broken name into "too many distinct types", which
+    // is a lie about a program that has three.
+    return base.brokenName ? base : ok(kInvalidType);
+  }
+  return applyConstructors(base, constructors, types, inferredCount);
 }
 
 TypeSpecResult readTypeSpec(std::span<const std::string_view> words, TypeStore& types,

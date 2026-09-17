@@ -87,6 +87,19 @@ TEST(ValidateTest, EveryCodeIsReachable) {
     }
   }
 
+  {
+    // A pattern where a file-scope declaration is: one object per name is what a
+    // global is, and a pattern is several names from one value (`tuples.md`,
+    // decision 6). The parser accepts the shape -- it is the same binding
+    // production -- so this is the stage that refuses it.
+    ResolveFixture f;
+    f.source("const (w, h) = (16, 9);\nfn i32 main() { return 0; }\n");
+    ASSERT_TRUE(f.build());
+    for (const std::string& code : f.astErrorCodes()) {
+      reached.insert(code);
+    }
+  }
+
   // The table is the definition of the closed set, so a code added without an
   // input that produces it fails here rather than being discovered later.
   for (const ast::AstErrorCode code : ast::allAstErrorCodes()) {

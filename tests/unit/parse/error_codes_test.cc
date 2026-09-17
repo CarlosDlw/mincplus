@@ -103,6 +103,17 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::InvalidLiteralSuffix},
     {"a character literal with a suffix", "fn i32 main() { return 'a'u8; }\n",
      ParseErrorCode::InvalidLiteralSuffix},
+    // The product's three grammar findings (`tuples.md`). A `(T, U` group left
+    // open, a decimal literal with no leading digit -- which is the one thing a
+    // member access made impossible to keep -- and a `(T, U)` group used as a
+    // *cast*'s type, which is a product and not a cast.
+    {"an unclosed product type group", "fn i32 main() { let p: (i32, i32 = 1; }\n",
+     ParseErrorCode::ExpectedTypeGroupClose},
+    {"a decimal literal with no leading digit", "fn i32 main() { let x = .5; return 0; }\n",
+     ParseErrorCode::LeadingPointNumber},
+    {"a parenthesised product used as a cast's type",
+     "fn i32 main() { let p: (i32, i32) = (1, 2); let x = (i32, i32)p; return 0; }\n",
+     ParseErrorCode::CastToProduct},
 };
 
 [[nodiscard]] std::string deepInput() {

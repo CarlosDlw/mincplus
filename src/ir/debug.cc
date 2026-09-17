@@ -354,6 +354,52 @@ llvm::DIType* DebugInfo::debugType(const sema::TypeStore& types, sema::TypeId id
                                      builder_.getOrCreateArray({pointerMember, lengthMember}));
     break;
   }
+  case sema::TypeKind::Tuple: {
+    // `DW_TAG_structure_type`, **with no name**, and one `DW_TAG_member` per
+    // position named `__0`, `__1`, ... (`tuples.md`, decision 14).
+    //
+    // The name is absent because the type has none: a product is *structural* --
+    // `(i32, bool)` written in two files is one type -- and inventing a spelling
+    // here would put a name in the debug record that the language cannot write and
+    // that a reader would reasonably try. A nameless `DW_TAG_structure_type` is
+    // exactly what an anonymous C `struct` is, and that is the shape the compiler
+    // this language is measured against emits: `ptype` on one prints
+    // `struct { int __0; char __1; }` and `print` prints
+    // `{__0 = 7, __1 = 1 '\001'}` -- a record with position-named members and no
+    // name is readable, which is the whole requirement.
+    //
+    // `__0` and not `0` is the same measurement: rustc's tuples reach DWARF with
+    // `DW_AT_name ("__0")`, because an identifier in DWARF is a name and `0` is a
+    // *number* -- and a leading double underscore is the spelling this language
+    // already reserves for names no program can write (`tuples.md`, decision 14).
+    //
+    // The offsets are the store's, read one member at a time and never computed
+    // here: the layout is a property of the type, and a debugger that disagreed
+    // with `sizeOf` about where member one starts would be describing an object the
+    // compiler does not generate (`arrays.md` decision 6, the same rule).
+    const std::span<const sema::TypeId> declared = types.membersOf(id);
+    llvm::SmallVector<llvm::Metadata*, 8> members;
+    members.reserve(declared.size());
+    for (std::size_t i = 0; i < declared.size(); ++i) {
+      llvm::DIType* member = debugType(types, declared[i]);
+      if (member == nullptr) {
+        return nullptr;
+      }
+      const std::uint64_t size = static_cast<std::uint64_t>(types.sizeOf(declared[i])) * 8;
+      const std::uint32_t align = static_cast<std::uint32_t>(types.alignOf(declared[i])) * 8;
+      const std::uint64_t offset =
+          static_cast<std::uint64_t>(types.memberOffset(id, static_cast<std::uint32_t>(i))) * 8;
+      members.push_back(builder_.createMemberType(file_, "__" + std::to_string(i), file_, 0, size,
+                                                  align, /*OffsetInBits=*/offset,
+                                                  llvm::DINode::FlagPublic, member));
+    }
+    node = builder_.createStructType(currentScope(), /*Name=*/llvm::StringRef{}, file_, 0,
+                                     static_cast<std::uint64_t>(types.sizeOf(id)) * 8,
+                                     static_cast<std::uint32_t>(types.alignOf(id)) * 8,
+                                     llvm::DINode::FlagPublic, nullptr,
+                                     builder_.getOrCreateArray(members));
+    break;
+  }
   case sema::TypeKind::IntLiteral:
   case sema::TypeKind::FloatLiteral:
     // A deferred literal cannot reach here: `run()` refuses it, because a

@@ -221,7 +221,11 @@ TEST(LexerTest, DecimalIntegers) {
       {"0xFF", TokenKind::IntegerLiteral},
       {"0Xab", TokenKind::IntegerLiteral},
       {"1.5", TokenKind::FloatLiteral},
-      {".5", TokenKind::FloatLiteral},
+      // `0.5` and not `.5`: **a decimal literal begins with a digit**
+      // (`tuples.md`), because a `.` after a value reads a member of it -- `t.0`
+      // -- and the two cannot both be true of one character. The rejected
+      // spelling has its own test below.
+      {"0.5", TokenKind::FloatLiteral},
       {"1e5", TokenKind::FloatLiteral},
       {"1e+5", TokenKind::FloatLiteral},
       {"1.5e-3", TokenKind::FloatLiteral},
@@ -238,23 +242,24 @@ TEST(LexerTest, DecimalIntegers) {
 }
 
 TEST(LexerTest, TheSecondDotOfARangeIsNotAFraction) {
-  // `.5` is a number, and a `.` followed by a digit is a fraction -- except when
-  // the character *before* the dot is another dot, because then the reader wrote
-  // the range operator the language reserves for slices. One character of
-  // lookbehind, and it is what makes `a[1..2]` reach the parser as `1`, `.`, `.`,
-  // `2` instead of `1`, `.`, `.2` -- which is the difference between the parser
-  // being able to say "`..` is reserved" and it saying "expected `]`".
+  // A range is two adjacent `.`s, and neither is a fraction: `a[1..2]` reaches
+  // the parser as `1`, `.`, `.`, `2`, so the parser can say "`..` is reserved"
+  // instead of building `1` and `.2`, which nothing can read.
   EXPECT_EQ(
       significantKinds("a[1..2]"),
       (std::vector<TokenKind>{TokenKind::Identifier, TokenKind::LBracket, TokenKind::IntegerLiteral,
                               TokenKind::Dot, TokenKind::Dot, TokenKind::IntegerLiteral,
                               TokenKind::RBracket, TokenKind::EndOfFile}));
-  // And the two forms that *are* numbers, unchanged by the lookbehind.
-  const std::string_view text = ".5 1.5";
-  EXPECT_EQ(significantKinds(text),
+  // The whole point is now structural rather than a lookbehind: **no** decimal
+  // number begins with a point, so the second dot of a range is not a special
+  // case of the scanner -- it is the ordinary answer, and the range falls out of
+  // it. What begins with a dot is a member read (`t.0`).
+  EXPECT_EQ(significantKinds("t.0"),
+            (std::vector<TokenKind>{TokenKind::Identifier, TokenKind::Dot,
+                                    TokenKind::IntegerLiteral, TokenKind::EndOfFile}));
+  EXPECT_EQ(significantKinds("1.5 0.5"),
             (std::vector<TokenKind>{TokenKind::FloatLiteral, TokenKind::FloatLiteral,
                                     TokenKind::EndOfFile}));
-  EXPECT_EQ(spellingOf(text, lexFirst(".5")), ".5");
 }
 
 TEST(LexerTest, BasePrefixWithoutDigitsIsFlaggedNotSwallowed) {
@@ -467,18 +472,28 @@ TEST(LexerTest, AQuoteOnlySeparatesTwoDigits) {
 
 // `5.` is `5` and a `.`: a trailing point is the one spelling whose meaning would
 // change if the language grew member access (`literals.md`, decision 8).
-TEST(LexerTest, ATrailingPointIsNotAFloat) {
+TEST(LexerTest, APointNeverStartsADecimalNumber) {
+  // A point belongs to the number only when a digit *follows* it: `5.` is the
+  // integer `5` and a `.`, which is what makes `t.0` readable at all.
   EXPECT_EQ(lexFirst("5.").kind, TokenKind::IntegerLiteral);
   EXPECT_EQ(lexFirst("5.").length, 1u);
-  EXPECT_EQ(lexFirst(".5").kind, TokenKind::FloatLiteral);
-  EXPECT_EQ(lexFirst(".5").length, 2u);
+  // And the same rule read from the other side: `.5` is a `.` and a `5`. The
+  // parser is what turns that into a sentence (`parse-leading-point-number`),
+  // because only it can see that a number was meant here.
+  EXPECT_EQ(lexFirst(".5").kind, TokenKind::Dot);
+  EXPECT_EQ(lexFirst(".5").length, 1u);
+  EXPECT_EQ(
+      significantKinds(".5"),
+      (std::vector<TokenKind>{TokenKind::Dot, TokenKind::IntegerLiteral, TokenKind::EndOfFile}));
 }
 
-// A fraction with no integer part is a spelling and not a shape: everything a
-// float may have after its digits -- an exponent, a suffix -- belongs to it too,
-// or `.5e3` would be the same number written in a shape the language refused.
-TEST(LexerTest, AFractionWithNoIntegerPartKeepsTheRestOfTheGrammar) {
-  for (const std::string_view spelling : {".5e3", ".5e-2", ".5E3", ".5f32", ".5L", ".5_0"}) {
+// The one number that *does* begin with a point: a **hex** float, where the
+// characters before the point are a base prefix and not a value that a member
+// could be read from -- `0x.8p3` has no `t.0` reading to compete with. Everything
+// a float may have after its digits belongs to it too, or the same number in
+// another shape would lex as two tokens.
+TEST(LexerTest, AHexFractionKeepsTheRestOfTheGrammar) {
+  for (const std::string_view spelling : {"0x.8p3", "0x.8p-2", "0x.8e1", "0x.8f32", "0x.8p3f32"}) {
     const Token token = lexFirst(spelling);
     EXPECT_EQ(token.kind, TokenKind::FloatLiteral) << spelling;
     EXPECT_EQ(token.length, spelling.size()) << spelling;
@@ -641,9 +656,10 @@ TEST(LexerTest, ThreeDotsAreOneTokenAndSpacedOnesAreThree) {
                                     TokenKind::EndOfFile}));
   EXPECT_EQ(significantKinds("...."),
             (std::vector<TokenKind>{TokenKind::Ellipsis, TokenKind::Dot, TokenKind::EndOfFile}));
-  // A leading dot is still a number, which is why the marker cannot be confused
-  // with one: `.5` is scanned before the punctuator table is consulted.
-  EXPECT_EQ(lexFirst(".5").kind, TokenKind::FloatLiteral);
+  // A `.` is never the start of a decimal number (`tuples.md`), so the marker and
+  // a member read are the only two readings a dot has -- and the number scan is
+  // not the thing that decides between them.
+  EXPECT_EQ(lexFirst(".5").kind, TokenKind::Dot);
 }
 
 TEST(LexerTest, EveryTokenAdvances) {

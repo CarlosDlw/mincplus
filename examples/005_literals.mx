@@ -35,9 +35,10 @@ fn f64 floats()
 {
   let fraction: f64 = 3.14159;
   let half: f64 = 0.5;
-  // A fraction may start at the point, and an exponent needs no integer part on
-  // its left: `.5` is `0.5` and `1e9` is a billion.
-  let leadingPoint: f64 = .5;
+  // A decimal literal begins with a digit -- `0.5`, never `.5`, because a `.`
+  // after a value is how a member is read (`tuples.md`) -- while in a **hex**
+  // float the digits may all sit after the point. An exponent needs no integer
+  // part on its left either: `1e9` is a billion.
   let exponent: f64 = 1e9;
   let signedExponent: f64 = 1e+10;
   let negativeExponent: f64 = 2.5e-3;
@@ -53,8 +54,8 @@ fn f64 floats()
   let groupedExponent: f64 = 1.5e1_0;
   let groupedHex: f64 = 0xF_Fp1_0;
 
-  return fraction + half + leadingPoint + exponent + signedExponent + negativeExponent + hexFloat +
-         hexNoExponent + hexNoIntegerPart + grouped + groupedExponent + groupedHex;
+  return fraction + half + exponent + signedExponent + negativeExponent + hexFloat + hexNoExponent +
+         hexNoIntegerPart + grouped + groupedExponent + groupedHex;
 }
 
 fn str text()

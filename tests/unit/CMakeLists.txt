@@ -77,6 +77,7 @@ minc_add_executable(minc_unit_tests
     parse/parser_test.cc
     parse/statement_test.cc
     parse/type_alias_test.cc
+    parse/tuple_test.cc
     parse/initializer_test.cc
     parse/error_codes_test.cc
     parse/examples_parse_test.cc
@@ -106,6 +107,7 @@ minc_add_executable(minc_unit_tests
     sema/builtins_test.cc
     sema/array_test.cc
     sema/slice_test.cc
+    sema/tuple_test.cc
   sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
@@ -116,6 +118,7 @@ minc_add_executable(minc_unit_tests
     ir/global_test.cc
     ir/debug_test.cc
     ir/type_alias_test.cc
+    ir/tuple_test.cc
     ir/invariants_test.cc
     ir/layout_test.cc
     ir/llvm_isolation_test.cc
