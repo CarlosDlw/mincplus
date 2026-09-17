@@ -1,0 +1,84 @@
+// A **generic function** -- `fn T identity<T>(value: T)` -- and the instances it
+// comes to be (`generics.md`).
+//
+// A declaration with binders is a *template*: its body is checked **once**,
+// abstractly, against `T`, and it becomes a function only where it is used. Every
+// distinct argument list is an **instance** -- a real function, with a real
+// symbol, emitted once however many calls reach it -- and the check is what
+// decides which instances exist before anything is emitted.
+//
+// The surface, in one place:
+//
+//   * the **binders** come after the name and before the parameters, exactly
+//     where a `type`'s binders go (`fn T identity<T>(...)`, `type Pair<T, K>`) --
+//     one position for both, because it is one list;
+//   * a binder is used as a **type** anywhere a type goes: a parameter, a return
+//     type, the arguments of another generic type, the arguments of a call;
+//   * a **call** either writes its arguments (`identity::<i32>(x)`) or lets them
+//     be inferred from the values it passes -- a literal contributes its class,
+//     and the context fills in whatever is left;
+//   * `id::<T>(x)` inside a generic body is a call whose instance is decided per
+//     *instance of the enclosing declaration*, which is what makes a generic
+//     function able to call itself at another type.
+//
+// What a binder may **not** do is anything that needs a width: `T` has no size,
+// so `[4]T` has none either until it is substituted, and `T + 1` needs a
+// constraint (`T: Num`) that this stage does not read yet. Both are refusals with
+// a sentence, not answers.
+
+type Pair<T, K> = (T, K);
+
+// The classic: one binder, in the parameter and in the return type. The call
+// decides it, and the two calls below are two instances of one declaration.
+fn T identity<T>(value: T) {
+  return value;
+}
+
+// A binder is a type like any other, so a *generic type name* takes the function's
+// binders as its arguments -- and the instance's signature is the substituted
+// product, not a new kind of type.
+fn Pair<T, K> makePair<T, K>(left: T, right: K) {
+  return (left, right);
+}
+
+// Two binders, and one of them only in the return type: `zero` is called with an
+// explicit list because nothing else could decide it.
+fn T pick<T>(left: T, right: T) {
+  return right;
+}
+
+// The template calling another template, with its *own* binder as the argument:
+// `twice<i32>` reaches `identity<i32>`, and the worklist finds it once the body
+// has been read.
+fn T twice<T>(value: T) {
+  return identity(identity(value));
+}
+
+// `main` is an ordinary function, so every call here is a concrete one and its
+// instances are created as it is checked.
+fn i32 main() {
+  // One instance of `identity`, reached twice: the pair is the identity of an
+  // instance, so a repeat is never expanded a second time.
+  let a: i32 = identity(7);
+  let b: i32 = identity(a);
+
+  // `f64` from the literal's class: `2.5` is a float literal, which decides `T`
+  // as a `f64` and not an `i32`.
+  let c: f64 = identity(2.5);
+
+  // Two binders, two instances, and they collapse: `Pair<i32, f64>` *is*
+  // `(i32, f64)`.
+  let d: Pair<i32, f64> = makePair(1, 2.5);
+
+  // Explicit type arguments, for a binder the values cannot decide.
+  let e: i32 = pick::<i32>(3, 4);
+
+  // A generic call inside a non-generic body: `twice<i32>` comes first, and the
+  // generic it calls is reached from the instance's own site.
+  let f: i32 = twice(e);
+
+  // A member of the product, reached by position.
+  let g: f64 = d.1;
+
+  return a + b + e + f + (c as i32) + (g as i32);
+}

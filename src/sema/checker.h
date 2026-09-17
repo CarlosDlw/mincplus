@@ -104,11 +104,6 @@ private:
 
   // --- declarations and statements ------------------------------------------
 
-  // Does the unit declare anything generic? True means the walk stops before a
-  // declaration is read: the binder list is the parser's and not this stage's
-  // yet, and checking a body against a binder with no type would produce one
-  // sentence per use (`generics.md`, decision 4).
-  bool hasGenericDeclaration();
   void runSignatures();
   void checkFunction(const FunctionInfo& info);
   void checkBody(ast::AstId block, TypeId returnType);
@@ -264,6 +259,116 @@ private:
   // optimizer could have made, and the wrong half would cost a correct program
   // its meaning.
   [[nodiscard]] ProvenanceKind provenanceOf(ast::AstId expr) const;
+
+  // --- generics ---------------------------------------------------------------
+  //
+  // A generic declaration is a **template**: its signature is read with its
+  // binders in scope, so it holds `Param`s, and nothing below this stage ever sees
+  // the template itself. A *use* is an **instantiation** -- the declaration plus
+  // an argument list -- and three things have to be decided for one: the type
+  // arguments, the signature after substitution, and which instance a call
+  // reaches (`generics.md`).
+
+  // The table a type position is read with: the unit's names and then the
+  // binders in scope, in that order -- binders last, because the table is a stack
+  // and a binder is the name that was declared closest (`type_alias.md`, decision
+  // 5). Rebuilt when either half changes, which is why nothing reads `aliasNames_`
+  // or `binderRows_` directly for a read: two tables and one lookup is how the
+  // two come to disagree about which name answered.
+  [[nodiscard]] std::span<const TypeName> names() const {
+    return names_;
+  }
+  void refreshNames() {
+    names_.assign(aliasNames_.begin(), aliasNames_.end());
+    names_.insert(names_.end(), binderRows_.begin(), binderRows_.end());
+  }
+  // A name for a type, published by the alias pass. One writer for the table and
+  // the buffer beside it, so the two cannot drift.
+  void addTypeName(const TypeName& row) {
+    aliasNames_.push_back(row);
+    refreshNames();
+  }
+  // The binders a signature or a body is read under. Entered and left by the two
+  // functions that read them -- a generic declaration's signature and its body --
+  // so "what is in scope" is a property of the walk's position and not of a flag a
+  // caller has to remember to clear.
+  void enterBinders(const std::vector<TypeName>& rows) {
+    binderRows_ = rows;
+    refreshNames();
+  }
+  void leaveBinders() {
+    binderRows_.clear();
+    refreshNames();
+  }
+
+  // The rows one binder list contributes to a type reader's table, appended in
+  // binder order; the return value is how many were written.
+  //
+  // Total and silent, deliberately: a binder's *name* is `resolve`'s question and
+  // it has already answered -- a reserved word and a repeated binder are both its
+  // errors -- so a binder that is not a sound name contributes a row whose type
+  // is invalid, which every consumer of the table already reads as *understood,
+  // no type; the fault is reported elsewhere* (`readTypeSpec`'s `brokenName`). A
+  // row is pushed for every binder written, so the count is the written arity and
+  // not the number that happened to survive.
+  std::uint32_t pushBinderRows(ast::AstId params, std::uint32_t owner, std::vector<TypeName>& out);
+
+  // A call whose callee is a generic declaration: the written argument list, or
+  // inference from the arguments and the expected type, then the substituted
+  // signature and the instance the call reaches.
+  [[nodiscard]] TypeId checkGenericCall(ast::AstId expr, ast::AstId callee, std::uint32_t target,
+                                        TypeId expected, ExprInfo& info);
+
+  // The `TypeArgList` written behind `::`, read by the same reader every other
+  // type position uses -- with the binders of the enclosing body in scope, so
+  // `id::<T>(x)` inside `id` is one rule and not a special case. False when an
+  // argument was refused, which is reported where it was read.
+  [[nodiscard]] bool readTypeArguments(ast::AstId list, std::vector<TypeId>& out);
+
+  // First-order unification, one equation: `pattern` is a type of the callee's
+  // declaration (so it may hold that declaration's `Param`s) and `actual` is what
+  // the program supplied. A pattern holding none of `owner`'s parameters gives no
+  // equation at all -- the ordinary assignability check judges that argument, and
+  // a comparison here would refuse a literal that is perfectly assignable.
+  [[nodiscard]] bool solve(std::uint32_t owner, TypeId pattern, TypeId actual,
+                           std::vector<TypeId>& solution);
+
+  // Does this type mention a `Param` of `owner`? The question the worklist asks
+  // of an argument list to decide whether an instantiation is concrete.
+  [[nodiscard]] bool mentionsParam(TypeId type, std::uint32_t owner) const;
+
+  // The instance for (declaration, arguments): the one already found, or a new
+  // one -- appended to `out_.typed` as well, because the table is published. A
+  // repeated pair is not re-created, which is what makes a recursive generic
+  // terminate.
+  std::uint32_t internInstance(std::uint32_t function, std::span<const TypeId> args, ast::AstId at);
+
+  // The worklist, run once after every body has been checked: it expands each
+  // instance's abstract sites until nothing new appears, and it is the reason the
+  // set of instances cannot be enumerated by walking the program once.
+  void runInstantiations();
+
+  // The two spellings of an instance: `identity<i32>` (what a diagnostic and a
+  // `DW_AT_name` print) and `__M8_identityi32` (what the linker sees, § 7).
+  [[nodiscard]] static std::string instanceName(std::string_view name, std::span<const TypeId> args,
+                                                const TypeStore& types);
+  [[nodiscard]] static std::string mangle(std::string_view name, std::span<const TypeId> args,
+                                          const TypeStore& types);
+  static void mangleInto(const TypeStore& types, TypeId type, std::string& out);
+
+  // An **operation** on a binder, which needs a constraint (`generics.md`, § 6).
+  // True when `type` is a parameter and the sentence was reported; the caller then
+  // answers with a poison instead of the operation's result, so one mistake stays
+  // one diagnostic. `why` is the clause in front of the shared explanation, and it
+  // names the operation the way the source wrote it: `` `+` on a binder needs a
+  // constraint ``.
+  [[nodiscard]] bool refuseParameter(ast::AstId at, TypeId type, std::string_view why);
+
+  // What the `binder`-th binder of `owner` was called. Kept beside the rows
+  // because a `Param`'s identity is `(owner, binder)` and an unsound binder has no
+  // `Param` at all -- and a sentence that names a binder writes the word the reader
+  // wrote, never an index.
+  [[nodiscard]] std::string_view binderSpelling(std::uint32_t owner, std::uint32_t binder) const;
 
   // --- types -----------------------------------------------------------------
 
@@ -439,7 +544,11 @@ private:
                                                          ExprInfo& info);
   [[nodiscard]] TypeId checkConditional(ast::AstId expr, TypeId expected, ExprInfo& info);
   [[nodiscard]] TypeId checkAssign(ast::AstId expr, ExprInfo& info);
-  [[nodiscard]] TypeId checkCall(ast::AstId expr, ExprInfo& info);
+  // `expected` is the type the *value* is wanted as, and it is a parameter rather
+  // than something `adaptTo` fixes afterwards because a generic call is one of the
+  // two places where a context can decide a type: `let x: i32 = zero();` solves
+  // `T` from the annotation, and `adaptTo` runs too late to see it.
+  [[nodiscard]] TypeId checkCall(ast::AstId expr, TypeId expected, ExprInfo& info);
 
   // --- conversions, recorded --------------------------------------------------
   //
@@ -729,7 +838,52 @@ private:
   // **It is a stack.** The last row for a spelling is the name in scope, and a
   // block drops the rows it pushed when it ends -- which is the whole of the
   // shadowing rule, and the reason the reader searches backwards.
+  // --- generics, while the walk runs ------------------------------------------
+
+  // One **abstract site**: a call to a generic function inside a generic body,
+  // whose arguments are written in terms of that body's binders. The worklist
+  // expands one of these once per instance of the enclosing declaration, which is
+  // what makes `id::<T>` inside `id` two instances instead of one
+  // (`generics.md`, § 5).
+  struct GenericSite {
+    ast::AstId call;
+    // The declaration the call is *inside*, which is also the binder list its
+    // arguments are written in terms of.
+    std::uint32_t body = 0;
+    std::uint32_t target = 0; // index into `functionTable`
+    std::vector<TypeId> args;
+  };
+
+  // The declared name of each generic *declaration*, by def index. A call reaches
+  // a declaration through the def its callee resolved to, and the def is what
+  // distinguishes two same-named declarations the way every other lookup in this
+  // stage does.
+  std::unordered_map<std::uint32_t, std::uint32_t> genericFunctionByDef_;
+  std::vector<GenericSite> sites_;
+  // The instances found so far, by the key that makes a repeated pair one pair:
+  // the declaration's index and the arguments' ids, which is also what
+  // `instances()` publishes in order.
+  std::unordered_map<std::string, std::uint32_t> instanceByKey_;
+  // Which instance a call reaches, keyed on (the body being lowered, the node).
+  // The body is `kNoInstance` for every call written outside a generic body.
+  std::vector<CallTarget> callTargets_;
+  // What the `binder`-th binder of a declaration was called, by owner. One entry
+  // per declaration that wrote binders.
+  std::unordered_map<std::uint32_t, std::vector<std::string_view>> binderSpellings_;
+  // The declaration whose body is being checked, and how many binders it wrote.
+  // `binders == 0` is every body that is not generic, and it is what makes the two
+  // paths through a generic call one condition instead of a mode.
+  std::uint32_t currentBody_ = 0;
+  std::uint32_t currentGenericOwner_ = 0;
+  std::uint32_t currentGenericBinders_ = 0;
+  // The budget is reported once, like every other limit here.
+  bool instanceLimitReported_ = false;
   std::vector<TypeName> aliasNames_;
+  // The binders in scope: empty outside a generic declaration's signature and
+  // body, and the declaration's rows inside it.
+  std::vector<TypeName> binderRows_;
+  // `aliasNames_` followed by `binderRows_`, kept up to date by `refreshNames`.
+  std::vector<TypeName> names_;
   // Every `type` declaration this unit checked, in the order they were decided:
   // the file scope's first, in source order, then each block's as it is walked.
   // One entry per declaration is what makes `TypedFile::aliasAt` an index, and

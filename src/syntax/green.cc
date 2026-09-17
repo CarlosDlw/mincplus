@@ -15,10 +15,6 @@ parse::SyntaxKind GreenChild::kind() const {
   return isNode ? node->kind : token->kind;
 }
 
-std::uint32_t GreenChild::width() const {
-  return isNode ? node->width : token->width();
-}
-
 std::size_t GreenCache::TokenKeyHash::operator()(const TokenKey& key) const {
   return std::hash<std::string_view>{}(key.text) ^
          (static_cast<std::size_t>(key.kind) * 0x9E3779B9U);
@@ -73,9 +69,17 @@ const GreenNode* GreenCache::node(parse::SyntaxKind kind, std::span<const GreenC
     if (array == nullptr) {
       return nullptr;
     }
+    // Copied **with each child's offset filled in**, which is the one thing the
+    // caller's array cannot know: it is a view of a builder-local buffer whose
+    // children are in order, and how far into the node each one starts is a fact
+    // about the node. Written here so every later walk of this node -- as many as
+    // the tree has readers -- reads it instead of summing widths (`green.h`).
     auto* items = static_cast<GreenChild*>(array);
+    std::uint32_t offset = 0;
     for (std::size_t i = 0; i < children.size(); ++i) {
       items[i] = children[i];
+      items[i].offset = offset;
+      offset += items[i].width();
     }
     stored = std::span<const GreenChild>(items, children.size());
   }

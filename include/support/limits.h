@@ -172,6 +172,25 @@ inline constexpr std::uint32_t kMaxSuggestionDistance = 2;
 // them from, and the store is the last structure that grows with the input.
 inline constexpr std::size_t kMaxTypesPerUnit = std::size_t{1} << 20;
 
+// Types one **type** may be made of, children included: a scalar is one, `*T` is
+// one plus `T`'s, `(A, B)` is one plus both, `fn R(A, B)` is one plus its
+// return's and both parameters'. The second bound on the store, and it bounds a
+// different cost from the one above: `kMaxTypesPerUnit` bounds how many types
+// *exist*, this bounds how large one of them can be.
+//
+// It is a **work** bound, and the work is what every walk of the structure pays:
+// the layout arithmetic, the spelling, the substitution, the mangling and the
+// LLVM lowering each cost one step per node. It is needed because a structure can
+// be *reused* rather than written out: `type P0 = (i32, i32); type P1 = (P0, P0);`
+// doubles per line, so twenty lines is a million nodes -- a type no program can
+// use, and minutes of arithmetic and megabytes of spelling before any stage could
+// say so. Refused where it is built, the cost is bounded by the bound.
+//
+// 65536 is far above any type a program writes by hand -- a product of a
+// thousand members is a thousand -- and small enough that one full walk of the
+// largest accepted type is a millisecond, not a second.
+inline constexpr std::uint32_t kMaxTypeNodes = 1u << 16;
+
 // Largest single block the Arena will ask the allocator for. A runaway size --
 // a SIZE_MAX from bad arithmetic, a corrupted length field -- must never reach
 // operator new: what it does with an absurd request is implementation-defined

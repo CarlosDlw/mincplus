@@ -204,7 +204,7 @@ namespace {
 } // namespace
 
 Lowering::Lowering(const ast::LoweredFile& file, const resolve::DefMap& defs,
-                   const sema::TypedFile& typed, const sema::TypeStore& types,
+                   const sema::TypedFile& typed, sema::TypeStore& types,
                    const support::Interner& symbols, const LoweringOptions& options)
     : file_(file), defs_(defs), typed_(typed), types_(types), symbols_(symbols), options_(options),
       impl_(makeImpl(file.file())), context_(impl_->context), module_(*impl_->module),
@@ -341,20 +341,48 @@ lex::TokenKind Lowering::tokenKindOf(ast::AstId id) const {
 
 // --- the published answers ------------------------------------------------------
 
-const sema::Coercion* Lowering::coercionFor(ast::AstId consumer, ast::AstId child) const {
+std::optional<sema::Coercion> Lowering::coercionFor(ast::AstId consumer, ast::AstId child) const {
   if (!consumer.valid() || !child.valid()) {
-    return nullptr;
+    return std::nullopt;
   }
   for (const sema::Coercion& coercion : typed_.coercionsOf(consumer)) {
     if (coercion.node == child) {
-      return &coercion;
+      // The pair as the **instance** has it. A record written inside a generic body
+      // holds the template's types -- `u8` into `T` -- and the instruction to emit
+      // is the one the substituted pair asks for (`u8` into `i32`), so this is
+      // where the two meet.
+      sema::Coercion substituted = coercion;
+      substituted.from = concrete(coercion.from);
+      substituted.to = concrete(coercion.to);
+      return substituted;
     }
   }
-  return nullptr;
+  return std::nullopt;
 }
 
-const sema::AccessObligation* Lowering::obligationFor(ast::AstId place) const {
-  return typed_.accessAt(place);
+std::optional<sema::AccessObligation> Lowering::obligationFor(ast::AstId place) const {
+  const sema::AccessObligation* obligation = typed_.accessAt(place);
+  if (obligation == nullptr) {
+    return std::nullopt;
+  }
+  // The width and the alignment of the access, which are the *accessed type*'s and
+  // therefore the instance's: `p[i]` through a `*T` reads `sizeof(i32)` in
+  // `identity<i32>` and `sizeof(f64)` in `identity<f64>`.
+  sema::AccessObligation substituted = *obligation;
+  substituted.type = concrete(obligation->type);
+  return substituted;
+}
+
+sema::TypeId Lowering::concrete(sema::TypeId type) const {
+  if (currentInstance_ == sema::kNoInstance || !type.valid()) {
+    return type;
+  }
+  // **Total for the declaration it belongs to** (decision 6): every `Param` of
+  // this instance's declaration is replaced, and a `Param` of *another*
+  // declaration is left alone -- which cannot happen from a body inside this unit
+  // (a function scope holds one binder list), and is left alone rather than
+  // guessed at if it ever does.
+  return types_.substitute(type, instanceArgs_, instanceOwner_);
 }
 
 bool Lowering::isAccessNode(ast::AstId id) const {
@@ -604,6 +632,15 @@ bool Lowering::run() {
       return false;
     }
   }
+  // The instances, in `sema`'s order -- which is discovery order and therefore
+  // deterministic. A generic declaration was skipped above: its body is lowered
+  // here, once per instance, and the two names it has are the pair's.
+  for (std::size_t index = 0; index < typed_.instances().size(); ++index) {
+    defineInstance(static_cast<std::uint32_t>(index));
+    if (failed_) {
+      return false;
+    }
+  }
   // The debug metadata is resolved before the verifier sees it, and the order is
   // load-bearing: until `finalize` runs, the compile unit's retained arrays and
   // every subprogram are temporaries, and a module with temporaries verifies
@@ -633,7 +670,7 @@ bool Lowering::run() {
 // --- the entry point ------------------------------------------------------------
 
 IRResult lowerUnit(const ast::LoweredFile& file, const resolve::DefMap& defs,
-                   const sema::TypedFile& typed, const sema::TypeStore& types,
+                   const sema::TypedFile& typed, sema::TypeStore& types,
                    const support::Interner& symbols, const LoweringOptions& options) {
   Lowering lowering(file, defs, typed, types, symbols, options);
   IRResult result;

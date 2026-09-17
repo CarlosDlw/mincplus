@@ -171,9 +171,85 @@ TEST(GenericsParseTest, TheNameIsNotTheLastWordOfTheRunWhenTheReturnTypeHasArgum
   const std::optional<syntax::SyntaxNode> name = decl.childOfKind(SyntaxKind::Name);
   ASSERT_TRUE(type.has_value());
   ASSERT_TRUE(name.has_value());
-  EXPECT_EQ(tokenText(*type), "Vec < i32 >");
+  // The run is **read**, not walked token by token: the word is the `Type`'s own
+  // token and the arguments are the `TypeArgList` node every other type position
+  // builds. A flat run here is what makes `fn Pair<T, K> make<T, K>()` hand the
+  // reader below the words `Pair T K` -- a generic return type no stage can
+  // resolve -- instead of one word with arguments (`generics.md`, decision 3).
+  EXPECT_EQ(tokenText(*type), "Vec");
+  const std::optional<syntax::SyntaxNode> args = type->childOfKind(SyntaxKind::TypeArgList);
+  ASSERT_TRUE(args.has_value());
+  EXPECT_EQ(tokenText(*args), "< >");
+  const std::optional<syntax::SyntaxNode> argument = args->childOfKind(SyntaxKind::Type);
+  ASSERT_TRUE(argument.has_value());
+  EXPECT_EQ(tokenText(*argument), "i32");
   EXPECT_EQ(firstTokenText(*name), "f");
   EXPECT_FALSE(decl.childOfKind(SyntaxKind::GenericParams).has_value());
+}
+
+TEST(GenericsParseTest, AReturnTypeShapedLikeThisBoundIsWhyTheBoundIsATokenCount) {
+  // The run is `Pair<T, K>` and the *binders* are `<T, K>`: the two lists look
+  // alike, and the one that belongs to the return type is the one before the
+  // name. The bound stops the greedy run at `make`, so the second `<T, K>` is
+  // left for `parseGenericParams` -- which is the only thing that tells the two
+  // apart (`generics.md`, decision 1).
+  ParseFixture fixture("fn Pair<T, K> make<T, K>(left: T, right: K) { return (left, right); }\n");
+  ASSERT_TRUE(fixture.built());
+  expectLossless(fixture);
+
+  const syntax::SyntaxNode decl = fnDecl(fixture);
+  const std::optional<syntax::SyntaxNode> type = decl.childOfKind(SyntaxKind::Type);
+  const std::optional<syntax::SyntaxNode> name = decl.childOfKind(SyntaxKind::Name);
+  const std::optional<syntax::SyntaxNode> params = decl.childOfKind(SyntaxKind::GenericParams);
+  ASSERT_TRUE(type.has_value());
+  ASSERT_TRUE(name.has_value());
+  ASSERT_TRUE(params.has_value());
+  EXPECT_EQ(tokenText(*type), "Pair");
+  const std::optional<syntax::SyntaxNode> args = type->childOfKind(SyntaxKind::TypeArgList);
+  ASSERT_TRUE(args.has_value());
+  EXPECT_EQ(tokenText(*args), "< , >");
+  EXPECT_EQ(firstTokenText(*name), "make");
+  EXPECT_EQ(binderNames(*params), (std::vector<std::string>{"T", "K"}));
+}
+
+TEST(GenericsParseTest, ACompoundCloserStaysInsideTheBoundedRun) {
+  // `A<B<C>>` in a return type: the `>>` is one token and two closures, and both
+  // of them are *inside* the run -- so the bound is reached with nothing left
+  // over and the name after it is read from the token the scan pointed at. The
+  // conduit that carries the second closure up the type grammar and the bound
+  // that ends the run are the two mechanisms this pins together.
+  ParseFixture fixture("fn A<B<C>> f() { return 0; }\n");
+  ASSERT_TRUE(fixture.built());
+  expectLossless(fixture);
+
+  const std::optional<syntax::SyntaxNode> type = fnDecl(fixture).childOfKind(SyntaxKind::Type);
+  const std::optional<syntax::SyntaxNode> name = fnDecl(fixture).childOfKind(SyntaxKind::Name);
+  ASSERT_TRUE(type.has_value());
+  ASSERT_TRUE(name.has_value());
+  EXPECT_EQ(tokenText(*type), "A");
+  EXPECT_EQ(firstTokenText(*name), "f");
+}
+
+TEST(GenericsParseTest, OneGreaterTooManyInAReturnTypeIsOneSentence) {
+  // `A<B>>` closes one list and then a character with nothing to close. The
+  // sentence is reported beside the run, and the name after it is still read: the
+  // alternative -- letting the extra `>` end the run -- would report a function
+  // with no name for the same mistake.
+  ParseFixture fixture("fn A<B>> f() { return 0; }\n");
+  ASSERT_TRUE(fixture.built());
+  expectOneError(fixture, ParseErrorCode::StrayTypeArgClose);
+  EXPECT_EQ(firstTokenText(fnDecl(fixture).childOfKind(SyntaxKind::Name).value()), "f");
+}
+
+TEST(GenericsParseTest, AnEqualSwallowedByAReturnTypesListIsNamed) {
+  // `fn A<B>= f()` spells the `>` and the `=` as `>=`. The list takes its `>`,
+  // the `=` goes with it -- and a function declaration has no `=` for it to
+  // belong to, so the character is named instead of left to the `{` that never
+  // arrives.
+  ParseFixture fixture("fn A<B>= f() { return 0; }\n");
+  ASSERT_TRUE(fixture.built());
+  expectOneError(fixture, ParseErrorCode::StrayTypeArgClose);
+  EXPECT_EQ(firstTokenText(fnDecl(fixture).childOfKind(SyntaxKind::Name).value()), "f");
 }
 
 TEST(GenericsParseTest, ANestedListClosesWithOneGreaterGreater) {

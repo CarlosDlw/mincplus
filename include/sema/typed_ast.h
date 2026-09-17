@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -230,6 +231,69 @@ struct FunctionInfo {
   ast::AstId body;
   // The declared name, for a diagnostic that has to name the function.
   support::SymId name = support::kInvalidSym;
+  // A **generic** declaration: how many binders it wrote, and the node those
+  // binders belong to -- the `owner` half of every `Param` of this signature
+  // (`generics.md`). `binders == 0` is every function that is not generic, and it
+  // is the row the lowering reads to decide whether the signature it is handed is
+  // a signature or a *template*: a generic declaration is never itself a
+  // function, and only its instances reach a module.
+  std::uint32_t binders = 0;
+  std::uint32_t owner = 0;
+  // The `GenericParams` node, for a diagnostic that has to point at the list.
+  ast::AstId genericParams;
+};
+
+// "No instance": the body being lowered is not one, or a call reaches no
+// instance because it is an ordinary call to an ordinary function.
+inline constexpr std::uint32_t kNoInstance = 0xFFFFFFFFu;
+
+// One **instantiation** of a generic function (`generics.md`, § 5).
+//
+// An instance is the pair (declaration, argument list) and everything else about
+// it follows: `functionType` is the declaration's signature with the arguments
+// substituted -- a type the store *already had*, so every consumer below this
+// stage reads an instance's type exactly as it reads a hand-written function's --
+// and `symbol` is the name the linker sees.
+//
+// One row per instance and not one per declaration: a generic declaration is a
+// template, and a template is not a function. This table is what the lowering
+// walks instead of `functionTable` for the generic half of a unit.
+struct InstantiationInfo {
+  // The index into `functionTable` of the declaration being instantiated.
+  std::uint32_t function = kNoInstance;
+  // The arguments, in binder order. Every one is an object, and none is a
+  // `Param` of this declaration -- which is what "the store contains no generics
+  // after instantiation" means.
+  std::vector<TypeId> args;
+  // The declaration's own binders, in the same order: their `Param`s, whose
+  // spellings are the words the reader wrote. One entry per written binder, so the
+  // two lists line up and a debugger can say *which* parameter `i32` was written
+  // for -- `DW_TAG_template_type_parameter` per binder, named `T`
+  // (`generics.md`, § 8). An unsound binder has `kInvalidType` here, which is a
+  // unit that already has an error and never reaches this table.
+  std::vector<TypeId> templateParams;
+  // The signature after substitution: the same id a hand-written non-generic
+  // declaration of this shape would have.
+  TypeId functionType = kInvalidType;
+  // `identity<i32>`: the spelling a diagnostic and a DWARF `DW_AT_name` use, and
+  // the spelling `gdb`'s `info functions identity` matches.
+  std::string name;
+  // `__M8_identityi32`: the symbol the linker sees (`generics.md`, § 7).
+  std::string symbol;
+};
+
+// Which instance a **call** reaches.
+//
+// Keyed on the pair and not on the node, because one call node inside a generic
+// body is lowered once per instance of the function that contains it: `fn T
+// id<T>(x: T) { return id::<T>(x); }` has one call site and two answers, and a
+// table keyed on the node alone would have to pick one.
+struct CallTarget {
+  // The body being lowered: an instance of `instances()`, or `kNoInstance` for a
+  // body that is not an instance (every non-generic function).
+  std::uint32_t body = kNoInstance;
+  ast::AstId call;
+  std::uint32_t target = kNoInstance;
 };
 
 // What a file-scope binding was initialized with, as a *value*.
@@ -452,6 +516,40 @@ struct TypedFile {
     return typeTable;
   }
 
+  // The generic instantiations of this unit, in discovery order -- which is
+  // deterministic and is *not* sorted, because the order is what the worklist
+  // found and a sort would have to renumber every `CallTarget`. The discovery is
+  // itself reproducible: the seeds are the concrete calls in walk order and the
+  // expansion of an instance is its own site list in source order.
+  [[nodiscard]] std::span<const InstantiationInfo> instances() const {
+    return instanceTable;
+  }
+
+  [[nodiscard]] const InstantiationInfo* instance(std::uint32_t index) const {
+    return index < instanceTable.size() ? &instanceTable[index] : nullptr;
+  }
+
+  // The instance a call inside the body of `body` reaches, or `kNoInstance` when
+  // the call is an ordinary one. A scan of a list that has one entry per generic
+  // call site, which is what `accessAt` does for accesses and for the same
+  // reason: it is asked once per call node the body actually lowers.
+  [[nodiscard]] std::uint32_t callTarget(std::uint32_t body, ast::AstId call) const {
+    for (const CallTarget& row : callTargets) {
+      if (row.body == body && row.call == call) {
+        return row.target;
+      }
+    }
+    return kNoInstance;
+  }
+
+  void addInstance(const InstantiationInfo& info) {
+    instanceTable.push_back(info);
+  }
+
+  void addCallTarget(const CallTarget& row) {
+    callTargets.push_back(row);
+  }
+
   // The conversions the consumer applies, in the order they were recorded.
   // Between `buildCoercionIndex()` calls this is a plain list.
   [[nodiscard]] std::span<const Coercion> coercions() const {
@@ -539,6 +637,8 @@ struct TypedFile {
   std::vector<ExprInfo> exprFacts;
   std::vector<FunctionInfo> functionTable;
   std::vector<GlobalInfo> globalTable;
+  std::vector<InstantiationInfo> instanceTable;
+  std::vector<CallTarget> callTargets;
 
 private:
   // Private with `addCoercion`/`buildCoercionIndex` as the only writers: the two

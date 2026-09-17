@@ -48,6 +48,16 @@ TypeStore::TypeStore(TargetInfo target, std::size_t maxTypes)
     type.kind = kind;
     type.isSigned = isSigned;
     type.bits = bits;
+    // The derived fields, computed the same way `internSequence` computes them
+    // for every other type: a built-in that skipped this would answer a size of 0
+    // and an alignment of 1 -- which is a plausible-looking pair of numbers, and
+    // therefore worse than a wrong one, because `[4]i32` would then be an array
+    // of nothing and nothing would say so.
+    type.nodes = nodesOf({}, {});
+    const Layout layout = layoutOf(type, {});
+    type.size = layout.size;
+    type.align = layout.align;
+    type.unknownSize = layout.unknownSize;
     const TypeId id{static_cast<std::uint32_t>(types_.size())};
     index_.emplace(hashOf(type, {}), id);
     types_.push_back(type);
@@ -82,7 +92,196 @@ std::span<const TypeId> TypeStore::partsOf(const Type& type) const {
   if (type.paramCount == 0) {
     return {};
   }
-  return std::span<const TypeId>(params_.data() + type.firstParam, type.paramCount);
+  // The type's own row, and a row is never written again once its type has been
+  // appended -- which is what makes the span safe to hold across an interning
+  // (`type_store.h`, on `sequences_`).
+  //
+  // The bounds answer is for a `Type` that was never interned, which the store's
+  // own callers cannot produce; the guard is here so that reaching it is an empty
+  // row and not a read past the end, the same answer `known` gives for an id this
+  // store does not know.
+  if (type.sequence >= sequences_.size()) {
+    return {};
+  }
+  return std::span<const TypeId>(sequences_[type.sequence]);
+}
+
+std::uint32_t TypeStore::childNodes(TypeId id) const {
+  return known(id) ? get(id).nodes : 1;
+}
+
+// The layout of the type `type` is becoming, computed from the layouts of its
+// children -- every one of which is already in the store, so this is O(children)
+// and never a walk of the structure. This is the same rule `sizeOf`/`alignOf`/
+// `hasUnknownSize` state, moved to where a type is built so that the answers can
+// be *read* instead of recomputed (`type.h`, on `Type::size`).
+//
+// The rules, in the order they have to be asked:
+//
+//  - a **binder** has no width yet, and neither does an aggregate containing one:
+//    that is `unknownSize`, which is what makes `[4]T` wait for its argument
+//    instead of being arithmetic on a zero (`arrays.md` decision 21).
+//  - a **function**, `void`, `!` and the poison have no object representation:
+//    size 0 and alignment 0, which is the answer `sizeOf`/`alignOf` have always
+//    given and a different statement from "not yet".
+//  - an **array** multiplies its element's complete size, and a **slice** is a
+//    pointer and a length -- neither arithmetic can overflow where it is built,
+//    because `arrayOf` refused a product that would not fit.
+//  - a **product** is its members in order, each at its own alignment, padded to
+//    the strictest member's (`tuples.md`, decision 4).
+TypeStore::Layout TypeStore::layoutOf(const Type& type, std::span<const TypeId> parts) const {
+  Layout layout;
+  const auto childSize = [this](TypeId id) -> std::size_t { return known(id) ? get(id).size : 0; };
+  const auto childAlign = [this](TypeId id) -> std::uint32_t {
+    return known(id) ? get(id).align : 0;
+  };
+  const auto childUnknown = [this](TypeId id) { return known(id) && get(id).unknownSize; };
+  switch (type.kind) {
+  case TypeKind::Bool:
+  case TypeKind::Char:
+    layout.size = 1;
+    layout.align = 1;
+    return layout;
+  case TypeKind::Int:
+    layout.size = type.bits / 8U;
+    // A width is not an alignment on every target: i386's ABI aligns a 64-bit
+    // integer to four bytes (`i64:32:64`), and this number is what every emitted
+    // `align N` is built from.
+    layout.align = type.bits == 64 ? static_cast<std::uint16_t>(target_.int64AlignBits / 8U)
+                                   : static_cast<std::uint16_t>(type.bits / 8U);
+    return layout;
+  case TypeKind::Float: {
+    // The ABI's slot for the width: the value's bytes rounded up to the
+    // alignment the target states for it. `f80` is the one place the two are not
+    // the same (`type_store.cc`'s old `sizeOf` said why: ten bytes of value in a
+    // sixteen-byte slot on System V and in a four-byte slot on i386).
+    switch (type.bits) {
+    case 64:
+      layout.align = static_cast<std::uint16_t>(target_.float64AlignBits / 8U);
+      break;
+    case 80:
+      layout.align = static_cast<std::uint16_t>(target_.float80AlignBits / 8U);
+      break;
+    default:
+      layout.align = static_cast<std::uint16_t>(type.bits / 8U);
+      break;
+    }
+    const std::size_t bytes = type.bits / 8U;
+    const std::size_t align = layout.align == 0 ? 0 : layout.align;
+    layout.size = align == 0 ? bytes : ((bytes + align - 1U) / align) * align;
+    return layout;
+  }
+  case TypeKind::Str:
+  case TypeKind::Pointer:
+    // `*void` included: a pointer to `void` is a pointer, and its size is the
+    // pointer's. It is `void` that has no object representation.
+    layout.size = target_.pointerBits / 8U;
+    layout.align = static_cast<std::uint16_t>(target_.pointerBits / 8U);
+    return layout;
+  case TypeKind::Slice:
+    // Two words and no data: the descriptor is a pointer and a length, and
+    // `sizeof(s)` answers for the *view* (`slices.md` decision 5). Aligned like a
+    // pointer and not like its element.
+    layout.size = static_cast<std::size_t>(target_.pointerBits / 8U) * 2U;
+    layout.align = static_cast<std::uint16_t>(target_.pointerBits / 8U);
+    return layout;
+  case TypeKind::Array:
+    layout.align = static_cast<std::uint16_t>(childAlign(type.pointee));
+    layout.unknownSize = childUnknown(type.pointee);
+    layout.size =
+        layout.unknownSize ? 0 : static_cast<std::size_t>(type.count) * childSize(type.pointee);
+    return layout;
+  case TypeKind::Tuple: {
+    std::uint32_t align = 1;
+    bool unknown = false;
+    std::size_t size = 0;
+    for (const TypeId member : parts) {
+      if (childUnknown(member)) {
+        unknown = true;
+        break;
+      }
+      const std::uint32_t memberAlign = static_cast<std::uint32_t>(childAlign(member));
+      if (memberAlign == 0) {
+        // A member with no alignment is a member with no object, which `tupleOf`
+        // refuses; the layout of a type that cannot exist is not a number, and
+        // the zero `unknown` path below leaves the answer at 0 as well.
+        unknown = true;
+        break;
+      }
+      align = std::max(align, memberAlign);
+      // The padding before this member, and then the member itself.
+      size = ((size + memberAlign - 1U) / memberAlign) * memberAlign;
+      size += childSize(member);
+    }
+    layout.unknownSize = unknown;
+    if (!unknown) {
+      // The whole object is padded to its strictest member's alignment.
+      layout.align = static_cast<std::uint16_t>(align);
+      layout.size = ((size + align - 1U) / align) * align;
+    }
+    return layout;
+  }
+  case TypeKind::Param:
+    // A binder stands for a type argument, and an argument *is* an object -- what
+    // it does not have, until it is substituted, is a width. An alignment of 1 is
+    // what keeps a product of binders from claiming anything (`alignOf`'s rule).
+    layout.align = 1;
+    layout.unknownSize = true;
+    return layout;
+  case TypeKind::Error:
+  case TypeKind::Void:
+  case TypeKind::Never:
+  case TypeKind::Function:
+  case TypeKind::IntLiteral:
+  case TypeKind::FloatLiteral:
+    // No object representation: size 0 and alignment 0. A deferred literal is
+    // here for a different reason -- nothing decides its width yet, so nothing
+    // may store one -- and `isObject` is the predicate that says so.
+    layout.align = 0;
+    return layout;
+  }
+  return layout;
+}
+
+// The child a type holds *outside* its member sequence: a pointee for the three
+// constructors that have one, and a return type for a function. Every other kind
+// is made of its members and nothing else.
+//
+// The span points into the `Type` being built, which outlives the call that
+// builds it -- the one place a `Type` is read while it is *not* in the store yet,
+// and the reason this is a free function here rather than a member of `Type`.
+[[nodiscard]] static std::span<const TypeId> singleChild(const Type& type) {
+  switch (type.kind) {
+  case TypeKind::Pointer:
+  case TypeKind::Array:
+  case TypeKind::Slice:
+    return std::span<const TypeId>(&type.pointee, 1);
+  case TypeKind::Function:
+    return std::span<const TypeId>(&type.returnType, 1);
+  default:
+    return {};
+  }
+}
+
+std::uint32_t TypeStore::nodesOf(std::span<const TypeId> parts,
+                                 std::span<const TypeId> children) const {
+  // Saturated at one past the bound: the arithmetic is on a structure a caller is
+  // asking about, and the answer is only ever compared against the bound.
+  constexpr std::uint32_t kOver = support::kMaxTypeNodes + 1;
+  std::uint32_t nodes = 1;
+  for (const TypeId child : children) {
+    nodes += childNodes(child);
+    if (nodes > support::kMaxTypeNodes) {
+      return kOver;
+    }
+  }
+  for (const TypeId part : parts) {
+    nodes += childNodes(part);
+    if (nodes > support::kMaxTypeNodes) {
+      return kOver;
+    }
+  }
+  return nodes;
 }
 
 std::uint64_t TypeStore::hashOf(const Type& type, std::span<const TypeId> parts) const {
@@ -132,7 +331,7 @@ bool TypeStore::equalParts(const Type& type, std::span<const TypeId> parts) cons
     return false;
   }
   for (std::uint32_t i = 0; i < type.paramCount; ++i) {
-    if (params_[type.firstParam + i] != parts[i]) {
+    if (sequences_[type.sequence][i] != parts[i]) {
       return false;
     }
   }
@@ -144,6 +343,20 @@ TypeId TypeStore::intern(const Type& type) {
 }
 
 TypeId TypeStore::internSequence(const Type& type, std::span<const TypeId> parts) {
+  // The structural bound, and the only place it is enforced for the kinds that
+  // reach the store one at a time -- `*T`, `[N]T`, `[]T` and every scalar. The two
+  // kinds with a *member list* ask it in their own builders, before they lay the
+  // structure out (`tupleOf`, `function`), because laying out a structure whose
+  // members were reused doubles per level and the point of the bound is to be
+  // reached before that arithmetic rather than after it.
+  //
+  // It is *not* compared for identity: how large a structure is follows from its
+  // children, and hashing or comparing it would make two identical types with
+  // different histories unequal (`hashOf`, which mixes what a type *is*).
+  const std::uint32_t nodes = nodesOf(parts, singleChild(type));
+  if (nodes > support::kMaxTypeNodes) {
+    return kInvalidType;
+  }
   const std::uint64_t hash = hashOf(type, parts);
   const auto range = index_.equal_range(hash);
   for (auto it = range.first; it != range.second; ++it) {
@@ -157,13 +370,28 @@ TypeId TypeStore::internSequence(const Type& type, std::span<const TypeId> parts
   if (types_.size() >= maxTypes_) {
     return kInvalidType;
   }
-  // The sequence is appended only now, and `type.firstParam` is the position it
-  // will have: a caller that repeated an existing type never reached this line, so
-  // a signature written twice does not grow the arena (`function`'s rule, and now
+  // The sequence is appended only now, and the row it takes is the one the type
+  // records: a caller that repeated an existing type never reached this line, so
+  // a signature written twice does not grow the table (`function`'s rule, and now
   // the tuple's as well).
+  //
+  // `parts` may be a span over a **row** -- `intern` is called with `partsOf` of a
+  // type the store already holds, which is what substituting a tuple does -- and
+  // appending to a `deque` leaves that span pointing where it did.
   const TypeId id{static_cast<std::uint32_t>(types_.size())};
-  params_.insert(params_.end(), parts.begin(), parts.end());
-  types_.push_back(type);
+  Type stored = type;
+  stored.sequence = static_cast<std::uint32_t>(sequences_.size());
+  stored.nodes = nodes;
+  // The layout is computed here, once, from the children's -- which is the whole
+  // point of storing it: the same question is asked again by every use of this
+  // type, and this store is a DAG, so asking it by walking would cost the *tree*
+  // the type spells out every single time (`type.h`, on `Type::size`).
+  const Layout layout = layoutOf(type, parts);
+  stored.size = layout.size;
+  stored.align = layout.align;
+  stored.unknownSize = layout.unknownSize;
+  sequences_.emplace_back(parts.begin(), parts.end());
+  types_.push_back(stored);
   index_.emplace(hash, id);
   return id;
 }
@@ -334,14 +562,19 @@ TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::
 }
 
 TypeId TypeStore::function(TypeId returnType, std::span<const TypeId> params, bool variadic) {
+  // The structural bound **before** anything reads the structure: a signature is
+  // the second shape that can be doubled per level by reusing a type, and the
+  // refusal has to be cheaper than the work it prevents (`limits.h`).
+  if (nodesOf(params, std::span<const TypeId>(&returnType, 1)) > support::kMaxTypeNodes) {
+    return kInvalidType;
+  }
   Type type;
   type.kind = TypeKind::Function;
   type.returnType = returnType;
-  // The position the parameters *would* take, and the one the comparison below
-  // reads for the candidates that are already in the arena. The append happens in
-  // `internSequence`, after the search -- so a repeated signature does not grow
-  // the arena, which is why this cannot be a plain `intern`.
-  type.firstParam = static_cast<std::uint32_t>(params_.size());
+  // The count is what the comparison below reads for the candidates already in
+  // the table; the row the parameters take is assigned in `internSequence`, after
+  // the search -- so a repeated signature does not grow the table, which is why
+  // this cannot be a plain `intern`.
   type.paramCount = static_cast<std::uint32_t>(params.size());
   // `variadic` is part of the fields the comparison asks about because it is part
   // of what a function type *is*: interning `f(i32)` and `f(i32, ...)` to one id
@@ -365,6 +598,13 @@ TypeId TypeStore::tupleOf(std::span<const TypeId> members) {
     }
     unknown = unknown || hasUnknownSize(member);
   }
+  // The structural bound, before the layout arithmetic below: `tupleSize` walks
+  // the members' own structures, so a product that reuses a large type twice --
+  // `(P, P)` where `P` was built the same way -- would pay for the whole
+  // structure at every level. Asked here, the cost is one step per member.
+  if (nodesOf(members) > support::kMaxTypeNodes) {
+    return kInvalidType;
+  }
   // The layout arithmetic, for the same reason the array does it: a product whose
   // size does not fit `size_t` is refused where it is built, so `sizeOf` below is
   // a number and not a question. It also means the size and every member offset
@@ -379,7 +619,6 @@ TypeId TypeStore::tupleOf(std::span<const TypeId> members) {
   }
   Type type;
   type.kind = TypeKind::Tuple;
-  type.firstParam = static_cast<std::uint32_t>(params_.size());
   type.paramCount = static_cast<std::uint32_t>(members.size());
   return internSequence(type, members);
 }
@@ -521,34 +760,14 @@ bool TypeStore::isParamOf(TypeId id, std::uint32_t owner) const {
   return isParam(id) && get(id).owner == owner;
 }
 bool TypeStore::hasUnknownSize(TypeId id) const {
-  if (!known(id)) {
-    return false;
-  }
-  switch (get(id).kind) {
-  case TypeKind::Param:
-    // A binder stands for a type argument, and a type argument *is* an object --
-    // what it does not have, until it is substituted, is a width.
-    return true;
-  case TypeKind::Array:
-    // An array is an object of its element, so it is exactly as sizeable as the
-    // element is: `[4]T` has no size until `T` does, and `[4]i32` always has one.
-    return hasUnknownSize(get(id).pointee);
-  case TypeKind::Tuple:
-    // A product is its members laid out in order, so one member without a size
-    // is a product without a size -- the rule `tupleSize` applies, asked from
-    // the other direction.
-    for (const TypeId member : membersOf(id)) {
-      if (hasUnknownSize(member)) {
-        return true;
-      }
-    }
-    return false;
-  default:
-    // A pointer and a view are one or two words of their own; their element's
-    // width never enters their layout (`slices.md` decision 5).
-    return false;
-  }
+  // Stored with the layout, and the rule is `layoutOf`'s: a binder has no width
+  // yet, an aggregate built out of one has none either, and a pointer or a view
+  // has one whatever it points at (`slices.md` decision 5). Asked per position
+  // that would otherwise do arithmetic on a width -- an array's element product,
+  // a product's layout -- so it is answered by a read.
+  return known(id) && get(id).unknownSize;
 }
+
 bool TypeStore::isAggregate(TypeId id) const {
   // Three kinds and not one, because `isArray` is asked wherever the *storage* is
   // the subject (`sizeof` of the object, an element count, a copy) and a view is
@@ -708,130 +927,23 @@ std::string TypeStore::spelling(TypeId id) const {
 }
 
 std::size_t TypeStore::sizeOf(TypeId id) const {
-  if (!known(id)) {
-    return 0;
-  }
-  const Type& type = get(id);
-  switch (type.kind) {
-  case TypeKind::Bool:
-  case TypeKind::Char:
-    return 1;
-  case TypeKind::Int:
-    return type.bits / 8U;
-  case TypeKind::Float: {
-    // The ABI's slot for the width: the value's bytes rounded up to the
-    // alignment the target states for it. That is the same number as the width
-    // for `f32`, `f64` and `f128` on every target here, and it is the one place
-    // the two questions are not the same: `f80` is ten bytes of value in a
-    // sixteen-byte slot on System V and in a **four**-byte slot on i386, where
-    // the object is twelve bytes (`f80:32`). Answering 16 there would make the
-    // object disagree with the type LLVM emits (`x86_fp80`), and every byte
-    // count taken from this function -- `sizeof`, a debug record, a future
-    // `memcpy` length -- would be four bytes too long.
-    const std::size_t bytes = type.bits / 8U;
-    const std::size_t align = alignOf(id);
-    // An alignment of zero means "this kind has no object", which a float never
-    // is -- the guard is here so the arithmetic cannot divide by it, and so a
-    // reader does not have to hold two kinds in mind to see that it cannot.
-    return align == 0 ? bytes : ((bytes + align - 1U) / align) * align;
-  }
-  case TypeKind::Str:
-  case TypeKind::Pointer:
-    // `*void` included: a pointer to `void` is a pointer, and its size is the
-    // pointer's. It is `void` that has no object representation, not a pointer
-    // to one.
-    return target_.pointerBits / 8U;
-  case TypeKind::Array:
-    // The element's **complete** size, padding included, times the count -- the
-    // rule that makes `p + 1` land on the next element and `sizeof(TABLE)` agree
-    // with the allocator (`arrays.md` decision 6). It cannot overflow: `arrayOf`
-    // refused a product that would not fit, so this multiply is the same number
-    // the store already computed.
-    return static_cast<std::size_t>(type.count) * sizeOf(type.pointee);
-  case TypeKind::Slice:
-    // Two words and no data: the descriptor is a pointer and a length, and
-    // `sizeof(s)` answers for the *view* (`slices.md` decision 5). The multiply
-    // cannot overflow: the pointer width is 16, 32 or 64 bits, so the product is
-    // at most 16 bytes.
-    return static_cast<std::size_t>(target_.pointerBits / 8U) * 2U;
-  case TypeKind::Tuple:
-    // The one layout rule, asked of the same function the builder used to refuse
-    // a product that does not fit: a tuple that is *in* the store has a size, so
-    // the `value_or` is unreachable and says so rather than pretending.
-    return tupleSize(membersOf(id)).value_or(0);
-  case TypeKind::Error:
-  case TypeKind::Void:
-  case TypeKind::Never:
-  case TypeKind::Function:
-  case TypeKind::IntLiteral:
-  case TypeKind::FloatLiteral:
-  // A type parameter has no width *yet*: the width is the argument's, and the
-  // argument is not known until the declaration is instantiated. The one place
-  // that could believe this zero is the array, and `arrayOf` asks
-  // `hasUnknownSize` before it does any arithmetic.
-  case TypeKind::Param:
-    return 0;
-  }
-  return 0;
+  // **Read, never walked.** The size is computed once, when the type is built,
+  // and `layoutOf` is where the rule lives (`type.h`, on `Type::size`): this
+  // store is a DAG, so a type can spell out a structure many times its own size,
+  // and the size of a type is asked again by every use of it.
+  //
+  // 0 for `void`, a function, a deferred literal and the poison -- they have no
+  // object representation -- and 0 for an aggregate whose width is not decided
+  // yet, which is the case `hasUnknownSize` tells apart from the first.
+  return known(id) ? get(id).size : 0;
 }
 
 std::size_t TypeStore::alignOf(TypeId id) const {
-  if (!known(id)) {
-    return 0;
-  }
-  const Type& type = get(id);
-  switch (type.kind) {
-  case TypeKind::Bool:
-  case TypeKind::Char:
-    return 1;
-  case TypeKind::Int:
-    // A width is not an alignment on every target: i386's ABI aligns a 64-bit
-    // integer to four bytes (`i64:32:64`), and the number this function answers
-    // is the one every emitted `align N` is built from -- so it has to be the
-    // target's, not the width's.
-    return type.bits == 64 ? target_.int64AlignBits / 8U : type.bits / 8U;
-  case TypeKind::Float:
-    switch (type.bits) {
-    case 64:
-      return target_.float64AlignBits / 8U;
-    case 80:
-      return target_.float80AlignBits / 8U;
-    default:
-      // 32 and 128 are aligned to their own size on every target this compiler
-      // names (`f32:32` by default, `f128:128` by default and stated on i386).
-      return type.bits / 8U;
-    }
-  case TypeKind::Str:
-  case TypeKind::Pointer:
-    return target_.pointerBits / 8U;
-  case TypeKind::Array:
-    // The element's alignment, not the object's size: `[3]i8` is aligned like an
-    // `i8`, and aligning it like a machine word would make every `[3]i8` field of
-    // a future `struct` three bytes of padding wider than the C one.
-    return alignOf(type.pointee);
-  case TypeKind::Slice:
-    // The descriptor is a pointer and a length, so it is aligned like a pointer
-    // -- not like its element. `[]u8` is eight-byte aligned on a 64-bit target,
-    // and a `struct` that holds one gets the padding a C compiler would give it.
-    return target_.pointerBits / 8U;
-  case TypeKind::Param:
-    // Nothing is known to need aligning, which is the only true answer available
-    // and the one that keeps a product of binders from claiming anything.
-    return 1;
-  case TypeKind::Tuple: {
-    // The largest member alignment, and never zero: every member is an object
-    // (`tupleOf`), and an object has an alignment. A product is aligned like its
-    // strictest member, which is what makes `(i8, i64)` a sixteen-byte object
-    // starting at an eight-byte boundary.
-    std::size_t align = 1;
-    for (const TypeId member : membersOf(id)) {
-      align = std::max(align, alignOf(member));
-    }
-    return align;
-  }
-  default:
-    return 0;
-  }
+  // Stored beside the size, and 0 wherever there is no object representation:
+  // `Bool`/`Char` 1, an integer its target alignment, a float its ABI slot
+  // (`f80` included), a pointer the pointer width, an array and a product their
+  // strictest member's. The rule is `layoutOf`'s.
+  return known(id) ? get(id).align : 0;
 }
 
 TypeId TypeStore::defaultOf(TypeId id) {

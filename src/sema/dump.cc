@@ -172,6 +172,31 @@ std::string dumpTypedFile(const ast::LoweredFile& file, const TypedFile& typed,
            "\n";
   }
 
+  // The instances, before the tree, for the third time for the same reason: a
+  // generic function is *not* one function, and which ones came into being is not
+  // readable from the tree -- every call says `identity`, and the difference
+  // between two calls is an entry in this table (`generics.md`, § 5). The order is
+  // discovery order, which is why it is printed rather than sorted.
+  if (!typed.instances().empty()) {
+    out += "# instances " + std::to_string(typed.instances().size()) + "\n";
+    for (std::size_t i = 0; i < typed.instances().size(); ++i) {
+      const InstantiationInfo& instance = typed.instances()[i];
+      out += "  #" + std::to_string(i) + "  ";
+      out += instance.name;
+      out += "  args=(";
+      for (std::size_t a = 0; a < instance.args.size(); ++a) {
+        out += (a == 0 ? "" : ", ") + types.spelling(instance.args[a]);
+      }
+      out += ")";
+      out += "  symbol=" + instance.symbol;
+      // The signature *after* substitution, which is the point of the table: this
+      // is the type a hand-written non-generic declaration of the same shape
+      // would have, and it is what the instance's body is checked against.
+      out += "  signature=" + types.spelling(instance.functionType);
+      out += '\n';
+    }
+  }
+
   out += "# typed " + std::to_string(file.nodeCount()) + " nodes\n";
 
   // An explicit stack for the same reason `ast::dumpAst` uses one: a deep tree

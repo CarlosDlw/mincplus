@@ -15,7 +15,7 @@ namespace {
 // compile error here rather than a hole to find.
 // NOLINTBEGIN(readability-identifier-naming): table name follows the project's
 // convention for the other stages' code tables.
-constexpr std::array<SemaErrorCodeInfo, 58> kSemaErrorCodeInfos{{
+constexpr std::array<SemaErrorCodeInfo, 64> kSemaErrorCodeInfos{{
     {SemaErrorCode::UnknownType, "sema-unknown-type", false},
     {SemaErrorCode::MalformedType, "sema-malformed-type", false},
     {SemaErrorCode::TypeAliasCycle, "sema-type-alias-cycle", false},
@@ -73,7 +73,13 @@ constexpr std::array<SemaErrorCodeInfo, 58> kSemaErrorCodeInfos{{
     {SemaErrorCode::AddressFromConstant, "sema-address-from-constant", false},
     {SemaErrorCode::DestructuringArity, "sema-destructuring-arity", false},
     {SemaErrorCode::DestructuringNotProduct, "sema-destructuring-not-product", false},
-    {SemaErrorCode::GenericsNotRead, "sema-generics-not-read", false},
+    {SemaErrorCode::GenericExtern, "sema-generic-extern", false},
+    {SemaErrorCode::GenericMain, "sema-generic-main", false},
+    {SemaErrorCode::GenericNameNotValue, "sema-generic-name-not-value", false},
+    {SemaErrorCode::GenericNotInferable, "sema-generic-not-inferable", false},
+    {SemaErrorCode::GenericTypeArgs, "sema-generic-type-args", false},
+    {SemaErrorCode::GenericOperation, "sema-generic-operation", false},
+    {SemaErrorCode::GenericInstanceLimit, "sema-generic-instance-limit", false},
 }};
 // NOLINTEND(readability-identifier-naming)
 

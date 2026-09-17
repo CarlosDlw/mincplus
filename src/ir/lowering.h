@@ -75,8 +75,14 @@ class DebugInfo;
 
 class Lowering {
 public:
+  // The store is **mutable**, and that is what instantiation costs: a generic body
+  // is lowered once per instance, and reading one of its types through the
+  // instance's substitution builds the type the store already had -- `[4]T` with
+  // `T := i32` is `[4]i32`, one intern and one `TypeId`. The alternative would be a
+  // second table per instance, which is the thing `generics.md` decision 20 exists
+  // to avoid.
   Lowering(const ast::LoweredFile& file, const resolve::DefMap& defs, const sema::TypedFile& typed,
-           const sema::TypeStore& types, const support::Interner& symbols,
+           sema::TypeStore& types, const support::Interner& symbols,
            const LoweringOptions& options);
   ~Lowering();
   Lowering(const Lowering&) = delete;
@@ -129,8 +135,17 @@ private:
   [[nodiscard]] lex::TokenKind tokenKindOf(ast::AstId id) const;
 
   // --- the answers `sema` published -------------------------------------------
+  //
+  // **Every type read passes through `concrete`.** A generic body is checked
+  // *once*, abstractly, so the types `sema` published for the nodes inside it hold
+  // its `Param`s -- and this stage is where they stop being abstract: the body is
+  // lowered once per instance, and the instance's substitution is applied here,
+  // at the boundary, rather than by a second table (decision 20). Outside an
+  // instance this is the identity, so a non-generic unit reads exactly the types
+  // it always read.
+  [[nodiscard]] sema::TypeId concrete(sema::TypeId type) const;
   [[nodiscard]] sema::TypeId typeOf(ast::AstId id) const {
-    return typed_.typeOf(id);
+    return concrete(typed_.typeOf(id));
   }
   // The member position of a `FieldExpr`, read from the token the source wrote:
   // `t.0` is the member at the *constant* index this answers, and the checker
@@ -148,11 +163,15 @@ private:
   // (`BinaryExpr`'s left operand is 0, a call's first argument is 1 because the
   // callee is 0) -- a second copy of a rule is exactly what the record exists to
   // remove.
-  [[nodiscard]] const sema::Coercion* coercionFor(ast::AstId consumer, ast::AstId child) const;
+  // By value, because the two types are the instance's: the record holds the
+  // *template*'s pair (`u8` -> `T`) and what the lowering needs is the pair the
+  // instance asks for (`u8` -> `i32`). One copy per conversion instead of a table.
+  [[nodiscard]] std::optional<sema::Coercion> coercionFor(ast::AstId consumer,
+                                                          ast::AstId child) const;
   // The access obligation at a place-expression that reaches memory through a
   // pointer. `nullptr` means the place denotes a binding, which needs no
   // obligation because the language already proved it is there.
-  [[nodiscard]] const sema::AccessObligation* obligationFor(ast::AstId place) const;
+  [[nodiscard]] std::optional<sema::AccessObligation> obligationFor(ast::AstId place) const;
   [[nodiscard]] bool isAccessNode(ast::AstId id) const;
 
   // --- debug information --------------------------------------------------------
@@ -358,12 +377,32 @@ private:
   [[nodiscard]] std::uint64_t alignmentOf(sema::TypeId type) const;
 
   // --- items ------------------------------------------------------------------
+  // Every non-generic function, and then every instance of every generic one.
   void declareFunctions();
+  // One `llvm::Function` per instance, named by its mangled symbol. Called at the
+  // end of `declareFunctions`, because an instance is a function and the two
+  // passes are one pass over two tables.
+  void declareInstances();
   // The file-scope objects, before any function is lowered: a body that reads one
   // has to find the `GlobalVariable` that already exists, exactly as a call has
   // to find the `Function` its declaration made.
   void declareGlobals();
   void defineFunction(const sema::FunctionInfo& info);
+  // The same body, under an instance's substitution (`generics.md`, § 5). The body
+  // is lowered **once per instance** and not once: this is the one place where the
+  // "one pass over the tree" assumption is deliberately given up, and the
+  // substitution is applied at every type read (`concrete`) rather than by a
+  // second table.
+  void defineInstance(std::uint32_t index);
+  // Both paths land here: the ABI, the frame, the parameters and the body are the
+  // same work whether the function is written in the source or built for a pair
+  // (declaration, arguments). `instance` is that pair, or null for a function the
+  // source wrote whole -- and it is the one thing the two paths do not share,
+  // because it carries the two names (`identity<i32>` for a debugger,
+  // `__M8_identityi32` for the linker) and the two lists the template parameters
+  // are printed from.
+  void defineBody(const sema::FunctionInfo& decl, llvm::Function* function, sema::TypeId signature,
+                  const sema::InstantiationInfo* instance);
   [[nodiscard]] std::string linkageName(resolve::DefId def) const;
   // Gives every block that has no terminator one, so a construct that leaves a
   // branch target unreached still verifies. An `unreachable` is the honest
@@ -695,7 +734,7 @@ private:
   const ast::LoweredFile& file_;
   const resolve::DefMap& defs_;
   const sema::TypedFile& typed_;
-  const sema::TypeStore& types_;
+  sema::TypeStore& types_;
   const support::Interner& symbols_;
   // The lowering's options, kept whole rather than destructured: `debugInfo` is
   // read once here to decide whether `debug_` exists, and `producer` is the string
@@ -749,6 +788,21 @@ private:
   // function: a global belongs to the unit, and one lives all the way through it.
   std::unordered_map<std::uint64_t, llvm::GlobalVariable*> globals_;
   std::unordered_map<std::uint64_t, llvm::Function*> functions_;
+
+  // --- the instance being lowered -------------------------------------------------
+  //
+  // `kNoInstance` for a body that is not one, which is every non-generic function
+  // and is what makes the substitution below the identity there. Inside an
+  // instance the three fields are its whole context: which declaration's `Param`s
+  // to replace (`instanceOwner_`), what to replace them with (`instanceArgs_`),
+  // and which instance this is (`currentInstance_`, for the call table).
+  std::uint32_t currentInstance_ = sema::kNoInstance;
+  std::uint32_t instanceOwner_ = 0;
+  std::vector<sema::TypeId> instanceArgs_;
+  // One `llvm::Function` per instance, by the index `sema` published. A separate
+  // map from `functions_` on purpose: an instance is not a declaration, and the
+  // lookup a call makes is decided by *which* of the two it is.
+  std::vector<llvm::Function*> instances_;
   std::unordered_map<std::string, llvm::GlobalVariable*> strings_;
   // The checked build's state: the runtime entry, once, and the message objects
   // by their text. Both are per module and both are created on demand, so a unit

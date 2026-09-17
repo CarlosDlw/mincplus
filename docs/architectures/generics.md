@@ -599,6 +599,8 @@ Each with its own code and sentence, each at the earliest stage that can decide:
 | `identity::<str>(x)` where the body uses `+` | the argument does not satisfy the constraint; the class is named |
 | `f::<[]T>(...)` where the solution mentions its own binder | no finite instance exists (§ *Occurs*) |
 | an instance list past its budget | § *Instantiation*; names the declaration, the count and the limit |
+| `x as Pair<i32, bool>` | a `<` after a type in a **cast** is a comparison (`x as i32 < 3`), so the list cannot be read there. Refused by name (`parse-cast-to-generic-type`), with the list consumed so one mistake stays one sentence and the sentence names the fix: a generic type *is* the type it abbreviates |
+| a structure past `kMaxTypeNodes` | the store is a DAG, so a type that reuses a large one twice per level doubles per level; refused where it is built, before the arithmetic that would lay it out |
 
 Two of those deserve the note that they are *already* right: a `void` type
 argument becomes `fn void identity(value: void)` after substitution, which the
@@ -685,8 +687,8 @@ Each step with the test it comes with.
 
 ## What has landed
 
-The **parser** half is in the tree, and so is the **alias** half of the type
-model. A generic `fn` is the next stage.
+The whole of it except constraints: the **parser**, the **alias** and the
+**generic function**, from the declaration to the emitted instance.
 
 | Where | What |
 |---|---|
@@ -695,21 +697,46 @@ model. A generic `fn` is the next stage.
 | `parse` | Two new codes, and only two: `parse-expected-type-arg-close` (a list with no `>`) and `parse-stray-type-arg-close` (a `>`/`=` that closes nothing). `parse-constraint-not-read` refuses `<T: Ordered>`, because a constraint that parses and is then ignored is a declaration promising a guarantee no stage checks |
 | `parse` | The scanner that splits `fn`'s return type from its name treats an identifier's `<...>` as **part of the word** and remembers the name as the word's *first token*: `fn Vec<i32> f<T>()` is the type `Vec<i32>`, the name `f`, and the binders `<T>`. The lookahead's copy of the closing rule is `skipTypeArgList`, held to `closeList` by the tests that pin all four spellings |
 | `ast` | nothing: the tree lowering is structural, so both nodes ride it. The `NodeKind` values are `GenericParams` and `TypeArgList` |
+| `a declaration's return type` | read by the **type reader** and not walked token by token, and that needed a mechanism the grammar did not have: a **bound**. The scan (`scanTypeRun`) finds where the name begins, and `parseBoundTypeRun` reads up to that token with `TokenBound` making `atEnd()` true there — so `fn Vec<i32> f()` gets a `TypeArgList` like every other type position instead of the flat words `Vec < i32 >`, and `fn Pair<T, K> make<T, K>()` is a return type the reader below can resolve. A bound is a token *range*, restored by RAII; a flag on the parser would be state that survives the token stream going the wrong way, which is the failure this parser does not recover from |
+| `sema` | the **instance**: `runInstantiations`, a worklist keyed on `(declaration, arguments)` seeded by the concrete calls and expanded per instance of an enclosing generic, with `options.maxInstances` as the budget and `CallTarget` recording which instance each **call site** reaches — keyed on the pair, because one call node inside a generic body is lowered once per instance of the function that contains it |
+| `sema` | the **two names** of an instance: `identity<i32>` (what a diagnostic and a `DW_AT_name` print) and `__M8_identityi32` (what the linker sees), both derived from `(name, arguments)` |
+| `ir` | a **function per instance**: `defineFunction` takes the instance's substituted signature, the body is lowered once per instance with the binders replaced, the debug record emits one `DW_TAG_subprogram` per instance with `DW_AT_name = identity<i32>` and a `DW_TAG_template_type_parameter` per binder, and a call reaches its instance through `callTarget` |
+| `driver` | `check --ast` prints the instance table (`# instances`) — the one fact the tree cannot show, because every call says `identity` and the *set* of functions is what changes |
 | `sema` | one new kind, `Param`, whose identity is `(owner, binder)` and whose spelling is a third fact kept beside it; `TypeStore::substitute`, which rebuilds a type through the same builders so the *result* meets the array and product rules a written type meets; `TypePart.hasArgs` and `TypeName.{binders, owner}`, which is how a use reaches the template; and the three refusals a use can produce — a generic name with no arguments, the wrong count, arguments on a name that takes none — each a `sema-malformed-type` sentence that names the numbers and the spelling to write |
 | `sema` | a **gate on functions only**: `sema-generics-not-read`, once per unit, when a `fn` declares binders — its parameters, its body and its instantiations are the next stage. Without it, a binder would be an unknown type name with a "did you mean `i8`?" note, which is a sentence about a typo for something the reader wrote on purpose |
 | `ir` | nothing new, and an **invariant** added: a `Param` reaching the LLVM mapper or the debug records is `ir-internal`. Instantiation substitutes every binder before a module is built, and a generic *alias* use is already a concrete type by the time the lowering sees it — `Rows<i32>` is `[4]i32` |
-| `examples` | `021_generic_alias.mx`: nested uses, a constructor over a use, a use in a product member, a count that comes from the argument, and an alias built on another. It is checked, dumped, lowered and **run** by `make examples` |
+| `examples` | `021_generic_alias.mx`: nested uses, a constructor over a use, a use in a product member, a count that comes from the argument, and an alias built on another. `022_generics.mx`: a binder in the parameter and in the return type, two binders, a generic alias as the return type, an explicit `::<...>` call, a template calling a template with its own binder, and the instances all of it produces. Both are checked, dumped, lowered and **run** by `make examples` |
 
-Tests: `tests/unit/parse/generics_test.cc` (15 cases: both declarations, the
+Two bounds came out of this stage, and both are `support/limits.h`: the
+**instance budget** (`SemaOptions::maxInstances`, reported once, § 5) and
+`kMaxTypeNodes`, the number of types one *type* may be made of. The second is
+worth a sentence here because it was found by building this stage and not by
+reviewing it: `type P1 = (P0, P0);` doubles per line, so sixteen lines is a
+million-node structure, and the store is a **DAG** -- interning means the two
+halves of `(P0, P0)` are one type with two parents. Every walk that read the
+type as a *tree* was therefore exponential in its depth, and the layout was the
+worst of them because it is asked per use. So: the structure is refused past
+`kMaxTypeNodes`, before the arithmetic that would lay it out, and `size`,
+`align` and `unknownSize` are **stored** on the `Type` when it is built
+(`layoutOf`, in `type_store.cc`) instead of recomputed by walking. A 2^14-node
+alias chain went from 483 ms to 56 ms, and the refusal from 501 ms to 22 ms.
+
+Tests: `tests/unit/parse/generics_test.cc` (19 cases: both declarations, the
 nested `>>` and `>>>` splits with the *token* still one token in the tree, `>=`
 and `>>=` reaching the binding that owns the `=`, the three refusals, the two
 call-site forms), `tests/unit/sema/generic_alias_test.cc` (16 cases: the
 substitution and its structural identity, nesting, a constructor around a use, an
 array whose size comes from the argument, one generic alias built on another, a
 use inside a product member, two declarations each calling their binder `T`, and
-every refusal with the numbers its sentence names), the `::` row in the lexer's
-punctuator table, one input for each new code in the tables that prove every code
-is reachable, and one input for the sema gate.
+every refusal with the numbers its sentence names),
+`tests/unit/sema/generic_call_test.cc` (11 cases: an explicit instance and its
+two names, inference from an argument, two calls collapsing to one instance, a
+binder nothing decides naming the form to write, a generic alias as a return
+type, a binder under `/` needing its constraint, the wrong count, an argument
+that cannot be stored, a doubling structure refused by name rather than built,
+and a wide product that is ordinary), the `::` row in the lexer's punctuator
+table, and one input for each new code in the tables that prove every code is
+reachable.
 
 ## Decisions
 
@@ -736,6 +763,8 @@ is reachable, and one input for the sema gate.
 | 19 | **Monomorphization, not Go's dictionaries** | Go's own document says its DWARF *'indicates the dictionary entry that will contain the concrete type'* — the debugger resolves a variable's type at run time. Here `value` is `i32` in the DWARF, statically, because the instance is a real function |
 | 20 | **A `Param` never reaches `ir`; the lowering stopping on one is an internal error** | The invariant that makes the substitution boundary a fact instead of a hope, and it is the one thing a test can assert for the whole stage |
 | 21 | **`extern`, variadic, `main`, a repeated binder, a built-in word as a binder, a bare generic name as a value, and a generic name without arguments in a type are all refused** | Each has no meaning rather than a meaning we would have to invent, and the earliest stage that can decide decides |
+| 22 | **A declaration's return type is read against a *bound* the scan found, and the bound is a token range restored by RAII** | The type reader cannot stop (a word after a type is another word -- `fn Vec<i32> f()` would swallow `f`) and the scan cannot parse. Rather than a flat token run in the tree -- which is what made `fn Pair<T, K> make<T, K>()` unresolvable -- the run is read by the reader with `atEnd()` true at the token the scan named. A *range* and not a flag: a flag is state that survives the stream going the wrong way, and this parser recovers by bailing out, not by resynchronizing |
+| 23 | **The type store is a DAG, so its layouts are stored and its structures are bounded** | Interning makes `(P0, P0)` one type with two parents, so a walk of the *tree* it spells out is exponential in depth; `kMaxTypeNodes` refuses a structure past 65536 nodes before the arithmetic, and `size`/`align`/`unknownSize` are computed once, when the type is built. Measured: a 2^14-node alias chain 483 ms → 56 ms, and the refusal 501 ms → 22 ms |
 
 ## What is deliberately not done here
 

@@ -42,6 +42,22 @@ struct GreenToken {
 };
 
 struct GreenChild {
+  // Where this child starts inside its parent, in bytes: the sum of the widths
+  // of the children before it. **Filled by the cache** when a node is interned
+  // (`GreenCache::node`), and 0 in the array a caller passes to it -- a caller
+  // builds children in order and has no reason to compute what the node it is
+  // handing them to already will.
+  //
+  // It is here, and not computed on the way down, because the alternative is
+  // quadratic: a cursor's `child(i)` had to sum the widths of every child before
+  // `i`, so the natural loop `for (i < childCount()) child(i)` cost O(n^2) on a
+  // *wide* node -- a product of a thousand members, an initializer list, an
+  // argument list -- which is a shape real files have. One word per child, and
+  // the walk is linear.
+  //
+  // It costs nothing: the struct is two pointers and a flag either way, and the
+  // flag's padding is what this now uses.
+  std::uint32_t offset = 0;
   bool isNode = false;
   const GreenNode* node = nullptr;
   const GreenToken* token = nullptr;
@@ -69,6 +85,14 @@ struct GreenNode {
   std::uint32_t width = 0;
   std::span<const GreenChild> children;
 };
+
+// Defined out of line and still in the header, and after `GreenNode` because it
+// reads through the pointer: this is the hottest one-liner in the tree -- every
+// walk asks every child for its width -- and an out-of-line call per child is
+// what turned a walk of a wide node into a bottleneck rather than a walk.
+inline std::uint32_t GreenChild::width() const {
+  return isNode ? node->width : token->width();
+}
 
 // Hash-consing cache. Two identical subtrees come back as the *same pointer*,
 // which is what makes the green structure a DAG rather than a tree and what

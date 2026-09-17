@@ -58,6 +58,13 @@ struct SemaOptions {
   // into an integer and back.
   bool warnProvenance = false;
   std::size_t maxTypes = support::kMaxTypesPerUnit;
+  // How many generic **instances** one unit may have. A declaration that grows its
+  // own argument every time (`fn i32 g<T>(x: T) { return g::<*T>(x); }`) has no
+  // last instance, so the count is where the compiler stops -- and it is *stated*
+  // and settable rather than a constant nobody can see, which is the difference
+  // between this and the limit rustc reports as "reached the recursion limit while
+  // instantiating" (`generics.md`, § 5).
+  std::size_t maxInstances = 1024;
 };
 
 struct SemaOutput {
@@ -127,6 +134,16 @@ public:
 
   // The store every `TypeId` in every answer indexes. A later stage that needs
   // to spell or measure a type asks here rather than keeping a copy.
+  //
+  // **Mutable**, and the one consumer that needs it is the lowering: a generic
+  // body is lowered once per instance, and reading one of its types through the
+  // instance's substitution *builds* the type the store already had (`[4]T` with
+  // `T := i32` is `[4]i32`, one intern). A `const` store would force the lowering
+  // to carry a second type table per instance, which is exactly what
+  // `generics.md` decision 20 removes.
+  [[nodiscard]] TypeStore& types() {
+    return types_;
+  }
   [[nodiscard]] const TypeStore& types() const {
     return types_;
   }

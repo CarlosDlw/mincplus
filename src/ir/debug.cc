@@ -172,7 +172,9 @@ void DebugInfo::closeBlock() {
 
 void DebugInfo::enterFunction(llvm::Function& function, std::string_view name,
                               std::string_view linkageName, const sema::TypeStore& types,
-                              sema::TypeId functionType, support::Span span) {
+                              sema::TypeId functionType, support::Span span,
+                              std::span<const sema::TypeId> templateParams,
+                              std::span<const sema::TypeId> templateArgs) {
   // Leaving a scope that was never closed would silently nest every subprogram
   // inside the previous one, which is a debugger showing the wrong call frames
   // rather than an error anywhere.
@@ -204,9 +206,31 @@ void DebugInfo::enterFunction(llvm::Function& function, std::string_view name,
   const llvm::DISubprogram::DISPFlags flags = llvm::DISubprogram::toSPFlags(
       /*IsLocalToUnit=*/function.hasLocalLinkage(), /*IsDefinition=*/true,
       /*IsOptimized=*/false);
+  // The template parameters, for an instance. The name is the binder's -- the word
+  // the reader wrote in `<...>` -- and the type is the **argument**, so a debugger
+  // reading the DIE can print `identity<i32>` and say which `i32` belongs to which
+  // binder without a dictionary passed at run time (`generics.md`, § 8). Empty for
+  // every function the source wrote whole, which is why the array is built
+  // unconditionally and passed as a null array otherwise: one shape of the call.
+  llvm::SmallVector<llvm::Metadata*, 4> templates; // DITemplateTypeParameter, one per binder
+  for (std::size_t i = 0; i < templateParams.size(); ++i) {
+    const sema::TypeId binder = templateParams[i];
+    const sema::TypeId argument = i < templateArgs.size() ? templateArgs[i] : sema::kInvalidType;
+    const std::string_view spelling = types.known(binder) && types.isParam(binder)
+                                          ? types.get(binder).paramSpelling
+                                          : std::string_view("T");
+    // The **argument**'s type and the **binder**'s name, which is the pair the two
+    // leaders emit: `DW_AT_name` is `T` and `DW_AT_type` is `int`.
+    templates.push_back(builder_.createTemplateTypeParameter(
+        file_, std::string(spelling), debugType(types, argument), /*IsDefault=*/false));
+  }
+  // The DIE list is built through the *typed* array constructor, which is what
+  // makes it a `DITemplateParameterArray` rather than a generic metadata array:
+  // `DISubprogram` takes the parameterized type, and LLVM's assertions check it.
+  llvm::DITemplateParameterArray parameters(llvm::MDTuple::get(module_.getContext(), templates));
   subprogram_ = builder_.createFunction(file_, std::string(name), std::string(linkageName), file_,
                                         position.line, signature, position.line,
-                                        llvm::DINode::FlagPrototyped, flags);
+                                        llvm::DINode::FlagPrototyped, flags, parameters);
   function.setSubprogram(subprogram_);
 }
 

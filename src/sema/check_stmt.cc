@@ -525,7 +525,7 @@ TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
     return kTypeError;
   }
   const std::vector<TypePart> parts = typeParts(typeNode);
-  const TypeSpecResult spec = readType(parts, types_, aliasNames_);
+  const TypeSpecResult spec = readType(parts, types_, names());
   if (!spec.ok) {
     if (spec.unknownWord.empty()) {
       error(typeNode, SemaErrorCode::MalformedType, spec.message);
@@ -581,7 +581,7 @@ TypeId Checker::resolveTypeNode(ast::AstId typeNode) {
     // stack, so a block's name and a file's name of the same spelling are two
     // rows, and the one that decided this position's type is the one this points
     // at (`type_alias.md`, decision 5).
-    if (const TypeName* const row = findTypeName(aliasNames_, parts.front().word);
+    if (const TypeName* const row = findTypeName(names(), parts.front().word);
         row != nullptr && row->alias != kNoAliasRow) {
       out_.typed.setAliasAt(typeNode, row->alias);
     }
@@ -689,6 +689,25 @@ void Checker::checkAssignable(TypeId from, TypeId to, ast::AstId at, SemaErrorCo
   if (types_.isError(from) || types_.isError(to)) {
     return;
   }
+  // A **binder**, and this is the whole of what is known about one: it is an
+  // object, and a value is assignable to it exactly when it already *is* of that
+  // type (`generics.md`, § 6). Anything else -- `let y: i32 = x;` where `x: T`, or
+  // a literal in a binder's position -- would need the declaration to say which
+  // types it takes, which is what a constraint is. The sentence says so, and it is
+  // this one rather than the arithmetic rules' "`T` cannot be used as `i32`",
+  // which is a sentence about a type the reader never wrote.
+  //
+  // `*T` is not this case: a pointer is an object with a width, so `*void` and
+  // `*T` keep converting as they always did.
+  if (from != to && (types_.isParam(from) || types_.isParam(to))) {
+    const TypeId parameter = types_.isParam(to) ? to : from;
+    error(at, SemaErrorCode::GenericOperation,
+          "`" + types_.spelling(from) + "` cannot be used as `" + types_.spelling(to) + "`" +
+              std::string(what) + ": `" + std::string(types_.get(parameter).paramSpelling) +
+              "` is a type parameter, and what may be stored in one is what its constraint "
+              "allows (`T: Num`). Constraints are the next stage");
+    return;
+  }
   const std::string target = typeAsWritten(to, expectedAt);
   // An integer and a float, before the general rule: this is not a narrowing to
   // be warned about, it is a conversion the language does not have, and the
@@ -776,19 +795,6 @@ SemaOutput Checker::run() {
   out_.typed.typeTable.assign(file_.nodeCount(), kTypeError);
   out_.typed.exprFacts.assign(file_.nodeCount(), ExprInfo{});
 
-  // A binder list is read by the parser and by nothing here yet: the type model
-  // has no `Param` in it, so every use of `T` would be an unknown name and the
-  // note would suggest a type one edit away (`generics.md`, decision 4). One
-  // sentence for the unit, before a declaration is read, is the honest answer --
-  // and the sweeps below still run, so the artifact keeps the shape every other
-  // unit's artifact has and a stage that reads it anyway finds nothing
-  // half-built.
-  if (hasGenericDeclaration()) {
-    decideDeferredTypes();
-    out_.typed.buildCoercionIndex(file_.nodeCount());
-    return std::move(out_);
-  }
-
   // The unit's type names first, before anything that reads a type: a signature
   // may be written with a name declared below it, and a pass that ran after the
   // signatures would have to make them all wait for it (`type_alias.md`,
@@ -800,9 +806,28 @@ SemaOutput Checker::run() {
   // reads it reads the same answer. A body checked before it would fold nothing
   // and could not disagree -- it would simply miss what it was allowed to do.
   checkGlobals();
-  for (const FunctionInfo& info : out_.typed.functionTable) {
-    checkFunction(info);
+  // The bodies. A generic body is checked **once**, abstractly, under its
+  // binders, and it is lowered once per instance (`generics.md`, decision 7): the
+  // context below is what makes a call inside it record a *site* instead of
+  // creating the instance it cannot know yet.
+  for (std::size_t index = 0; index < out_.typed.functionTable.size(); ++index) {
+    currentBody_ = static_cast<std::uint32_t>(index);
+    currentGenericOwner_ = out_.typed.functionTable[index].owner;
+    currentGenericBinders_ = out_.typed.functionTable[index].binders;
+    if (currentGenericBinders_ != 0) {
+      std::vector<TypeName> rows;
+      pushBinderRows(out_.typed.functionTable[index].genericParams, currentGenericOwner_, rows);
+      enterBinders(rows);
+    }
+    checkFunction(out_.typed.functionTable[index]);
+    leaveBinders();
   }
+  currentBody_ = 0;
+  currentGenericOwner_ = 0;
+  currentGenericBinders_ = 0;
+  // The worklist, after every body: the instances a generic body *asks* for are
+  // only known once the body has been read, and each of them may ask for more.
+  runInstantiations();
   // The artifact leaves this stage with no deferred type anywhere in it. It is
   // the property the IR is built on -- a deferred type has no width and no LLVM
   // mapping -- and it is a *sweep* rather than a per-seam promise so that a path
@@ -814,29 +839,6 @@ SemaOutput Checker::run() {
   // makes the lowering's lookup a constant-time question.
   out_.typed.buildCoercionIndex(file_.nodeCount());
   return std::move(out_);
-}
-
-bool Checker::hasGenericDeclaration() {
-  for (const ast::AstId decl : operandsOf(file_.root())) {
-    if (inError(decl) || kindOf(decl) != ast::NodeKind::FnDecl) {
-      continue;
-    }
-    // A `type` with binders is read: its target is a template and every *use*
-    // substitutes into it, which is a type the store already has. A `fn` with
-    // binders is the next stage -- its parameters and its body need the binder in
-    // scope, and its instantiations are functions the lowering builds -- so a unit
-    // that declares one is answered once, here, instead of once per use of `T`.
-    const ast::AstId params = childOf(decl, ast::NodeKind::GenericParams);
-    if (!params.valid()) {
-      continue;
-    }
-    error(params, SemaErrorCode::GenericsNotRead,
-          "a binder list on a function is not read yet: this stage does not instantiate a "
-          "function's type parameters. A generic `type` is read, and a generic `fn` is the "
-          "next stage");
-    return true;
-  }
-  return false;
 }
 
 void Checker::runSignatures() {
@@ -856,6 +858,36 @@ void Checker::runSignatures() {
     const ast::AstId typeNode = childOf(decl, ast::NodeKind::Type);
     const ast::AstId nameNode = childOf(decl, ast::NodeKind::Name);
     const ast::AstId body = childOf(decl, ast::NodeKind::Block);
+
+    // The **binders**, if the declaration wrote any, and they are in scope for
+    // everything below: the return type, every parameter's type, and -- for the
+    // length of this function's body -- the body itself (`generics.md`). The two
+    // refusals first, because neither declaration can be a template in any
+    // useful sense and both are decisions about *this* signature.
+    //
+    // A binder list is read once per declaration and not once per instance: the
+    // body is checked here, abstractly, under the binders, and what the worklist
+    // does afterwards is build the instances that body is lowered for. That is
+    // why the signature published here is a **template** -- it holds `Param`s and
+    // nothing below this stage ever sees it (decision 20).
+    const ast::AstId genericParams = childOf(decl, ast::NodeKind::GenericParams);
+    std::uint32_t binders = 0;
+    const std::uint32_t owner = genericParams.valid() ? genericParams.index : 0;
+    if (genericParams.valid()) {
+      std::vector<TypeName> rows;
+      binders = pushBinderRows(genericParams, owner, rows);
+      enterBinders(rows);
+      if (!body.valid()) {
+        // The boundary, and it is a boundary rather than a gap: `extern` says the
+        // definition is somewhere this compiler is not looking, and a template is
+        // not one signature -- it is a family of them, each with its own symbol
+        // (`generics.md`, § 9).
+        error(genericParams, SemaErrorCode::GenericExtern,
+              "a binder list and `extern` cannot both be true: `extern` promises one C symbol " +
+                  std::string("for one signature, and a generic declaration has one signature per "
+                              "instantiation -- give the function a body, or write the types"));
+      }
+    }
 
     TypeId returnType = kTypeError;
     if (typeNode.valid()) {
@@ -987,6 +1019,10 @@ void Checker::runSignatures() {
     info.returnType = returnType;
     info.body = body;
     info.name = nameNode.valid() ? file_.at(nameNode).name : support::kInvalidSym;
+    info.genericParams = genericParams;
+    info.binders = binders;
+    info.owner = owner;
+    leaveBinders();
 
     const std::optional<resolve::DefId> def = defAtName(nameNode);
     const std::size_t functionIndex = out_.typed.functionTable.size();
@@ -1026,6 +1062,14 @@ void Checker::runSignatures() {
       }
     }
 
+    // The declaration is **generic**, so this stage has to answer for it twice:
+    // the template it just published (never read below), and every instance a use
+    // asks for. The map is keyed on the def because a call reaches a declaration
+    // the way every other lookup in this stage does.
+    if (info.binders != 0 && def.has_value()) {
+      genericFunctionByDef_.emplace(def->index, static_cast<std::uint32_t>(functionIndex));
+    }
+
     setType(decl, functionType);
     if (nameNode.valid()) {
       setType(nameNode, functionType);
@@ -1045,6 +1089,14 @@ void Checker::runSignatures() {
       error(nameNode, SemaErrorCode::MainSignature,
             "`main` must be declared `fn i32 main()`; this one returns `" +
                 types_.spelling(returnType) + "`");
+    }
+    // ... and the entry point is one function with one signature, so it is not a
+    // family of them (`generics.md`, § 9).
+    if (genericParams.valid() && info.name != support::kInvalidSym &&
+        symbols_.lookup(info.name) == "main") {
+      error(genericParams, SemaErrorCode::GenericMain,
+            "`main` is the entry point: it is one function with one signature, so it cannot be "
+            "generic");
     }
   }
 }
@@ -1475,6 +1527,15 @@ void Checker::checkCondition(ast::AstId condition, std::string_view what) {
   if (types_.isError(type)) {
     return;
   }
+  // A binder is refused before the rule about `bool`, because "`T` is not a
+  // `bool`" is a sentence about a type nobody wrote: what a condition needs is the
+  // declaration to say that every type it takes is a `bool`, which is what a
+  // constraint is (`generics.md`, § 6).
+  if (refuseParameter(condition, type,
+                      "the condition of `" + std::string(what) +
+                          "` needs `bool`, and a binder is not one")) {
+    return;
+  }
   if (types_.get(type).kind != TypeKind::Bool) {
     error(condition, SemaErrorCode::ConditionNotBool,
           "the condition of `" + std::string(what) + "` must be `bool`; `" + types_.spelling(type) +
@@ -1597,6 +1658,7 @@ void Checker::checkBlock(ast::AstId block, TypeId returnType) {
     }
   }
   aliasNames_.resize(namesBefore);
+  refreshNames();
 }
 
 void Checker::checkStatement(ast::AstId stmt, TypeId returnType) {

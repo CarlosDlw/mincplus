@@ -224,8 +224,11 @@ struct LoweringOptions {
 // did one stage up) and `defs` is the resolution of the same unit, which is what
 // ties a name *use* to the declaration an `alloca` was made for. `symbols` is
 // the interner those ids came from.
+// The store is mutable for the same reason `sema::Context::types()` is: lowering a
+// generic body once per instance applies the instance's substitution as it reads a
+// type, and a substitution interns the result.
 [[nodiscard]] IRResult lowerUnit(const ast::LoweredFile& file, const resolve::DefMap& defs,
-                                 const sema::TypedFile& typed, const sema::TypeStore& types,
+                                 const sema::TypedFile& typed, sema::TypeStore& types,
                                  const support::Interner& symbols,
                                  const LoweringOptions& options = {});
 

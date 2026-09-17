@@ -45,6 +45,18 @@ public:
   // it emits the end-of-file leaf -- and a second call does nothing.
   [[nodiscard]] virtual bool atEnd() const = 0;
 
+  // How many tokens have been handed out before `current()` -- zero at the
+  // start, one after one `bump()`. Trivia is not a token: a source that walks a
+  // stream carrying it (the preprocessor's) counts the ones the parser sees.
+  //
+  // The parser asks it for exactly one thing, and it is worth saying which,
+  // because a rule written against an absolute position is a rule that breaks
+  // when the tokens before it change. A **bound**: a declaration's return type is
+  // read from a run whose end a scan found (`fn Vec<i32> f()` must end the type
+  // before `f`), and the bound is `position() + count`. Nothing else asks, and
+  // nothing else may.
+  [[nodiscard]] virtual std::uint32_t position() const = 0;
+
   // Consumes the current token. Never moves past the end.
   virtual void bump() = 0;
 

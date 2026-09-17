@@ -264,7 +264,7 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
     type = checkAssign(expr, info);
     break;
   case ast::NodeKind::CallExpr:
-    type = checkCall(expr, info);
+    type = checkCall(expr, expected, info);
     break;
   case ast::NodeKind::TupleExpr:
     type = checkTupleExpr(expr, expected, info);
@@ -498,6 +498,26 @@ TypeId Checker::checkPath(ast::AstId expr, ExprInfo& info) {
           "`" + name + "` is an operation, not a value: it can only be called");
     return kTypeError;
   }
+  // A **generic name** is not a value: it names a family of functions and has no
+  // type until an argument list says which one. It is refused here rather than
+  // reaching a binder through the template's own signature, because what the
+  // reader has is a *value* position and the fix is a spelling -- and the
+  // sentence names it, so the reader does not have to know that a template holds
+  // `Param`s (`generics.md`, § 9). `identity::<i32>` is refused by the parser
+  // already: the `::` belongs to a call and nothing else.
+  if (const auto generic = genericFunctionByDef_.find(def->index);
+      generic != genericFunctionByDef_.end()) {
+    const FunctionInfo& row = out_.typed.functionTable[generic->second];
+    const std::string name =
+        row.name == support::kInvalidSym ? nameOf(expr) : std::string(symbols_.lookup(row.name));
+    error(expr, SemaErrorCode::GenericNameNotValue,
+          "`" + name +
+              "` is generic, so it is not a value: it has no type until its type "
+              "arguments are written. `" +
+              name + "::<i32>` is the function `i32` asks for");
+    return kTypeError;
+  }
+
   const TypeId type = typeOfDef(*def);
 
   const bool isFunction = types_.get(type).kind == TypeKind::Function;
@@ -677,6 +697,9 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
     if (types_.isError(inner)) {
       return kTypeError;
     }
+    if (refuseParameter(operand, inner, "`!` on a binder needs a constraint")) {
+      return kTypeError;
+    }
     if (types_.get(inner).kind != TypeKind::Bool) {
       error(operand, SemaErrorCode::ConditionNotBool,
             "`!` needs a `bool`; `" + types_.spelling(inner) + "` is not one");
@@ -694,6 +717,9 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
   if (kind == kTokPlusPlus || kind == kTokMinusMinus) {
     const TypeId inner = checkExpr(operand, kInvalidType);
     if (types_.isError(inner)) {
+      return kTypeError;
+    }
+    if (refuseParameter(operand, inner, "`++` on a binder needs a constraint")) {
       return kTypeError;
     }
     if (!checkModifiable(operand, inner, expr, SemaErrorCode::IncDecNotLvalue,
@@ -719,6 +745,10 @@ TypeId Checker::checkPrefix(ast::AstId expr, ExprInfo& info) {
   // `-`, `+`, `~`.
   const TypeId inner = checkExpr(operand, kInvalidType);
   if (types_.isError(inner)) {
+    return kTypeError;
+  }
+  if (refuseParameter(operand, inner,
+                      std::string("`") + opText(kind) + "` on a binder needs a constraint")) {
     return kTypeError;
   }
   const ExprInfo& innerInfo = out_.typed.infoOf(operand);
@@ -1378,7 +1408,22 @@ TypeId Checker::checkTupleExpr(ast::AstId expr, TypeId expected, ExprInfo& info)
   // The product's size is checked *before* the intern so the sentences can differ:
   // a product larger than the target can address is a fact about the program, and
   // the type budget is a fact about the unit.
-  if (!types_.tupleSize(members).has_value()) {
+  //
+  // A member with no size *yet* is not that, and the two are told apart first: a
+  // product written over a binder -- `(left, right)` inside a generic body, where
+  // each member is a `Param` -- has no layout until the declaration is
+  // instantiated, and asking the layout rule about it would refuse the template
+  // with a sentence about a size that is not yet known
+  // (`generics.md`; `type_store.cc` makes the same exception where it builds one).
+  const bool unknownSize = [&] {
+    for (const TypeId member : members) {
+      if (types_.hasUnknownSize(member)) {
+        return true;
+      }
+    }
+    return false;
+  }();
+  if (!unknownSize && !types_.tupleSize(members).has_value()) {
     error(expr, SemaErrorCode::InvalidAssignment,
           "this product of " + std::to_string(members.size()) +
               " members is larger than this target can address");
@@ -1582,7 +1627,7 @@ TypeId Checker::checkTypedInitializer(ast::AstId expr, ExprInfo& info) {
     inferredCount = static_cast<std::uint64_t>(elements.size());
   }
 
-  const TypeSpecResult spec = readType(parts, types_, aliasNames_, inferredCount);
+  const TypeSpecResult spec = readType(parts, types_, names(), inferredCount);
   if (!spec.ok) {
     error(typeNode,
           spec.unknownWord.empty() ? SemaErrorCode::MalformedType : SemaErrorCode::UnknownType,
@@ -1757,6 +1802,19 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
   const ExprInfo& leftInfo = out_.typed.infoOf(lhs);
   const ExprInfo& rightInfo = out_.typed.infoOf(rhs);
   info.isConstant = leftInfo.isConstant && rightInfo.isConstant;
+
+  // A **binder** operand before any operation rule, and the order is the point:
+  // every rule below compares two concrete kinds, and the sentence a binder earns
+  // is about the constraint it has not got -- not the arithmetic rules' one about a
+  // type the reader never wrote (`generics.md`, § 6). One operand is enough: `a + b`
+  // with `a: T` is refused for `a`, and the second operand's own check will say its
+  // own thing if it has one.
+  if (types_.isParam(left) || types_.isParam(right)) {
+    const ast::AstId at = types_.isParam(left) ? lhs : rhs;
+    (void)refuseParameter(at, types_.isParam(left) ? left : right,
+                          "`" + std::string(opText(kind)) + "` on a binder needs a constraint");
+    return kTypeError;
+  }
 
   if (kind == kTokAmpAmp || kind == kTokPipePipe) {
     // `&&`/`||` require `bool`, and their result is `bool`. C would accept any
@@ -2136,7 +2194,7 @@ TypeId Checker::checkAssign(ast::AstId expr, ExprInfo& info) {
   return target;
 }
 
-TypeId Checker::checkCall(ast::AstId expr, ExprInfo& info) {
+TypeId Checker::checkCall(ast::AstId expr, TypeId expected, ExprInfo& info) {
   const std::vector<ast::AstId> operands = operandsOf(expr);
   if (operands.empty()) {
     return kTypeError;
@@ -2152,12 +2210,25 @@ TypeId Checker::checkCall(ast::AstId expr, ExprInfo& info) {
     return checkBuiltinCall(expr, info, *row);
   }
 
+  // A **generic** callee before the ordinary path, because it is the one call
+  // whose signature is not the callee's type: a template holds `Param`s, and what
+  // a call needs is the instance an argument list names (`generics.cc`). The def
+  // is what decides -- not the spelling, so a `let identity = 1;` in an inner
+  // scope still shadows the name and calls the binding.
+  if (const std::optional<resolve::DefId> def = defOfPath(callee); def.has_value()) {
+    if (const auto generic = genericFunctionByDef_.find(def->index);
+        generic != genericFunctionByDef_.end()) {
+      return checkGenericCall(expr, callee, generic->second, expected, info);
+    }
+  }
+
   const TypeId calleeType = checkExpr(callee, kInvalidType);
 
-  std::vector<ast::AstId> args;
-  if (operands.size() > 1) {
-    args = operandsOf(operands[1]);
-  }
+  // The arguments, by **kind**: a call that wrote `::<...>` has a third child, so
+  // the value list is not simply the second operand.
+  const ast::AstId argList = childOf(expr, ast::NodeKind::ArgList);
+  const std::vector<ast::AstId> args =
+      argList.valid() ? operandsOf(argList) : std::vector<ast::AstId>{};
 
   if (types_.isError(calleeType)) {
     for (const ast::AstId arg : args) {

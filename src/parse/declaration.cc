@@ -413,6 +413,30 @@ struct TypeRunScan {
   return run;
 }
 
+ListClose Parser::parseBoundTypeRun(std::uint32_t count) {
+  const TokenBound bound(*this, count);
+  ListClose close = parseTypeRun();
+  // The reader can stop **before** the bound -- `fn i32 10 f()` hands the run a
+  // token no type grammar holds -- and the tail still belongs to the `Type` node,
+  // because the node covers the run the scan found. A token left outside would be
+  // read by whatever comes next, which is how one mistake becomes a sentence
+  // about a shape nobody wrote. The reader has already said what is wrong with
+  // it, which is why this loop adds no diagnostic of its own.
+  while (!source_.atEnd() && source_.position() < bound.end()) {
+    bump();
+  }
+  // A run in a declaration has no list around it -- the run *is* the whole type
+  // position -- so a compound closer that reports an enclosing list reports a
+  // character with nothing to close, which is what `parseType` says for the same
+  // slip. The `=` travels on, because which declaration owns one is the caller's
+  // business: `type Pair<T>= (T, K);` wants it, a return type does not.
+  if (close.closedParent) {
+    reportUnusedListClose(close);
+    close.closedParent = false;
+  }
+  return close;
+}
+
 void Parser::parseTypeAndName() {
   // The type and the name are both part of one run of `*` and identifiers, and
   // the only token that separates them from the rest of the declaration is `(`.
@@ -437,9 +461,11 @@ void Parser::parseTypeAndName() {
                      : "expected a function name",
           words == 1 ? ParseErrorCode::ExpectedType : ParseErrorCode::ExpectedName);
     Marker type = start();
-    for (std::uint32_t i = 0; i < tokens; ++i) {
-      bump();
-    }
+    // The run, read as a type. A group is the only way to be here without a name
+    // after it, so what this keeps is the `(T, U)` a reader wrote -- shaped, so a
+    // `Pair<i32, bool>` written as a product member has the same subtree it has
+    // in every other type position.
+    static_cast<void>(parseBoundTypeRun(tokens));
     type.complete(SyntaxKind::Type);
     Marker name = start();
     name.complete(SyntaxKind::Name);
@@ -479,10 +505,19 @@ void Parser::parseTypeAndName() {
   }
 
   Marker type = start();
-  for (std::uint32_t i = 0; i < nameStart; ++i) {
-    bump();
-  }
+  // The return type, read by the **type reader** and bounded to the run the scan
+  // found. Bumping the run's tokens raw is what this used to do, and it is what
+  // `fn Pair<T, K> make<T, K>()` cannot have: with the words left flat, the
+  // `<...>` never becomes the `TypeArgList` every other type position builds, and
+  // a reader below sees the words `Pair T K` and answers with a sentence about a
+  // name for a type combined with something else.
+  const ListClose close = parseBoundTypeRun(nameStart);
   type.complete(SyntaxKind::Type);
+  // `>=` where only `>` belongs: the `=` was swallowed by the list, and a
+  // function declaration has no `=` for it to belong to -- so it is named here
+  // rather than left to a `parseFunctionTail` that would report the `{` it never
+  // reached.
+  reportUnusedListClose(close);
 
   Marker name = start();
   bump();

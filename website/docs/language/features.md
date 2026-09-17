@@ -91,15 +91,16 @@ first-class types; the examples use the primitive names. See
       [`docs/architectures/tuples.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/tuples.md);
       generics come **after** it, because a binder list is itself a sequence of
       pairs and the store gained arity-unknown interning here
-- [ ] Generics `<T>` — **a generic `type` works today** (a use substitutes into
-      the declaration, so `Pair<i32, bool>` *is* `(i32, bool)`) and a generic `fn`
-      is the next stage, refused until then with one sentence. A binder list after
-      the name being declared
-      (`fn T identity<T>(value: T)`, `type Pair<T, K> = (T, K);`), plain `<...>`
-      in a type position and `::<...>` at a call site, inference from the
-      arguments and the expected type, compiler-known capability constraints
-      (`Num`, `Int`, `Float`, `Ordered`, `Eq`, `Any`), and one function plus one
-      debug record per instantiation. See
+- [x] Generics `<T>` on a `type` and on a function — a use **substitutes** into
+      the declaration, so `Pair<i32, bool>` *is* `(i32, bool)` and the check is an
+      identity; a generic function is a template whose body is checked once,
+      instantiated once per distinct argument list. A binder list after the name
+      being declared (`fn T identity<T>(value: T)`, `type Pair<T, K> = (T, K);`),
+      plain `<...>` in a type position and `::<...>` at a call site, inference
+      from the arguments and from what the context wants, one function plus one
+      debug record per instance (`break identity` stops in all of them), and a
+      doubling structure refused by name rather than built. **Constraints
+      (`T: Num`) are the next stage** and are refused by name until then. See
       [`docs/architectures/generics.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/generics.md)
 - [ ] `struct`
 - [ ] `union`
@@ -113,7 +114,8 @@ first-class types; the examples use the primitive names. See
 - [x] `const` bindings (see *Syntax and files*); immutability is a binding
       property, not a type qualifier yet
 - [ ] Optional/nullable types and null safety `[?]`
-- [ ] Generics / parametric types `[?]`
+- [x] Generics / parametric types — see *Generics* above; user-declared
+      constraints (`interface`, a concept) stay open
 
 `f80` is the x87 80-bit extended format. It is in the set because that is what
 C's `long double` is on System V AMD64, and it is the one type whose existence is

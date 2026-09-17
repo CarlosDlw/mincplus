@@ -336,6 +336,16 @@ private:
       reportReservedName(item.nameSpan, item.name);
       map_.itemDefs[i] = insertDef(map_.fileScope, namespaceOf(*kind), item.name, item.span,
                                    item.nameSpan, nameUnit, *kind, linkage, node.inError);
+      // A `type`'s binders belong to the declaration and are declared here, in
+      // the collect pass, because a type name has no body walk to reach them: the
+      // right-hand side of a `type` is a `Type` node, and the words of a type are
+      // the checker's vocabulary and not expressions (`type_alias.md`, decision
+      // 10). The scope is entered by nothing -- it exists so the names are
+      // *checked* like every other name, and so the IDE has a definition per
+      // binder.
+      if (*kind == DefKind::TypeAlias) {
+        (void)declareBinderScope(AstId{item.node}, map_.fileScope, item.node);
+      }
     }
   }
 
@@ -436,11 +446,18 @@ private:
     if (bodyNode.inError) {
       return;
     }
+    // The binders, when the declaration wrote any, in a scope *around* the
+    // function scope: a binder is visible in the signature and the body and
+    // nowhere else, and a parameter or a `let` may still take a binder's spelling
+    // -- they are ordinary names and it is a type name, which is the same pair
+    // `type X = i32; let X = 1;` already is.
+    const ScopeId binderScope = declareBinderScope(AstId{item.node}, map_.fileScope, item.node);
+    const ScopeId parent = binderScope.valid() ? binderScope : map_.fileScope;
     // The function's body block *is* the function scope, as in C: there is no
     // second block scope around it, and the parameters enter this scope, so a
     // parameter and a `let` at the top of the body cannot both take one name.
     const ScopeId functionScope =
-        createScope(ScopeKind::Function, map_.fileScope, bodyNode.origin, body.index);
+        createScope(ScopeKind::Function, parent, bodyNode.origin, body.index);
     if (!functionScope.valid()) {
       return;
     }
@@ -457,6 +474,45 @@ private:
     std::vector<Step> stack;
     stack.push_back(Step{Step::Op::Visit, expr, scope});
     walk(std::move(stack));
+  }
+
+  // The **binders** of a declaration (`fn T identity<T>(value: T)`, `type Pair<T,
+  // K> = (T, K);`), in a scope of their own that neither the declaration's
+  // neighbours nor the rest of the unit sees (`generics.md`).
+  //
+  // Why a scope and not a list read by the checker: a binder is a *name*, and
+  // the three rules that govern names -- a reserved word is refused, one name is
+  // one definition, and shadowing is warned about -- are all decisions this stage
+  // already owns and already implements. Re-deciding them where the type reader
+  // builds its rows would be a second copy of those rules, which is how the two
+  // copies come to disagree.
+  //
+  // The scope is created for every declaration that wrote binders and for no
+  // declaration that did not, so a unit without generics resolves to exactly the
+  // scope tree it resolved to before.
+  [[nodiscard]] ScopeId declareBinderScope(AstId decl, ScopeId parent, std::uint32_t node) {
+    if (!decl.valid() || !file_.childOfKind(decl, NodeKind::GenericParams).valid()) {
+      return kInvalidScopeId;
+    }
+    const Node& self = file_.at(decl);
+    const ScopeId scope = createScope(ScopeKind::Declaration, parent, self.origin, node);
+    if (!scope.valid()) {
+      return kInvalidScopeId;
+    }
+    const AstId params = file_.childOfKind(decl, NodeKind::GenericParams);
+    for (const AstId child : file_.childrenOf(params)) {
+      const Node& binder = file_.at(child);
+      if (binder.isToken() || binder.kind != NodeKind::Name) {
+        continue;
+      }
+      if (binder.name == support::kInvalidSym) {
+        continue; // the parser already reported the missing name
+      }
+      reportReservedName(binder.origin, binder.name);
+      (void)insertDef(scope, Namespace::Tag, binder.name, binder.origin, binder.origin, binder.unit,
+                      DefKind::GenericParam, Linkage::None, binder.inError);
+    }
+    return scope;
   }
 
   // Parameters are declared in the function scope before the body is walked, so

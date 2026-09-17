@@ -251,15 +251,34 @@ enum class SemaErrorCode : std::uint8_t {
   // or an annotation that names a single type. The fix is one of two spellings --
   // bind the value whole, or take a product apart -- so the sentence names both.
   DestructuringNotProduct,
-  // The unit declares something generic -- `<T>` after a name -- and this stage
-  // does not instantiate a binder yet: the parser reads the list (`generics.md`,
-  // decision 4) and the type model has no `Param` in it.
-  //
-  // Reported **once for the unit**, before any declaration is read. The
-  // alternative is one "`T` is not a type, did you mean `i8`?" per use of a
-  // binder, which is a sentence about a typo for something the reader wrote on
-  // purpose -- a wrong pointer being worse than a missing one.
-  GenericsNotRead,
+  // A generic declaration where the C ABI is the point: `extern fn T f<T>(x: T)`.
+  // A binder list makes a *family* of signatures, and the boundary promises one
+  // (`generics.md`, § 9).
+  GenericExtern,
+  // `fn i32 main<T>()`: the entry point is one function with one signature.
+  GenericMain,
+  // A generic name used as a *value*: `let g = identity;`. It has no type until
+  // an argument list gives it one, and the sentence names the spelling that does:
+  // `identity::<i32>`.
+  GenericNameNotValue,
+  // Nothing decides a binder: `zero()`. The sentence names the binder and the
+  // fix, because the reader's program is one edit from being decidable.
+  GenericNotInferable,
+  // The written argument list does not fit the name: the wrong count, a name that
+  // takes none, or a callee that is not generic at all. One code, because it is
+  // one mistake -- the list and the declaration disagree -- and the sentence says
+  // which numbers or which name.
+  GenericTypeArgs,
+  // An **operation** on a binder. A `Param` may be stored, copied, passed,
+  // returned and addressed -- the rules every type has -- and everything else is
+  // what a constraint permits (`generics.md`, § 6). Constraints are the next
+  // stage, so this is the sentence that says so instead of the arithmetic rules'
+  // one about a type the reader never wrote.
+  GenericOperation,
+  // The instantiation budget, reached. A generic that grows its own argument
+  // (`fn i32 g<T>(x: T) { return g::<*T>(x); }`) asks for one instance per step,
+  // and a compiler that follows it runs out of memory instead of reporting.
+  GenericInstanceLimit,
 };
 
 struct SemaErrorCodeInfo {

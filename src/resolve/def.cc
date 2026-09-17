@@ -34,6 +34,8 @@ std::string_view toString(DefKind value) {
     return "param";
   case DefKind::TypeAlias:
     return "type";
+  case DefKind::GenericParam:
+    return "binder";
   }
   return "unknown";
 }
@@ -64,6 +66,8 @@ std::string_view toString(ScopeKind value) {
     return "loop";
   case ScopeKind::Switch:
     return "switch";
+  case ScopeKind::Declaration:
+    return "declaration";
   }
   return "unknown";
 }

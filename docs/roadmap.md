@@ -920,8 +920,11 @@ the two cannot disagree about what the pipeline means.
       [`architectures/tuples.md`](architectures/tuples.md). It lands before
       generics on purpose: a binder list is itself a sequence of pairs, and the
       store gained arity-unknown interning here
-- [ ] **Generics** `<T>` on a function and on a `type`: **the parser half and
-      the generic-`type` half have landed.** The binder list follows the name,
+- [ ] **Generics** `<T>` on a function and on a `type`: **the parser, the
+      generic `type` and the generic `fn` have landed**, from the declaration to
+      the emitted instance; **constraints are the next stage** (`<T: Num>` is
+      refused by name until the operation table is a table of classes). The
+      binder list follows the name,
       `<...>` is read in every type position, `::<...>` at a call site, and a
       `>>`/`>>=` that closes two lists is split by the reader and not by the
       lexer — with `::` added to the lexical grammar as one token, and the two
@@ -930,9 +933,11 @@ the two cannot disagree about what the pipeline means.
       type side: `Param` with identity `(owner, binder)`, and a use that
       **substitutes** into the declaration's template — so `Pair<i32, bool>` *is*
       `(i32, bool)`, the check is an id equality, and `examples/021_generic_alias.mx`
-      runs. A generic **function** is the next stage, and the type checker still
-      refuses one with a single sentence (`sema-generics-not-read`) instead of one
-      "did you mean `i8`?" per use of a binder. The binders
+      runs. A generic **function** is `identity::<i32>(x)` or `identity(x)`: the
+      binders follow the name, the body is checked **once** under them, and every
+      distinct argument list is one instance with the symbol `__M8_identityi32`
+      and one `DW_TAG_subprogram` whose `DW_AT_name` is `identity<i32>`, found by
+      a worklist keyed on the pair (`examples/022_generics.mx` runs). The binders
       follow the name being declared (`fn T identity<T>(value: T)`,
       `type Pair<T, K> = (T, K);`),
       a type position reads plain `<...>` and a call site writes `::<...>` —

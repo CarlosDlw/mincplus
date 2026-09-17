@@ -34,10 +34,19 @@ public:
   [[nodiscard]] bool atEnd() const override {
     return current() == lex::TokenKind::EndOfFile;
   }
+  // Counted, not computed: this source walks a stream that *carries* trivia, so
+  // `index_` is a position in the PPToken array and would drift from the count of
+  // tokens the parser has seen by however much whitespace came before
+  // (`TokenSource::position`). One increment beside the one in `bump` is what
+  // keeps the two in step, trivia included.
+  [[nodiscard]] std::uint32_t position() const override {
+    return static_cast<std::uint32_t>(consumed_);
+  }
   void bump() override {
     skipTrivia();
     if (index_ < tokens_.size()) {
       ++index_;
+      ++consumed_;
     }
   }
   [[nodiscard]] support::Span spanOfCurrent() const override {
@@ -112,6 +121,7 @@ private:
 
   std::span<const PPToken> tokens_;
   std::size_t index_ = 0;
+  std::size_t consumed_ = 0;
 };
 
 } // namespace

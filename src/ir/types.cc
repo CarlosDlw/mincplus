@@ -731,8 +731,7 @@ Value Lowering::lowerOperand(ast::AstId consumer, ast::AstId child) {
   // instruction with the `void` type, and handing that to a `phi` is the type
   // error this exists to prevent.
   if (types_.isNever(typeOf(child))) {
-    const sema::Coercion* coercion = coercionFor(consumer, child);
-    if (coercion != nullptr) {
+    if (const std::optional<sema::Coercion> coercion = coercionFor(consumer, child)) {
       if (llvm::Type* shape = llvmType(coercion->to); shape != nullptr && !shape->isVoidTy()) {
         return Value{llvm::PoisonValue::get(shape), coercion->to};
       }
@@ -743,7 +742,7 @@ Value Lowering::lowerOperand(ast::AstId consumer, ast::AstId child) {
   if (value.v == nullptr) {
     return value;
   }
-  if (const sema::Coercion* coercion = coercionFor(consumer, child)) {
+  if (const std::optional<sema::Coercion> coercion = coercionFor(consumer, child)) {
     // The child's own span: it is the expression whose conversion this is, and
     // the one arm that reports from `convert` reports about it.
     return convert(value, coercion->to, spanOf(child));

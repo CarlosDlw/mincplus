@@ -110,6 +110,7 @@ minc_add_executable(minc_unit_tests
     sema/slice_test.cc
     sema/tuple_test.cc
     sema/generic_alias_test.cc
+    sema/generic_call_test.cc
   sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc

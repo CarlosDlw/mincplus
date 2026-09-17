@@ -336,6 +336,28 @@ public:
     return {};
   }
 
+  // --- instances ---------------------------------------------------------------
+
+  // Every generic instance of the unit, as `name args=(...) symbol`, in discovery
+  // order -- which is the table's own order and not a sort, because the order is
+  // what the worklist found (`generics.md`, § 5).
+  [[nodiscard]] std::vector<std::string> instances() const {
+    std::vector<std::string> out;
+    for (const sema::InstantiationInfo& instance : typed().instances()) {
+      std::string row = instance.name + " args=(";
+      for (std::size_t i = 0; i < instance.args.size(); ++i) {
+        row += (i == 0 ? "" : ", ");
+        row += store_.spelling(instance.args[i]);
+      }
+      row += ") " + instance.symbol;
+      out.emplace_back(std::move(row));
+    }
+    return out;
+  }
+  [[nodiscard]] std::size_t instanceCount() const {
+    return typed().instances().size();
+  }
+
   [[nodiscard]] std::string dump() const {
     return sema::dumpTypedFile(lowered(), typed(), store_);
   }

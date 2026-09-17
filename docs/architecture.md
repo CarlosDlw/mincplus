@@ -828,11 +828,19 @@ warnings inside them are dropped at the report step while errors are not.
   built — `fn T identity<T>(value: T)` and `type Pair<T, K> = (T, K);`, with the
   binders after the name being declared, `<...>` in every type position and
   `::<...>` at a call site (in an expression, `f < T > (x)` *is* a comparison),
-  inference over the arguments and the expected type, compiler-known capability
-  constraints, and one function and one `DW_TAG_subprogram` per instantiation,
-  whose symbol is `__M8_identityi32` — inside `[A-Za-z0-9_]` and behind a reserved
-  `__` prefix, because the emitter is only half of what a symbol has to survive
-  ([`architectures/generics.md`](architectures/generics.md)).
+  inference over the arguments and the expected type, and one function and one
+  `DW_TAG_subprogram` per instantiation, whose symbol is `__M8_identityi32` —
+  inside `[A-Za-z0-9_]` and behind a reserved `__` prefix, because the emitter is
+  only half of what a symbol has to survive
+  ([`architectures/generics.md`](architectures/generics.md)). A generic `fn` and a
+  generic `type` are **both implemented**: a use substitutes into the declaration
+  (`Pair<i32, bool>` *is* `(i32, bool)`), a body is checked once under its
+  binders, and the instances are a worklist keyed on `(declaration, arguments)`
+  with a budget — the first thing in this compiler that makes the store a **DAG**,
+  which is why its layouts are computed once when a type is built and its
+  structures are bounded (`kMaxTypeNodes`). **Constraints (`<T: Num>`) are the
+  next stage** and are refused by name until then, so a binder under an arithmetic
+  operator is one sentence about the missing constraint rather than a guess.
 
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which

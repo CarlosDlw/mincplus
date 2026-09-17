@@ -632,11 +632,19 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
        false},
       {"fn i32 main() { let p = (1, 2, 3); let (a, b) = p; return a; }\n", false},
       {"fn i32 main() { let (a, b) = 5; return a; }\n", false},
-      // The binder list. The parser reads it and this stage says so in one
-      // sentence instead of one unknown name per use of `T` (`generics.md`,
-      // decision 4); `T` is what makes the input the shortest one that reaches
-      // the code, since a binder no body mentions is still a binder.
-      {"fn i32 f<T>(v: T) { return 0; }\n", false},
+      // The seven codes generics add. Each input is the shortest program that
+      // reaches one, and they are here rather than only in `generic_alias_test.cc`
+      // for the reason every row above is: this is the list that proves the
+      // *table* has no entry nobody can reach.
+      {"extern fn T id<T>(x: T);\n", false},       // the boundary
+      {"fn i32 main<T>() { return 0; }\n", false}, // the entry point
+      {"fn T id<T>(x: T) { return x; }\nfn i32 main() { let g = id; return 0; }\n", false},
+      {"fn i32 f<T>(n: i32) { return n; }\nfn i32 main() { return f(1); }\n", false},
+      {"fn T id<T>(x: T) { return x; }\nfn i32 main() { return id::<i32, bool>(1); }\n", false},
+      {"fn T twice<T>(x: T) { return x + x; }\nfn i32 main() { return 0; }\n", false},
+      {"fn i32 g<T>(x: T) { let p: *T = &x; return g::<*T>(p); }\n"
+       "fn i32 main() { return g(7); }\n",
+       false}, // the budget, at `maxInstances`
   };
 
   for (const Case& one : cases) {
@@ -651,10 +659,15 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
     if (one.warnConversion) {
       f.warnConversion();
     }
-    // The budget case is the one that needs a lowered limit.
+    // The two budget cases are the ones that need a lowered limit: the type store
+    // is emptied, and the instantiation count is put at its floor so a
+    // declaration that grows its own argument reaches it in a handful of steps.
+    sema::SemaOptions options;
     if (one.source == "fn i32 main() { return 0; }\n") {
-      sema::SemaOptions options;
       options.maxTypes = 0;
+      f.semaOptions(options);
+    } else if (one.source.starts_with("fn i32 g<T>")) {
+      options.maxInstances = 4;
       f.semaOptions(options);
     }
     ASSERT_TRUE(f.build()) << one.source;

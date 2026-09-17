@@ -22,33 +22,29 @@ std::size_t SyntaxNode::childCount() const {
 }
 
 NodeOrToken SyntaxNode::child(std::size_t index) const {
-  if (green_ == nullptr) {
+  // **O(1)**, because the child's offset within its parent is stored beside it
+  // (`green.h`). It used to be O(index) -- the widths of every child before this
+  // one summed on the way -- which made the natural walk
+  // `for (i < childCount()) child(i)` quadratic on a wide node.
+  if (green_ == nullptr || index >= green_->children.size()) {
     return NodeOrToken{};
   }
-  std::uint32_t offset = offset_;
-  for (std::size_t i = 0; i < green_->children.size(); ++i) {
-    const GreenChild& child = green_->children[i];
-    if (i == index) {
-      if (child.isNode) {
-        return NodeOrToken::ofNode(SyntaxNode(child.node, offset));
-      }
-      return NodeOrToken::ofToken(SyntaxToken{child.token, offset});
-    }
-    offset += child.width();
+  const GreenChild& child = green_->children[index];
+  const std::uint32_t offset = offset_ + child.offset;
+  if (child.isNode) {
+    return NodeOrToken::ofNode(SyntaxNode(child.node, offset));
   }
-  return NodeOrToken{};
+  return NodeOrToken::ofToken(SyntaxToken{child.token, offset});
 }
 
 std::optional<SyntaxNode> SyntaxNode::childOfKind(parse::SyntaxKind kind) const {
   if (green_ == nullptr) {
     return std::nullopt;
   }
-  std::uint32_t offset = offset_;
   for (const GreenChild& child : green_->children) {
     if (child.isNode && child.node->kind == kind) {
-      return SyntaxNode(child.node, offset);
+      return SyntaxNode(child.node, offset_ + child.offset);
     }
-    offset += child.width();
   }
   return std::nullopt;
 }
@@ -57,12 +53,10 @@ std::optional<SyntaxToken> SyntaxNode::tokenOfKind(parse::SyntaxKind kind) const
   if (green_ == nullptr) {
     return std::nullopt;
   }
-  std::uint32_t offset = offset_;
   for (const GreenChild& child : green_->children) {
     if (!child.isNode && child.token->kind == kind) {
-      return SyntaxToken{child.token, offset};
+      return SyntaxToken{child.token, offset_ + child.offset};
     }
-    offset += child.width();
   }
   return std::nullopt;
 }
@@ -77,16 +71,10 @@ std::vector<SyntaxNode> SyntaxNode::nodeChildren() const {
     return out;
   }
   out.reserve(green_->children.size());
-  std::uint32_t offset = offset_;
   for (const GreenChild& child : green_->children) {
     if (child.isNode) {
-      out.emplace_back(child.node, offset);
-    } else {
-      // Still advance: a token between two nodes must not shift their offsets.
-      offset += child.width();
-      continue;
+      out.emplace_back(child.node, offset_ + child.offset);
     }
-    offset += child.width();
   }
   return out;
 }

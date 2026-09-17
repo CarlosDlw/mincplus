@@ -163,8 +163,18 @@ public:
   [[nodiscard]] std::string_view text(std::uint32_t n) const {
     return source_.textOf(n);
   }
+  // True at the end of the source -- or at the bound a `TokenBound` set, which
+  // is what lets a greedy run stop where a scan said the run ends. The bound is
+  // *not* part of `current()`: a bounded read still sees the tokens at and past
+  // its bound, so the loop that reads the last token before it reads a real
+  // token and not an end-of-file leaf (`parseBoundTypeRun`).
   [[nodiscard]] bool atEnd() const {
-    return source_.atEnd();
+    return source_.atEnd() || bounded();
+  }
+  // The token index a bound stops the read at, or `kNoBound`. Public because
+  // `TokenBound` restores it, like `DepthGuard` restores the depth.
+  [[nodiscard]] std::uint32_t bound() const {
+    return bound_;
   }
   [[nodiscard]] support::Span currentSpan() const {
     return source_.spanOfCurrent();
@@ -289,6 +299,19 @@ public:
   // grammar is recursive, and it is guarded like the expression grammar is.
   void parseTypeGroup();
   void parseTypeAndName(); // `fn` return type followed by the function name
+  // A type run whose end a **scan** found: `count` is the number of tokens the
+  // scan claimed for the run, and the read may not go past them.
+  //
+  // Two readers over one run, and the difference between them is the whole
+  // reason this exists: the scan (`scanTypeRun`) can find where a declaration's
+  // name begins but cannot parse, and the type reader can parse but cannot stop
+  // (it is greedy by construction -- a word after a type is another word). Today
+  // the only caller is `parseTypeAndName`, where the run is a return type and the
+  // token after it is the function's name.
+  //
+  // Returns what the run's closing token consumed beyond itself, exactly as
+  // `parseType` does, so the caller decides what an `=` belongs to.
+  [[nodiscard]] ListClose parseBoundTypeRun(std::uint32_t count);
   // The type of a cast, in either spelling. Not `parseType`: a cast's type is
   // followed by an *expression*, so a `*` after the type's last word is the
   // multiplication it looks like -- `a as i32 * 2` is `(a as i32) * 2`, and a
@@ -386,6 +409,12 @@ private:
   friend class Marker;
   friend class CompletedMarker;
   friend class DepthGuard;
+  friend class TokenBound;
+
+  // True when a `TokenBound` stops the read at the current token.
+  [[nodiscard]] bool bounded() const {
+    return bound_ != kNoBound && source_.position() >= bound_;
+  }
 
   [[nodiscard]] std::uint32_t reserveSlot();
   // Reports the depth limit once and returns the empty `Error` node that keeps
@@ -393,12 +422,52 @@ private:
   // guarded entry point fails the same way.
   [[nodiscard]] CompletedMarker recursionLimitError();
 
+  // No bound. Spelled as the largest index rather than a bool plus a number, so
+  // there is one state to read, not two that can disagree.
+  static constexpr std::uint32_t kNoBound = ~std::uint32_t{0};
+
   TokenSource& source_;
   std::vector<Event> events_;
   std::vector<ParseError> errors_;
+  std::uint32_t bound_ = kNoBound;
   std::uint32_t depth_ = 0;
   bool bailedOut_ = false;
   bool depthReported_ = false;
+};
+
+// RAII for a **bounded read**: while it lives, `Parser::atEnd` is true at the
+// bound, so a greedy run stops there. The bound is a token index, which is why
+// `TokenSource` answers `position()`.
+//
+// A bound is a *range*, not a flag: a `>` and a `catch`-like "am I in a type?"
+// would both be state that survives the thing that must clear it -- a token the
+// grammar did not expect -- and the read below is one function with one exit, so
+// the range cannot be left set. Nesting restores what was there, which is what
+// makes a bound inside a bound (a member of a product, one day) behave.
+class TokenBound {
+public:
+  // `count` is how many tokens the read may take from where it stands.
+  TokenBound(Parser& parser, std::uint32_t count)
+      : parser_(parser), previous_(parser.bound_), end_(parser.source_.position() + count) {
+    parser_.bound_ = end_;
+  }
+  ~TokenBound() {
+    parser_.bound_ = previous_;
+  }
+
+  TokenBound(const TokenBound&) = delete;
+  TokenBound& operator=(const TokenBound&) = delete;
+
+  // The index the bound stops at: what a caller compares `position()` against to
+  // find the tokens a bounded read did not take.
+  [[nodiscard]] std::uint32_t end() const {
+    return end_;
+  }
+
+private:
+  Parser& parser_;
+  std::uint32_t previous_;
+  std::uint32_t end_;
 };
 
 // RAII for the recursion limit. Construction succeeds only while there is room:

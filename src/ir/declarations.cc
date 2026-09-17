@@ -58,6 +58,14 @@ void Lowering::declareFunctions() {
     if (!info.decl.valid() || inError(info.decl)) {
       continue;
     }
+    // A **generic declaration is not a function.** It is a template, and what the
+    // linker sees is one symbol per instance -- declared just below, from the list
+    // the checker published. Declaring one here would put a symbol in the module
+    // that nothing calls and whose signature still holds `Param`s, which is the
+    // one thing this stage may not emit (`generics.md`, decision 20).
+    if (info.binders != 0) {
+      continue;
+    }
     const ast::AstId nameNode = childOf(info.decl, ast::NodeKind::Name);
     const std::optional<resolve::DefId> def = defAtName(nameNode);
 
@@ -138,6 +146,59 @@ void Lowering::declareFunctions() {
     if (def.has_value()) {
       functions_.emplace(defKey(*def), function);
     }
+  }
+  declareInstances();
+}
+
+void Lowering::declareInstances() {
+  // One `llvm::Function` per **instance**, in the order `sema` published them, and
+  // the index in that table is what a call site names: an instance is not a
+  // declaration, and nothing may confuse the two.
+  //
+  // The signature is the instance's own -- `fn i32(i32)` for `identity<i32>` -- so
+  // the type mapper, the ABI and the debug info need no case of their own: an
+  // instance is a function like any other, and the only new thing about it is that
+  // its *name* was decided by the pair (declaration, arguments) instead of by the
+  // source (`generics.md`, § 7).
+  instances_.assign(typed_.instances().size(), nullptr);
+  for (std::size_t index = 0; index < typed_.instances().size(); ++index) {
+    const sema::InstantiationInfo& info = typed_.instances()[index];
+    if (failed_) {
+      return;
+    }
+    if (info.function >= typed_.functionTable.size()) {
+      fatal(spanOf(file_.root()), IRDiagnosticCode::Internal,
+            "an instance names a declaration this unit does not have");
+      return;
+    }
+    const sema::FunctionInfo& decl = typed_.functionTable[info.function];
+    llvm::Type* mapped = llvmFunctionType(info.functionType);
+    if (mapped == nullptr) {
+      continue;
+    }
+    auto* type = llvm::dyn_cast<llvm::FunctionType>(mapped);
+    if (type == nullptr) {
+      fatal(spanOf(decl.decl), IRDiagnosticCode::Internal,
+            "the instance `" + info.name + "` has a type that is not a function type");
+      continue;
+    }
+    // The linkage is the *declaration*'s: `static fn T id<T>(x: T)` is one unit's
+    // own family, and every instance of it inherits that -- read from the same
+    // place the non-generic path reads it, so the two cannot disagree.
+    const std::optional<resolve::DefId> def = defAtName(childOf(decl.decl, ast::NodeKind::Name));
+    const bool internal = def.has_value() && def->index < defs_.defs.size() &&
+                          defs_.defs[def->index].linkage == resolve::Linkage::Internal;
+    llvm::Function* function = llvm::Function::Create(
+        type, internal ? llvm::GlobalValue::InternalLinkage : llvm::GlobalValue::ExternalLinkage,
+        info.symbol, module_);
+    if (types_.isNever(types_.get(info.functionType).returnType)) {
+      function->addFnAttr(llvm::Attribute::NoReturn);
+    }
+    if (byReference(types_.get(info.functionType).returnType) && function->arg_size() > 0) {
+      function->getArg(0)->addAttr(llvm::Attribute::getWithStructRetType(
+          context_, storageType(types_.get(info.functionType).returnType)));
+    }
+    instances_[index] = function;
   }
 }
 
@@ -469,10 +530,11 @@ llvm::Constant* Lowering::convertGlobalValue(const sema::GlobalInfo& info, llvm:
   if (value == nullptr) {
     return nullptr;
   }
-  const sema::Coercion* coercion = info.init.valid() ? coercionFor(info.decl, info.init) : nullptr;
-  const sema::TypeId from = coercion != nullptr ? coercion->from : valueType;
-  const sema::TypeId to = coercion != nullptr ? coercion->to : valueType;
-  if (to != info.type || (coercion != nullptr && from != valueType)) {
+  const std::optional<sema::Coercion> coercion =
+      info.init.valid() ? coercionFor(info.decl, info.init) : std::nullopt;
+  const sema::TypeId from = coercion.has_value() ? coercion->from : valueType;
+  const sema::TypeId to = coercion.has_value() ? coercion->to : valueType;
+  if (to != info.type || (coercion.has_value() && from != valueType)) {
     fatal(spanOf(info.decl), IRDiagnosticCode::Internal,
           "the initializer of this file-scope binding is a value of type `" +
               types_.spelling(valueType) + "` and its recorded conversion is `" +

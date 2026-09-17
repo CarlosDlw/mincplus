@@ -133,14 +133,43 @@ struct Type {
   // once, by the type spec reader, from a literal the source wrote
   // (`arrays.md` decisions 19 and 20).
   std::uint64_t count = 0;
-  // Function: what it returns, and its parameters, which live in the store's
-  // member array at `[firstParam, firstParam + paramCount)`. Tuple: the members,
-  // in the same array and the same shape -- a tuple has no return type and a
-  // function has no member list, so one pair of fields covers both and the
-  // identity rule (`hashOf`/`equalParts`) never has to ask which kind it has.
+  // Function: what it returns, and its parameters, which are the row of the
+  // store's sequence table that `sequence` names. Tuple: the members, in the same
+  // table and the same shape -- a tuple has no return type and a function has no
+  // member list, so one pair of fields covers both and the identity rule
+  // (`hashOf`/`equalParts`) never has to ask which kind it has.
   TypeId returnType;
-  std::uint32_t firstParam = 0;
+  // The **row index** of that sequence, assigned by the store when the type is
+  // appended and never written again. A row index and not an offset into one flat
+  // array, and the reason is a caller's span: `paramsOf`/`membersOf` hand one out,
+  // and a checker holds it while it reads what the span is made of -- which
+  // interns types (the substituted signature of a generic call, a tuple built
+  // while an argument is checked). Appending to the store must not move the row a
+  // live span points at, and a row in a `deque` never moves.
+  std::uint32_t sequence = 0;
   std::uint32_t paramCount = 0;
+  // How many types this one is made of, children included: one for a type with
+  // none, and one plus the children's for everything else. Derived, like
+  // `sequence`, so it is neither hashed nor compared -- and **stored** rather
+  // than computed, because computing it by walking is the very cost it exists to
+  // bound (`support/limits.h`, `kMaxTypeNodes`): a caller that had to walk the
+  // structure to ask whether the structure is too large would have already paid.
+  std::uint32_t nodes = 1;
+  // The object's layout, derived like `nodes` and **stored** for a sharper reason:
+  // this store is a **DAG**, not a tree. `type P1 = (P0, P0);` interns one type
+  // with two parents, so a recursive walk of the structure it spells out is
+  // exponential in the depth while the store holds only a handful of types -- and
+  // the layout is the question every stage asks per *use* (an array's element, a
+  // variable's slot, a field's offset), so a walk per use is a walk per line.
+  //
+  // `size` is bytes, `align` is bytes and at least 1 wherever a layout exists, and
+  // `unknownSize` is "the width is not decided yet" -- a type parameter, or an
+  // aggregate built out of one -- which is why `[4]T` has no size (yet) and `void`
+  // has none at all. The two zeros are different questions and `unknownSize` is
+  // what tells them apart; `hasUnknownSize` is the one that asks.
+  std::size_t size = 0;
+  std::uint16_t align = 1;
+  bool unknownSize = false;
   // Function: the parameter list ends in `...`, so a call may pass more
   // arguments than `paramCount`. Part of the *type* and not a flag beside it,
   // because `f(i32)` and `f(i32, ...)` are different functions -- the same

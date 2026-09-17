@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include "support/limits.h"
+
 namespace minc::sema {
 namespace {
 
@@ -518,11 +520,22 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
     }
     const TypeId product = types.tupleOf(members);
     if (!product.valid()) {
-      // The three reasons `tupleOf` answers no: an arity under two (impossible
-      // here, the reader refused it above), a member that is not an object
-      // (impossible here too), and a product larger than the target can address --
-      // which is the one this line is for, and the caller's token is the place to
-      // say it.
+      // The four reasons `tupleOf` answers no: an arity under two (impossible
+      // here, the reader refused it above), a member that is not an object (asked
+      // member by member above), a product larger than the target can address,
+      // and -- the one this reader is the only one able to say -- a product made
+      // of too many types.
+      //
+      // The two are told apart by asking the store the structural question first,
+      // and that is why the question is public: a product that reuses a large type
+      // twice per level is a *different* mistake from one that is merely too big
+      // for the target, and a reader sent looking for the wrong cause is what two
+      // sentences prevent (`type_store.h`, on `nodesOf`).
+      if (types.nodesOf(members) > support::kMaxTypeNodes) {
+        return fail("this product is made of more than " + std::to_string(support::kMaxTypeNodes) +
+                    " types: a product that holds a large one twice per level doubles per "
+                    "level, so the structure is refused rather than laid out");
+      }
       return fail("a product of " + std::to_string(members.size()) +
                   " members is larger than this target can address");
     }

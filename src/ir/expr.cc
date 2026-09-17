@@ -512,7 +512,7 @@ Value Lowering::loadPlace(const Place& place, ast::AstId placeNode) {
   // A place that came through a pointer must have an obligation: the record is
   // how the model's alignment and provenance reach the instruction, and a
   // missing one means the checker stopped recording where it used to.
-  if (isAccessNode(placeNode) && obligationFor(placeNode) == nullptr) {
+  if (isAccessNode(placeNode) && !obligationFor(placeNode).has_value()) {
     fatal(spanOf(placeNode), IRDiagnosticCode::MissingObligation,
           "an access through a pointer reached lowering with no access record; the checker "
           "stopped recording where this stage reads the record");
@@ -522,7 +522,7 @@ Value Lowering::loadPlace(const Place& place, ast::AstId placeNode) {
   // the passing edge of each test is the block the load lives in, which is the
   // shape `invariants.cc` reads back (`ir.md` § *The checked build's guards*).
   if (checksEnabled()) {
-    if (const sema::AccessObligation* obligation = obligationFor(placeNode)) {
+    if (const std::optional<sema::AccessObligation> obligation = obligationFor(placeNode)) {
       guardAccess(place, *obligation, spanOf(placeNode));
     }
   }
@@ -543,7 +543,7 @@ void Lowering::storePlace(const Place& place, const Value& value, ast::AstId pla
   if (place.addr == nullptr || value.v == nullptr) {
     return;
   }
-  if (isAccessNode(placeNode) && obligationFor(placeNode) == nullptr) {
+  if (isAccessNode(placeNode) && !obligationFor(placeNode).has_value()) {
     fatal(spanOf(placeNode), IRDiagnosticCode::MissingObligation,
           "a store through a pointer reached lowering with no access record; the checker "
           "stopped recording where this stage reads the record");
@@ -567,7 +567,7 @@ void Lowering::storePlace(const Place& place, const Value& value, ast::AstId pla
   // the violation that corrupts the *next* thing rather than this one, and it is
   // the half a reader is least able to notice from a stack trace.
   if (checksEnabled()) {
-    if (const sema::AccessObligation* obligation = obligationFor(placeNode)) {
+    if (const std::optional<sema::AccessObligation> obligation = obligationFor(placeNode)) {
       guardAccess(place, *obligation, spanOf(placeNode));
     }
   }
@@ -1491,7 +1491,24 @@ Value Lowering::lowerCall(ast::AstId expr) {
   if (builtinCallee(callee) != nullptr) {
     return lowerBuiltinCall(expr);
   }
-  const Value calleeValue = lowerExpr(callee);
+  // A **generic call**: the callee is a template and what the module calls is one
+  // of its instances. Which one is `sema`'s answer, keyed on the pair (the body
+  // being lowered, the call) -- because one call node inside a generic body is
+  // lowered once per instance and reaches a different symbol each time
+  // (`generics.md`, § 5). The callee is not lowered as a value here: a template
+  // has no symbol, and `sema` refused every position that would ask for one.
+  llvm::Function* instance = nullptr;
+  if (const std::uint32_t target = typed_.callTarget(currentInstance_, expr);
+      target != sema::kNoInstance) {
+    if (target >= instances_.size() || instances_[target] == nullptr) {
+      fatal(spanOf(expr), IRDiagnosticCode::Internal,
+            "this call names an instance that was not declared");
+      return {};
+    }
+    instance = instances_[target];
+  }
+  const Value calleeValue =
+      instance != nullptr ? Value{instance, typeOf(callee)} : lowerExpr(callee);
   if (calleeValue.v == nullptr) {
     return {};
   }
@@ -1505,9 +1522,12 @@ Value Lowering::lowerCall(ast::AstId expr) {
 
   std::vector<llvm::Value*> arguments;
   const std::span<const sema::TypeId> params = types_.paramsOf(typeOf(callee));
-  if (operands.size() > 1) {
+  // The argument list, found **by kind**: a call that wrote `::<...>` has three
+  // children, and the value list is not the second of them.
+  const ast::AstId argList = childOf(expr, ast::NodeKind::ArgList);
+  if (argList.valid()) {
     std::size_t index = 0;
-    for (const ast::AstId argument : operandsOf(operands[1])) {
+    for (const ast::AstId argument : operandsOf(argList)) {
       const Value value = lowerOperand(expr, argument);
       if (value.v == nullptr) {
         return {};

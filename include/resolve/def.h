@@ -43,6 +43,16 @@ enum class DefKind : std::uint8_t {
   // expand it, while the type it names has one identity with or without the name
   // (`type_alias.md`, decisions 2 and 11).
   TypeAlias,
+  // A **binder**: the `T` of `fn T identity<T>(value: T)` or of `type Pair<T, K> =
+  // (T, K);` (`generics.md`). A name for an abstract type, in the `Tag`
+  // namespace, scoped to the declaration that wrote it -- so it is declared,
+  // shadowed, and (not) reused by the same rules every other name follows, and
+  // the IDE can answer for it.
+  //
+  // It is a definition here and *not* a type-store entry: the checker builds the
+  // `Param` rows its type reader takes from the declaration itself, because a
+  // type is read once per declaration and a def is what makes `T` a *name*.
+  GenericParam,
 };
 
 [[nodiscard]] std::string_view toString(DefKind value);
@@ -63,6 +73,12 @@ enum class ScopeKind : std::uint8_t {
   FunctionPrototype, // reserved
   Loop,              // reserved: `for`/`while` will want it
   Switch,            // reserved
+  // The names **one declaration** introduces and no other declaration sees: the
+  // binders of a generic `fn` or `type`. A scope rather than a list in the
+  // declaration, because a binder is a name before it is anything else -- the
+  // duplicate rule, the shadow rule and the reserved-word rule are the ones every
+  // other name follows, and they are all keyed on a scope (`generics.md`).
+  Declaration,
 };
 
 [[nodiscard]] std::string_view toString(ScopeKind value);

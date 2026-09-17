@@ -31,6 +31,12 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   if (failed_ || !info.body.valid() || inError(info.body)) {
     return;
   }
+  // A generic *declaration* has no body to lower of its own: it is lowered once
+  // per instance, by `defineInstance`. Nothing below this line would work for one
+  // anyway -- its signature holds `Param`s, and this stage may not emit those.
+  if (info.binders != 0) {
+    return;
+  }
   const ast::AstId nameNode = childOf(info.decl, ast::NodeKind::Name);
   const std::optional<resolve::DefId> def = defAtName(nameNode);
   if (!def.has_value()) {
@@ -53,14 +59,71 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
     // had an error -- and stopping is what keeps the module one body per symbol.
     return;
   }
+  // No instance: a function the source wrote whole has one name for both
+  // questions -- what a debugger shows and what the linker sees -- which is
+  // exactly what changes for an instance.
+  defineBody(info, function, info.functionType, /*instance=*/nullptr);
+}
+
+void Lowering::defineInstance(std::uint32_t index) {
+  const sema::InstantiationInfo* instance = typed_.instance(index);
+  if (instance == nullptr || index >= instances_.size() || instances_[index] == nullptr) {
+    return;
+  }
+  const sema::FunctionInfo& decl = typed_.functionTable[instance->function];
+  if (failed_ || !decl.body.valid() || inError(decl.body)) {
+    return;
+  }
+  llvm::Function* function = instances_[index];
+  if (!function->empty()) {
+    return; // one body per instance, the same rule as one body per declaration
+  }
+  // The **substitution**, for the whole length of this body: every type read below
+  // goes through `concrete`, so `T` reads as `i32` here and as `f64` in the next
+  // instance of the same declaration.
+  currentInstance_ = index;
+  instanceOwner_ = decl.owner;
+  instanceArgs_ = instance->args;
+  defineBody(decl, function, instance->functionType, instance);
+  currentInstance_ = sema::kNoInstance;
+  instanceOwner_ = 0;
+  instanceArgs_.clear();
+}
+
+void Lowering::defineBody(const sema::FunctionInfo& info, llvm::Function* function,
+                          sema::TypeId signature, const sema::InstantiationInfo* instance) {
+  const ast::AstId nameNode = childOf(info.decl, ast::NodeKind::Name);
+  // The two names, from the instance when there is one: `identity<i32>` is what a
+  // debugger shows and `__M8_identityi32` is what the linker sees, and they differ
+  // by exactly the arguments (`generics.md`, § 7).
+  const std::string sourceName = instance != nullptr
+                                     ? instance->name
+                                     : linkageName(defAtName(nameNode).value_or(resolve::DefId{}));
+  const std::string_view symbol =
+      instance != nullptr ? std::string_view(instance->symbol) : std::string_view(sourceName);
+  const std::span<const sema::TypeId> templateParams =
+      instance != nullptr ? std::span<const sema::TypeId>(instance->templateParams)
+                          : std::span<const sema::TypeId>{};
+  const std::span<const sema::TypeId> templateArgs =
+      instance != nullptr ? std::span<const sema::TypeId>(instance->args)
+                          : std::span<const sema::TypeId>{};
+  // Every type below is read from `signature` and not from `info`, because the two
+  // are different things for an instance: `info` is the *declaration* -- its own
+  // signature holds `Param`s -- and `signature` is the type this body is being
+  // built for.
+  const sema::TypeId returnType =
+      types_.known(signature) ? types_.get(signature).returnType : sema::kTypeError;
 
   // The function's debug scope is opened before the entry block, so the block's
   // own instructions and the parameters stored into their slots all carry a line
-  // number rather than the file scope's.
+  // number rather than the file scope's. `debugName` is the source spelling and
+  // `symbol` the mangled one for an instance, which is what makes `gdb`'s `info
+  // functions identity` list every instantiation and `break identity` a
+  // multi-location breakpoint (`generics.md`, § 8).
   if (debug_ != nullptr) {
-    const std::string symbol = linkageName(*def);
-    debug_->enterFunction(*function, symbol, symbol, types_, info.functionType,
-                          nameNode.valid() ? spanOf(nameNode) : spanOf(info.decl));
+    debug_->enterFunction(*function, sourceName, symbol, types_, signature,
+                          nameNode.valid() ? spanOf(nameNode) : spanOf(info.decl), templateParams,
+                          templateArgs);
   }
 
   llvm::BasicBlock* entry = llvm::BasicBlock::Create(context_, "entry", function);
@@ -75,7 +138,7 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   allocaBuilder_.SetInsertPoint(entry);
 
   current_ = function;
-  currentReturn_ = info.returnType;
+  currentReturn_ = returnType;
   // One flat map per function, cleared here: a `DefId` is unique across the
   // unit, so a key from a previous function cannot be found by accident, but
   // holding every frame of every function alive would keep an `alloca` of a
@@ -85,12 +148,12 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   // The parameters, stored into their own slots. This is what makes a parameter
   // a *place* like every other binding: `&p` takes the address of the slot, and
   // an assignment to `p` writes it, with no second rule for parameters.
-  const std::span<const sema::TypeId> params = types_.paramsOf(info.functionType);
+  const std::span<const sema::TypeId> params = types_.paramsOf(signature);
   const ast::AstId paramList = childOf(info.decl, ast::NodeKind::ParamList);
   // An aggregate return puts its destination *first* in the argument list, so
   // every parameter's index moves by one (`arrays.md` decision 13). The shift is
   // computed once, here, rather than being remembered at each `getArg` below.
-  if (byReference(info.returnType) && function->arg_size() > 0) {
+  if (byReference(returnType) && function->arg_size() > 0) {
     sretPointer_ = function->getArg(0);
   }
   std::size_t index = 0;
@@ -166,7 +229,7 @@ void Lowering::defineFunction(const sema::FunctionInfo& info) {
   // the module is still well formed for a tree that got here some other way.
   llvm::BasicBlock* last = builder_.GetInsertBlock();
   if (last != nullptr && last->getTerminator() == nullptr) {
-    if (types_.isVoid(info.returnType) || byReference(info.returnType)) {
+    if (types_.isVoid(returnType) || byReference(returnType)) {
       // An aggregate return falls off the end the same way a `void` one does: the
       // destination is the caller's storage and it was written by the `return`s,
       // and a function with no `return` at all is already refused. `sema` is what

@@ -164,6 +164,24 @@ void Parser::parseCastType() {
   while (at(lex::TokenKind::Identifier) && !bailedOut_) {
     bump();
   }
+  // `x as Vec<i32>`: a `<` here is **not** a list of arguments. In this position
+  // `x as i32 < 3` is a comparison -- a program that has nothing to do with
+  // generics -- so a reader that took the `<` for a list would break it, and the
+  // cast reads a run of words and stops.
+  //
+  // Refused **by name**, and the list is consumed with the refusal: left in the
+  // stream it would become a comparison against the first argument, and the
+  // reader would get three sentences about a comma (`<`, `,`, `>`) for one thing
+  // they wrote on purpose. The sentence names the fix, because there is one: a
+  // generic type *is* the type it abbreviates, so the cast is written against
+  // that (`type_alias.md`, decision 8).
+  if (at(lex::TokenKind::Less)) {
+    error("a cast to a type that takes arguments is not read yet: write the cast against the "
+          "type it abbreviates -- the `<` after a type here is a comparison "
+          "(`x as i32 < 3`)",
+          ParseErrorCode::CastToGenericType);
+    reportUnusedListClose(parseTypeArgList());
+  }
   type.complete(SyntaxKind::Type);
 }
 

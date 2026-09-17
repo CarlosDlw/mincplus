@@ -122,6 +122,17 @@ public:
   // layout rule. `nullopt` when a member has no object representation or when the
   // padded total does not fit `std::size_t`.
   [[nodiscard]] std::optional<std::size_t> tupleSize(std::span<const TypeId> members) const;
+  // How many types a structure built from `parts` would be made of, `children`
+  // (a pointee, a return type) included -- the peer of `tupleSize` for the other
+  // reason a build is refused. Asking it **before** the build is how a caller
+  // says which of the two happened, and it is also what keeps the refusal cheap:
+  // the count comes from what the store already recorded per type, so answering
+  // costs one step per *member* and never a walk of the structure itself.
+  //
+  // Saturates one past `kMaxTypeNodes`, because the only question asked of it is
+  // whether it is over the bound.
+  [[nodiscard]] std::uint32_t nodesOf(std::span<const TypeId> parts,
+                                      std::span<const TypeId> children = {}) const;
   // The parameters are copied into the store; the caller's span need not
   // outlive the call.
   // `variadic` is required rather than defaulted: every caller is a signature,
@@ -308,11 +319,27 @@ public:
   [[nodiscard]] TypeId defaultOf(TypeId id);
 
 private:
-  // The type's members, read out of the arena for a type that is *already*
-  // interned. The span the arena yields and the span a caller hands to
+  // The type's members, read out of the sequence table for a type that is
+  // *already* interned. The span the table yields and the span a caller hands to
   // `tupleOf`/`function` are the same thing by construction; this is the one that
   // reads it where it lives.
   [[nodiscard]] std::span<const TypeId> partsOf(const Type& type) const;
+  // One child's count: what `nodesOf` adds for a single `TypeId`. An id this
+  // store does not know counts one, which is what makes a structure built on an
+  // unknown type answer *small* rather than refuse -- an unknown type is the
+  // poison `kInvalidType`, and the caller that built on one has already said so.
+  [[nodiscard]] std::uint32_t childNodes(TypeId id) const;
+  // A layout before it is stored: what `internSequence` copies into the `Type`.
+  // Its own type rather than three parameters, because the three travel together
+  // and a caller that mixed up two of them would be storing a wrong size.
+  struct Layout {
+    std::size_t size = 0;
+    std::uint16_t align = 1;
+    bool unknownSize = false;
+  };
+  // The layout of the type being built, from the layouts of its children -- each
+  // already stored, so this is O(children) and never a walk (`type_store.cc`).
+  [[nodiscard]] Layout layoutOf(const Type& type, std::span<const TypeId> parts) const;
   // The one hash, over the fields *and* the member sequence. It reads the
   // sequence from a span rather than from the arena because the type being hashed
   // may not be in the arena yet -- that is the whole case `function` and
@@ -334,7 +361,21 @@ private:
   TargetInfo target_;
   std::size_t maxTypes_ = support::kMaxTypesPerUnit;
   std::vector<Type> types_;
-  std::vector<TypeId> params_;
+  // The member sequences: one row per function or tuple type, written once when
+  // the type is appended and never touched again.
+  //
+  // A `deque` of rows rather than one flat array, and the reason is stability, not
+  // layout. `paramsOf`/`membersOf` hand out a `span` over a row, and a caller
+  // holds one across an interning: checking a call's arguments interns the
+  // instance's signature, and a checker of an array initializer holds the members
+  // of the array while it interns the types of the elements. Appending to a
+  // `deque` does not move what is already in it, so the span keeps pointing at the
+  // row it was about; appending to a flat array moves every row at once, and every
+  // such span becomes a read of freed memory with no diagnostic anywhere near it.
+  //
+  // The rows are never erased, which is what makes a row index (`Type::sequence`)
+  // an index that stays valid for the life of the store.
+  std::deque<std::vector<TypeId>> sequences_;
   std::unordered_multimap<std::uint64_t, TypeId> index_;
   // The spellings of the type parameters, owned by the store because a `Type`
   // holds a *view* of them: a `deque` and not a `vector`, because a vector's move

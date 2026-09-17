@@ -39,6 +39,10 @@ public:
     return current() == lex::TokenKind::EndOfFile;
   }
 
+  [[nodiscard]] std::uint32_t position() const override {
+    return static_cast<std::uint32_t>(index_);
+  }
+
   void bump() override {
     // Stops at the end rather than running off it: once the end-of-file token
     // has been consumed, `index_` equals the token count and every later call

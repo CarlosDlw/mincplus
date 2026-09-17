@@ -73,8 +73,18 @@ public:
   // `functionType` is `sema`'s type of the signature (so the parameter types in
   // the debugger are the checker's, not a second reading of the syntax), and
   // `span` is the declaration, so the line number is the one the reader wrote.
+  //
+  // `templateParams` and `templateArgs` are the instance's two lists, positionally
+  // paired: the declaration's binders (one `Param` per binder, in order) and the
+  // arguments they were instantiated with. Both are empty for a function the source
+  // wrote whole. A non-empty pair emits one `DW_TAG_template_type_parameter` per
+  // binder, named by the *binder* (`T`) and typed by the **argument**, which is
+  // what clang and rustc both emit and what lets a debugger answer "instantiated
+  // with `i32`" without a dictionary (`generics.md`, § 8).
   void enterFunction(llvm::Function& function, std::string_view name, std::string_view linkageName,
-                     const sema::TypeStore& types, sema::TypeId functionType, support::Span span);
+                     const sema::TypeStore& types, sema::TypeId functionType, support::Span span,
+                     std::span<const sema::TypeId> templateParams = {},
+                     std::span<const sema::TypeId> templateArgs = {});
   // Closes it. Safe to call with no scope open.
   void leaveFunction();
   [[nodiscard]] bool inFunction() const {
