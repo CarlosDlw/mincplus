@@ -37,6 +37,13 @@ has the colons, and why Rust spells it the same way. The reader also splits a
 `>>` or `>>=` that closes two lists, so `Pair<Pair<i32, i32>, i32>` needs no
 spaces.
 
+A call form on a function that declares **no binders** is refused, and not
+ignored: `one::<i32>()` where `one` is a plain `fn i32 one()` is
+`sema-generic-type-args` — the list has nothing to fill, and accepting it would be
+the compiler agreeing to a sentence that says nothing. It is a list of *types*,
+so a value in it is refused too: a binder is a type parameter, and the language
+has no value parameters.
+
 A use is a type in **every** type position — a binding's annotation, a parameter,
 a return type, an alias's target, an array's element, and a cast:
 

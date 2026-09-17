@@ -2493,6 +2493,23 @@ TypeId Checker::checkCall(ast::AstId expr, TypeId expected, ExprInfo& info) {
     return kTypeError;
   }
 
+  // A written `::<...>` on a function that declares no binders. The generic path
+  // above never saw it -- a callee with no binder list is not a template -- and the
+  // list is a *child* of the call, so ignoring it would be the checker agreeing to a
+  // sentence that says nothing at all: `f::<i32>(x)` on a plain `f` would compile as
+  // `f(x)`, and a reader would be told their type arguments were accepted. The list
+  // is the mistake and not the call, so the arguments are still checked below and
+  // the call still lands (`generics.md`, section 3).
+  if (const ast::AstId written = childOf(expr, ast::NodeKind::TypeArgList); written.valid()) {
+    error(written, SemaErrorCode::GenericTypeArgs,
+          "`" +
+              std::string(kindOf(callee) == ast::NodeKind::PathExpr ? spelling(callee)
+                                                                    : std::string_view("this")) +
+              "` takes no type arguments: it declares no binders, so there is nothing for the list "
+              "to "
+              "fill");
+  }
+
   const std::span<const TypeId> params = types_.paramsOf(calleeType);
   // A variadic function accepts *at least* its declared parameters; everything
   // past them is an un-specified argument. A non-variadic one takes exactly

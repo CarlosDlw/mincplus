@@ -223,6 +223,32 @@ fn i32 main() {
       << fixture.firstError().message;
 }
 
+// The other half of the count rule: a list written on a callee that has no binder
+// list at all. The generic path never sees it -- a plain function is not a
+// template -- and the list is a child of the call, so a checker that ignored it
+// would be agreeing to a sentence that says nothing. `f::<i32>(x)` on a plain `f`
+// has to be the mistake, or a reader is told their type arguments were accepted.
+TEST(GenericCallTest, TypeArgumentsOnAFunctionWithNoBindersAreRefused) {
+  SemaFixture fixture;
+  fixture.source(R"(
+fn i32 one() {
+  return 1;
+}
+
+fn i32 main() {
+  return one::<i32>();
+}
+)");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.hasError("sema-generic-type-args"));
+  EXPECT_NE(fixture.firstError().message.find("takes no type arguments"), std::string::npos)
+      << fixture.firstError().message;
+  // One diagnostic, not two: the call itself is fine, so the argument count and
+  // the return type are not second complaints about the same line.
+  EXPECT_EQ(fixture.errorCount(), 1u)
+      << (fixture.errorCount() == 0 ? "" : fixture.firstError().message);
+}
+
 TEST(GenericCallTest, ATypeArgumentThatCannotBeStoredIsRefused) {
   SemaFixture fixture;
   fixture.source(R"(
