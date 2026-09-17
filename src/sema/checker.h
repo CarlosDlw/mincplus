@@ -622,6 +622,9 @@ private:
                                      std::uint8_t operandBase, bool isFill, TypeId arrayType,
                                      ExprInfo& info);
   [[nodiscard]] TypeId checkBinary(ast::AstId expr, ExprInfo& info);
+  // Was this operand written as a comparison, with no parenthesis between it and
+  // whoever is asking? `a < b > c` is a chain; `(a < b) > c` is a decision.
+  [[nodiscard]] bool isUnparenthesizedComparison(ast::AstId operand) const;
 
   // A binary operator with a **binder** on one side: the class decides whether the
   // operation is allowed, and the result is the binder (arithmetic) or `bool` (a

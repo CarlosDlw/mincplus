@@ -122,12 +122,6 @@ constexpr CodeCase kCases[] = {
      ParseErrorCode::ExpectedTypeArgClose},
     {"one `>` more than there are lists", "fn i32 main() { let x: A<B>> = 1; }\n",
      ParseErrorCode::StrayTypeArgClose},
-    // A cast to a type that takes arguments. The `<` after a type in a cast is a
-    // comparison (`x as i32 < 3`), so the list cannot be read there -- and the
-    // refusal has to be named, because left to the next token it is three
-    // sentences about a comma.
-    {"a cast to a generic type", "fn i32 main() { let x: i32 = 1 as P<i32>; return x; }\n",
-     ParseErrorCode::CastToGenericType},
 };
 
 [[nodiscard]] std::string deepInput() {

@@ -790,7 +790,9 @@ warnings inside them are dropped at the report step while errors are not.
   constant folder folds it through the same pair → instruction table. The
   language has three spellings of it and one meaning (`x as T`, `(T)x`, and a
   literal's suffix, `10u8`), the C one made unambiguous by *reserving the type
-  names* rather than by teaching the parser a symbol table, and the one
+  names* rather than by teaching the parser a symbol table, the postfix one
+  naming **any** type the language has — product, use, pointer — because it is
+  read by the one type reader inside a bound, and the one
   conversion with a precondition — float to integer, where LLVM's `fptosi` is
   poison out of range — is guarded and traps, exactly as division by zero is.
   [`architectures/casts.md`](architectures/casts.md) is that record: the matrix,

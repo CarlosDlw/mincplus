@@ -279,14 +279,18 @@ are not there at all:
 - defining a variadic function (`va_start` does not exist yet)
 - `extern let` / `extern const` — reading a C global from `.mx`
 - `#include` of C headers — `#include` itself works, on `.mx` headers
-- the standard library, the checked build, and its runtime guards
+- the standard library
+
+The **checked build** is implemented, and it is not on that list: `-fcheck` (on
+at `-O0`) guards every access through a pointer and stops with a named site when
+one is violated — see [the memory model](/language/memory-model).
 
 What *is* there has a page each: [pointers](/language/pointers) and the
 [memory model](/language/memory-model), [arrays](/language/arrays),
 [slices](/language/slices), [casts](/language/expressions#casts),
-[file-scope bindings](/language/variables#file-scope) — including `static` — and
-[`extern fn`](/language/functions), variadics included. Two pages are working
-references rather than prose:
+[file-scope bindings](/language/variables#file-scope) — including `static`, on a
+binding or a function — and [`extern fn`](/language/functions), variadics
+included. Two pages are working references rather than prose:
 [the operator table](/reference/operators) and [the grammar](/reference/grammar).
 
 The [feature checklist](/language/features) carries the authoritative list,

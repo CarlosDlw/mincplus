@@ -253,7 +253,10 @@ typed AST view on top.
       ([`architectures/casts.md`](architectures/casts.md)): the grammar, the
       matrix, the lowering, the flags (`-Wcast`, `-Wprovenance`) and the tests
       that walk every ordered pair of the type universe are in, and
-      `examples/017_casts.mx` is the runnable page. An `int → ptr` cast takes a
+      `examples/017_casts.mx` is the runnable page. A cast names **any** type the
+      language has — `as (i32, i32)`, `as Pair<T, K>`, `as Vec<u8> * 2` — read by
+      the one type reader inside a bound the scan finds, with the `<` decided by
+      tokens and a chain refused by name (`sema-comparison-chain`). An `int → ptr` cast takes a
       **value, never a constant** (`sema-address-from-constant`, zero included):
       an address is obtained from an object, an `expose`d pointer, or the system,
       and the null address is `null` (`null as str` for a `str`)

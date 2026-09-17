@@ -22,6 +22,7 @@
 
 #include "support/typenames/type_name.h"
 #include "token_class.h"
+#include "type_scan.h"
 
 namespace minc::parse {
 
@@ -138,49 +139,32 @@ CompletedMarker Parser::parsePrefix() {
 
 void Parser::parseCastType() {
   Marker type = start();
-  // Constructors first, whole groups, then the words -- the shape a type
-  // position has (`typespec.h`). The difference from `parseType` is where it
-  // stops: after the words, nothing more is part of the type. `a as i32 * 2` is
-  // a multiplication, `a as *u8` is a pointer, and a run that kept going would
-  // build `i32 *` -- which is a `*` after the words, the one spelling the type
-  // reader refuses by name.
-  while (!atEnd() && !bailedOut_) {
-    if (at(lex::TokenKind::Star) || at(lex::TokenKind::Bang)) {
-      bump();
-      continue;
-    }
-    if (at(lex::TokenKind::LBracket)) {
-      parseArrayCount();
-      continue;
-    }
-    break;
-  }
-  if (!at(lex::TokenKind::Identifier)) {
+  // The type after `as` is read by the reader **every type position uses**, inside
+  // a bound that says where it ends. That is the whole of what changed here: the
+  // cast had a reader of its own -- constructors, then words, and stop -- so
+  // `as (i32, i32)` and `as Pair<T, K>` were not types in this position while
+  // `as [4]i32` and `as *u8` were, and the difference was which function ran and
+  // not a decision about the language (`casts.md`, decision 18).
+  //
+  // The *scan* runs first because the two questions a reader cannot answer alone
+  // are questions about tokens: whether the `<` after a word is a list or a
+  // comparison (`x as i32 < 3`), and where the run stops so that a `*` after the
+  // words is a multiplication (`x as i32 * 2`) rather than a pointer whose
+  // pointee never came.
+  const TypeRunScan run = scanTypeRun(*this, RunKind::Cast);
+  if (run.tokens == 0) {
     // `x as 1` and `x as`, both one mistake: no type was written.
     error("expected a type after `as`", ParseErrorCode::ExpectedType);
     type.complete(SyntaxKind::Type);
     return;
   }
-  while (at(lex::TokenKind::Identifier) && !bailedOut_) {
-    bump();
-  }
-  // `x as Vec<i32>`: a `<` here is **not** a list of arguments. In this position
-  // `x as i32 < 3` is a comparison -- a program that has nothing to do with
-  // generics -- so a reader that took the `<` for a list would break it, and the
-  // cast reads a run of words and stops.
-  //
-  // Refused **by name**, and the list is consumed with the refusal: left in the
-  // stream it would become a comparison against the first argument, and the
-  // reader would get three sentences about a comma (`<`, `,`, `>`) for one thing
-  // they wrote on purpose. The sentence names the fix, because there is one: a
-  // generic type *is* the type it abbreviates, so the cast is written against
-  // that (`type_alias.md`, decision 8).
-  if (at(lex::TokenKind::Less)) {
-    error("a cast to a type that takes arguments is not read yet: write the cast against the "
-          "type it abbreviates -- the `<` after a type here is a comparison "
-          "(`x as i32 < 3`)",
-          ParseErrorCode::CastToGenericType);
-    reportUnusedListClose(parseTypeArgList());
+  const ListClose close = parseBoundTypeRun(run.tokens);
+  // A compound closer can carry an `=` (`Vec<i32>= t`), and in a declaration a
+  // `let` or a `const` owns it. A cast owns no declaration, so the character is
+  // stray here and this is the frame that says so -- left unreported it would sit
+  // in the tree as an `=` nobody wrote in a type and nobody reads either.
+  if (close.sawEqual) {
+    reportUnusedListClose(close);
   }
   type.complete(SyntaxKind::Type);
 }
@@ -278,9 +262,16 @@ CompletedMarker Parser::parseProductCastRefusal() {
   // hand the next rule a token that belongs to this one. The parser is the stage
   // that can see the cast *shape*; the sentence names what to write instead
   // (`tuples.md`, decision 19).
+  //
+  // The reason the `(T)x` form does not take a product is the reason it takes no
+  // user alias either: this spelling names a **reserved type word** and nothing
+  // else, which is what makes `(x) + 1` a parenthesised expression rather than a
+  // cast (`casts.md`, decision 4). A product is a type like any other, and the
+  // form that names any type is `as` -- which reads one, now that it reads types
+  // whole.
   Marker cast = start();
-  error("a cast names one type, and `(T, U)` is a product: take the value whole, or cast each "
-        "member where it is used",
+  error("`(T)x` names a reserved type word, and `(T, U)` is not one: write the cast with `as` "
+        "(`x as (T, U)`), or cast each member where it is used",
         ParseErrorCode::CastToProduct);
   std::uint32_t depth = 0;
   while (!atEnd() && !bailedOut_) {

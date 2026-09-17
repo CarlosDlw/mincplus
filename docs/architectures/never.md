@@ -221,7 +221,7 @@ prototype is for.
 | Stage | File | What |
 |---|---|---|
 | lexer | — | **nothing.** `!` was already a punctuator (`TokenKind::Bang`), which is §1's argument made concrete |
-| parse | `src/parse/declaration.cc` | `Bang` joins the type run in `typeRunLength`, `parseTypeAndName` and `parseType`. No new syntax kind, no new error code |
+| parse | `src/parse/declaration.cc`, `src/parse/type_scan.h` | `Bang` joins the type run in `scanTypeRun`, `parseTypeAndName` and `parseType`. No new syntax kind, no new error code |
 | syntax | — | the `Type` node holds a `!` token; `identifierText` of such a node is empty, which is what a `!` type is |
 | sema (types) | `type.h`, `type_store.cc`, `typespec.cc` | `TypeKind::Never`, `kTypeNever` (id 20, appended so no existing id moves), spelling `!`, size/align 0, the run reader |
 | sema (conversion) | `convert.cc` | the one arm of §3 |

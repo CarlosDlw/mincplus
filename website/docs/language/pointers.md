@@ -213,8 +213,14 @@ lifetime, and exactly what happens when an obligation is violated — is
 [the memory model](/language/memory-model).
 
 :::note[Not implemented yet]
-`restrict`, address spaces, `*const T`, and the checked build's access guards are
-not implemented. Today a pointer is one address, one pointee type, and the shapes
-above — including arrays and a pointer to one (`&a[0]` is a `*i32`, `&a` is a
+`restrict`, address spaces and `*const T` are not implemented, and neither is the
+shadow-memory half of the checked build (a *pointer*'s own extent, unwritten
+bytes, a dead allocation). The guards that need nothing but the module — a null
+dereference, a misaligned access, an index past an array's or a view's extent —
+*are* implemented: `-fcheck`, on at `-O0`, and they print the site and stop. See
+[the memory model](/language/memory-model#what-a-checked-build-reports).
+
+Today a pointer is one address, one pointee type, and the shapes above —
+including arrays and a pointer to one (`&a[0]` is a `*i32`, `&a` is a
 `*[4]i32`), which is why there is no decay to lose the bound.
 :::

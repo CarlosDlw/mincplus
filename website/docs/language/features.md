@@ -87,7 +87,7 @@ first-class types; the examples use the primitive names. See
       C's field order, and an unnamed composite record in `-g`. A chain of two
       reads is written apart — `t.0 .1` — because `0.1` is one number to the
       scanner. Refused across the C boundary: the aggregate's layout is this
-      compiler's internal convention. See
+      compiler's internal convention. See [Tuples](/language/tuples) and
       [`docs/architectures/tuples.md`](https://github.com/carlosdlw/mincplus/blob/main/docs/architectures/tuples.md);
       generics come **after** it, because a binder list is itself a sequence of
       pairs and the store gained arity-unknown interning here
@@ -349,7 +349,10 @@ Everything below is what lands on top of that model. See
       default's — `pub`/`private` filters lookup without rewriting linkage
       (`resolve.md` decision F)
 - [x] `static` makes a binding **internal to this unit** — the one word that
-      narrows linkage, and the answer to a shared `.mx` file included twice
+      narrows linkage, and the answer to a shared `.mx` file included twice. The
+      same word in front of a `fn` does the same for a function
+      (`static fn i32 helper()`), with the same meaning and the same refusal of
+      a second, conflicting linkage on one name
 - [x] `const` protects the **name**, not the memory: a global is never
       `readonly`/`constant` in the IR on the strength of it
 - [x] `#define` is not the constant and the constant is not a `#define`: the

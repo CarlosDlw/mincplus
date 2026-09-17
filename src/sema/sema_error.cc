@@ -27,6 +27,7 @@ constexpr auto kSemaErrorCodeInfos = std::to_array<SemaErrorCodeInfo>({
     {SemaErrorCode::LiteralOutOfRange, "sema-literal-out-of-range", false},
     {SemaErrorCode::ConditionNotBool, "sema-condition-not-bool", false},
     {SemaErrorCode::InvalidOperands, "sema-invalid-operands", false},
+    {SemaErrorCode::ComparisonChain, "sema-comparison-chain", false},
     {SemaErrorCode::InvalidAssignment, "sema-invalid-assignment", false},
     {SemaErrorCode::AssignToConst, "sema-assign-to-const", false},
     {SemaErrorCode::IncDecNotLvalue, "sema-incdec-not-lvalue", false},

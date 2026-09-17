@@ -699,7 +699,7 @@ Each with its own code and sentence, each at the earliest stage that can decide:
 | `identity::<str>(x)` where the body uses `+` | the argument does not satisfy the constraint; the class is named |
 | `f::<[]T>(...)` where the solution mentions its own binder | no finite instance exists (§ *Occurs*) |
 | an instance list past its budget | § *Instantiation*; names the declaration, the count and the limit |
-| `x as Pair<i32, bool>` | a `<` after a type in a **cast** is a comparison (`x as i32 < 3`), so the list cannot be read there. Refused by name (`parse-cast-to-generic-type`), with the list consumed so one mistake stays one sentence and the sentence names the fix: a generic type *is* the type it abbreviates |
+| `x as Pair<i32, bool>` | **read**, and it is one type reader for both: the cast's type is bounded by `scanTypeRun` and read by `parseTypeRun`, so a use is a type here exactly as it is in an annotation (`casts.md`, decisions 18–19). What tells it from the comparison `x as i32 < 3` is tokens, and only tokens: a reserved type word takes no arguments, the contents have to be type-shaped, and what follows the closer has to be able to follow a complete cast |
 | a structure past `kMaxTypeNodes` | the store is a DAG, so a type that reuses a large one twice per level doubles per level; refused where it is built, before the arithmetic that would lay it out |
 
 Two of those deserve the note that they are *already* right: a `void` type

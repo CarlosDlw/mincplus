@@ -190,8 +190,12 @@ An `extern` declaration the unit never defines in C reaches C's calling
 convention and C's name, which is what makes `puts` and `printf` work with no
 declaration file at all.
 
+`static` before `fn` gives a function **internal linkage**, exactly as it does in
+front of a `let`: `static fn i32 helper()` is a symbol the linker will not
+resolve another unit's reference to. It is the same word with the same meaning,
+and it is what a shared `.mx` header included by two units needs.
+
 :::note[Not implemented yet]
-Function pointers, `static` functions (internal linkage), `inline`, and any form
-of overloading are not implemented. A name denotes one function, and calling is
-always a call to a name.
+Function pointers, `inline`, and any form of overloading are not implemented. A
+name denotes one function, and calling is always a call to a name.
 :::

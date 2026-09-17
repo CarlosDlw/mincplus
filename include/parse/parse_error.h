@@ -127,17 +127,6 @@ enum class ParseErrorCode : std::uint8_t {
   // *character* is the mistake and the fix is which one to delete -- or, for
   // `>=`, that `>` and `=` are two characters (`generics.md`, decision 4).
   StrayTypeArgClose,
-  // A cast to a type that takes arguments -- `x as Pair<i32, bool>`.
-  //
-  // The `<` after a type in this position is **not** a list: `x as i32 < 3` is a
-  // comparison, and a reader that took the `<` for the start of an argument list
-  // would break a program that has nothing to do with generics (`casts.md`,
-  // decision 3, which is why the cast reads a run of words and stops). So the
-  // list is refused by name -- and consumed with it, so one mistake stays one
-  // sentence instead of a cascade from the operand's first token -- and the
-  // sentence names the fix: a generic type *is* the type it abbreviates, so the
-  // cast is written against what it stands for (`type_alias.md`).
-  CastToGenericType,
   // The parser stopped: too many errors, or input nested past the guard.
   Aborted,
 };

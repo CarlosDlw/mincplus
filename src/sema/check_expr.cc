@@ -87,6 +87,23 @@ namespace {
   }
 }
 
+// The four comparisons that **order**, and the ones a written chain is always an
+// error for. `==`/`!=` accept two `bool`s, so `(a < b) == c` is a legal expression
+// and one reader's parenthesis away from the chain they meant; the ordering four
+// take arithmetic operands, which a comparison's result never is, so a chain here
+// is illegal whatever the operands are (`casts.md`, decision 20).
+[[nodiscard]] bool isOrderingComparison(Tag kind) {
+  switch (kind) {
+  case kTokLess:
+  case kTokLessEqual:
+  case kTokGreater:
+  case kTokGreaterEqual:
+    return true;
+  default:
+    return false;
+  }
+}
+
 [[nodiscard]] bool isShift(Tag kind) {
   return kind == kTokLessLess || kind == kTokGreaterGreater;
 }
@@ -1985,6 +2002,17 @@ TypeId Checker::checkBinaryOnParameter(ast::AstId expr, Tag kind, ast::AstId lhs
   return isComparison(kind) ? kTypeBool : binder;
 }
 
+bool Checker::isUnparenthesizedComparison(ast::AstId operand) const {
+  // A parenthesis is its own node (`ParenExpr`), so it is enough to ask what the
+  // operand *is*: a chain is a comparison node whose left operand is a comparison
+  // node, and `(a < b) > c` has `ParenExpr` where this looks for `BinaryExpr`.
+  if (kindOf(operand) != ast::NodeKind::BinaryExpr) {
+    return false;
+  }
+  const ast::AstId op = tokenOf(operand);
+  return op.valid() && isComparison(tagOf(kindOf(op)));
+}
+
 TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
   const ast::AstId op = tokenOf(expr);
   const std::vector<ast::AstId> operands = operandsOf(expr);
@@ -2009,6 +2037,24 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
   // type the reader never wrote (`generics.md`, § 6).
   if (types_.isParam(left) || types_.isParam(right)) {
     return checkBinaryOnParameter(expr, kind, lhs, rhs, left, right, info);
+  }
+
+  // **A comparison does not chain.** `a < b > c` is `(a < b) > c` by
+  // associativity, and the rules below already refuse that -- with a sentence about
+  // an operand, `>` needs arithmetic operands; got `bool` and `i32`, that never
+  // names the thing the reader wrote. This names it, and it is asked of the two
+  // facts a chain can never satisfy: this operator orders, and the operand on its
+  // left is a comparison that no parenthesis came between.
+  //
+  // `(a < b) > c` is the reader saying they meant it, so it is not a chain and it
+  // gets the operand sentence instead -- because that is what is wrong with it.
+  // The parenthesis is the whole difference, and it is why this is not a rule about
+  // the operator (`casts.md`, decision 20).
+  if (isOrderingComparison(kind) && isUnparenthesizedComparison(lhs)) {
+    error(expr, SemaErrorCode::ComparisonChain,
+          "comparison does not chain: `a < b > c` compares `(a < b)` with `c`. Write `(a < b) > "
+          "c` for that, or two comparisons joined by `&&`");
+    return kTypeError;
   }
 
   if (kind == kTokAmpAmp || kind == kTokPipePipe) {
@@ -2050,13 +2096,15 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
 
   if (isComparison(kind)) {
     if (kind == kTokEqualEqual || kind == kTokBangEqual) {
-      // Equality is defined for arithmetic values, and for two `bool`s or two
-      // `str`s. `str == str` is refused with everything else: C's `s1 == s2`
-      // compares addresses, and this operator does not mean that.
-      // A product is not comparable, and the sentence says what to write: `==`
-      // on two products would have to mean "every member `==`", which would be a
-      // built-in rule for an operator the language gives per type through a
-      // declared interface (`tuples.md`, decision 17).
+      // Equality is defined for arithmetic values and for two `bool`s, and for
+      // nothing else. A `str` is *not* one of them: this operator would be C's
+      // `s1 == s2`, an address comparison, and a program that wrote it meant the
+      // contents (`sema.md`, decision 8 — the design record is where the sentence
+      // comes from). A product is not comparable either, and its sentence names
+      // the members to compare: `==` on two products would have to mean "every
+      // member `==`", which would be a built-in rule for an operator the
+      // language gives per type through a declared interface (`tuples.md`,
+      // decision 17).
       if (types_.isTuple(left) || types_.isTuple(right)) {
         error(expr, SemaErrorCode::InvalidOperands,
               "`" + std::string(opText(kind)) +
@@ -2065,13 +2113,20 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
         return kTypeError;
       }
       const bool arithmetic = types_.isArithmetic(left) && types_.isArithmetic(right);
-      const bool sameScalar = left == right && (types_.get(left).kind == TypeKind::Bool ||
-                                                types_.get(left).kind == TypeKind::Str);
-      if (!arithmetic && !sameScalar) {
+      const bool bothBool = left == right && types_.get(left).kind == TypeKind::Bool;
+      if (!arithmetic && !bothBool) {
+        // `str` has a sentence of its own, because it is the one refused type a
+        // reader is likely to have meant something by: the comparison is right
+        // there in the source, and what it does is not what it looks like.
+        const bool str =
+            types_.get(left).kind == TypeKind::Str || types_.get(right).kind == TypeKind::Str;
         error(expr, SemaErrorCode::InvalidOperands,
-              "`" + std::string(opText(kind)) + "` needs two arithmetic values, two `bool`s or " +
-                  "two `str`s; got `" + types_.spelling(left) + "` and `" + types_.spelling(right) +
-                  "`");
+              str ? "`" + std::string(opText(kind)) +
+                        "` on a `str` would compare addresses, not contents, so it is refused: "
+                        "compare the bytes with a library call (a `str` is a pointer to bytes)"
+                  : "`" + std::string(opText(kind)) +
+                        "` needs two arithmetic values or two `bool`s; got `" +
+                        types_.spelling(left) + "` and `" + types_.spelling(right) + "`");
         return kTypeError;
       }
       if (arithmetic) {

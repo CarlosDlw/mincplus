@@ -9,22 +9,29 @@ language's own node kinds, so each production corresponds to one node in the tre
 you can see with `mincc parse`.
 
 ```
-file            := item*item            := [ "static" ] ( extern-fn | fn | let-stmt | const-stmt )
-extern-fn       := "extern" "fn" type name "(" params ")" ";"
-fn              := "fn" type name "(" params ")" block
+file            := item*
+item            := [ "static" ] ( extern-fn | fn | type-alias | let-stmt | const-stmt )
+extern-fn       := "extern" "fn" type name [ "<" binders ">" ] "(" params ")" ";"
+fn              := "fn" type name [ "<" binders ">" ] "(" params ")" block
+type-alias      := "type" name [ "<" binders ">" ] "=" type ";"
+
+binders         := binder ( "," binder )*
+binder          := name [ ":" name ]
 
 params          := [ param ("," param)* [ "," "..." ] ]
 param           := name ":" type
 
-type            := type-ctor* type-word+
+type            := type-ctor* type-word+ [ "<" type-args ">" ]
+                 | "(" type "," type ( "," type )* ")"
 type-ctor       := "*" | "!" | "[" [ count ] "]"
 type-word       := identifier
+type-args       := type ( "," type )*
 count           := integer-literal | "_"
 
 block           := "{" statement* "}"
 
 statement       := block
-                 | let-stmt | const-stmt
+                 | let-stmt | const-stmt | type-alias
                  | if-stmt | while-stmt | for-stmt
                  | "break" ";"
                  | "continue" ";"
@@ -32,8 +39,10 @@ statement       := block
                  | expr ";"
                  | ";"
 
-let-stmt        := "let" binding
-const-stmt      := "const" binding
+let-stmt        := "let" ( pattern | binding )
+const-stmt      := "const" ( pattern | binding )
+pattern         := "(" pattern-member ( "," pattern-member )+ ")"
+pattern-member  := name | "_"
 
 binding         := name [ ":" type ] [ "=" expr ]
 
@@ -68,10 +77,13 @@ prefix          := ( "++" | "--" | "+" | "-" | "!" | "~" | "*" | "&" ) prefix
                  | "(" type ")" prefix
                  | postfix
 postfix         := primary ( "(" args ")"
+                          | "::" "<" type-args ">" "(" args ")"
                           | "[" expr "]"
                           | "[" [ expr ] ".." [ expr ] "]"
+                          | "." integer-literal
                           | "++" | "--" )*
 primary         := literal | name | "(" expr ")"
+                 | "(" expr "," expr ( "," expr )* ")"
                  | "[" [ elements ] "]"
                  | "[" ( count | "]" ) type "{" [ elements ] "}"
 
@@ -105,13 +117,38 @@ one parameter and only as the last thing in the list, and only on an `extern`
 declaration.
 
 **`type`.** A type is a run of identifiers, optionally preceded by its
-constructors (`*`, `!`, `[N]`, `[]`). There is no separate type grammar because
-`unsigned long long int` is three words and one type: the *type reader*, in
-`sema`, decides which runs of words are a type, and that is why `i32`, `long`,
-and `unsigned long long int` need no production of their own. The **same** reader
-answers for a binding's annotation, a parameter, a cast's target and a typed
+constructors (`*`, `!`, `[N]`, `[]`), optionally followed by a list of type
+arguments (`Vec<i32>`), or a parenthesised **product** of two or more types
+(`(i32, bool)`). There is no separate type grammar because `unsigned long long
+int` is three words and one type: the *type reader*, in `sema`, decides which runs
+of words are a type, and that is why `i32`, `long`, and `unsigned long long int`
+need no production of their own. The **same** reader answers for a binding's
+annotation, a parameter, a cast's target an array's element and a typed
 initializer's count, so `[2][3]unsigned long long int` cannot mean one thing in
 one place and something else in another.
+
+**`type` also declares.** The same word starts `type Name = T;` — a *name for a
+type* rather than a type — and the production is an item and a statement alike,
+so an alias is visible at file scope anywhere and in a block from its line down.
+It is the one declaration whose left side the grammar has to tell from a use: a
+`type` at the start of a statement is a declaration, and `Name` anywhere else is a
+type word or a value, never a declaration.
+
+**The binder list is after the name being declared.** `fn T identity<T>(v: T)`
+and `type Pair<T, K> = (T, K);`: a `<` between the name and the `(` or the `=`. A
+binder is a name and an optional **class** (`T: Number`), which the parser reads
+as a `Name` and does not judge — whether the word is one of the classes is
+`sema`'s question, because the grammar has no table of names. At a **use** the
+list is written where a type is (`Pair<i32, bool>`) or, in an expression, after
+`::` (`twice::<i32>(3)`): the two-character token is what tells the argument list
+of a call from a comparison.
+
+**A product is a type, a value and a pattern.** `(T, U)` in a type position is a
+type; `(1, 2)` in an expression is an initializer for one; and `let (q, r) = …` is
+that value taken apart into bindings, with `_` for a member nobody wants. A
+member is read at compile time with `.` and an integer (`t.0`), which is why a
+chain of two reads is written `t.0 .1`: `0.1` is one number to the scanner, and a
+scanner that guessed would be a scanner with a rule about member access in it.
 
 **`as` is one level, and it is the whole of the cast operator's grammar.**
 `unary` is `prefix` followed by any number of `as type` — looser than every
@@ -125,6 +162,24 @@ a as i32 as i64   is  (a as i32) as i64
 
 What follows `as` is a `type` and nothing more, which is what makes `a as i32 * 2`
 a multiplication rather than a type named `i32 *`.
+
+**Right here is the one place a type has to be told from an expression.** A `<`
+after a word starts an argument list (`Vec<i32>`) and is the comparison operator
+(`x as i32 < 3`), and four lexical facts settle which — a list hangs off a *word*;
+a **reserved** type name takes no arguments; the contents have to be a list of
+types; and what follows the closer has to be able to follow a complete cast.
+
+```
+x as Pair<T, K>      a use, read as a type
+x as (i32, i32)      a product, read as a type
+x as i32 < 3         a comparison (a primitive takes no arguments)
+x as Foo < 3 > 2     a comparison (a number is not a type)
+x as Foo < y >> 2    a comparison, and `>>` is the shift it binds tighter as
+```
+
+A **chain** — `x as Foo < y > 2` — is refused by name
+(`sema-comparison-chain`): of the two readings of those characters the comparison
+one is a chain, and a chain is illegal whatever the operands are.
 
 **`(T)x` and `(x) + 1` differ by two lexical questions.** A `(` opens a cast
 prefix only when the run inside is a **complete type** *and* the token after `)`
@@ -175,9 +230,9 @@ Full list, with the trivia the lexer keeps and the parser drops:
 
 | Class | Tokens |
 | --- | --- |
-| keywords | `as` `break` `const` `continue` `else` `extern` `fn` `for` `if` `let` `return` `static` `while` |
+| keywords | `as` `break` `const` `continue` `else` `extern` `fn` `for` `if` `let` `return` `static` `type` `while` |
 | literals | integer, float, character, string — a literal is one token, suffix and digit separators included (`10u8`, `1.5f32`, `1_000`, `0xFE'DC`, `1.5_f32`) |
-| punctuation | `( ) { } [ ] ; , : ? . ...` |
+| punctuation | `( ) { } [ ] ; , : ? . :: ...` |
 | operators | `+ - * / % ! ~ & \| ^ < > =` and their compound forms: `++ -- += -= *= /= %= &= \|= ^= <<= >>= == != <= >= && \|\| << >> ->` |
 | trivia | whitespace, newline, line comment, block comment |
 | other | identifier, `#` (the preprocessor's), end of file, invalid |

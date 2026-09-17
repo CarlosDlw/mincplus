@@ -131,28 +131,46 @@ whatever its type turns out to be.
 | `--unresolved` | print only the uses with no target, and the reason each one has |
 | `--at POS` | answer about one position: `line:col`, optionally prefixed by a file |
 
-On success it prints one summary line per file:
+On success it prints the record it built — a summary line, the scopes, and the
+declarations with the name each one binds and how many uses point at it:
 
 ```console
 $ mincc resolve examples/002_variables.mx
-# examples/002_variables.mx  (scopes 2, defs 6, refs 1, 0 error(s), 0 warning(s))
-```
+# examples/002_variables.mx  (scopes 2, defs 13, refs 1, 0 error(s), 0 warning(s))
 
-`--ast`, `--refs` and `--unresolved` print the whole record rather than the
-summary; the declarations the language binds itself are marked with the name
-they are, so a `null` in a dump is never mistaken for a `true`:
-
-```console
-$ mincc resolve examples/002_variables.mx
+  scopes
+    #0  file  22..98  (root)
+    #1  function  36..97  parent #0
 
   defs
     #0  file#0  ordinary  const  false  refs 0  [predefined false]
-    #1  file#0  ordinary  const  true   refs 0  [predefined true]
-    #2  file#0  ordinary  const  null   refs 0  [predefined null]
-    #3  file#0  ordinary  fn     main   refs 0  examples/002_variables.mx:2:8
-    #4  function#1  ordinary  let  x   refs 1  examples/002_variables.mx:4:7
-    #5  function#1  ordinary  let  y   refs 0  examples/002_variables.mx:5:7
+    #1  file#0  ordinary  const  true  refs 0  [predefined true]
+    #2  file#0  ordinary  const  null  refs 0  [predefined null]
+    #3  file#0  ordinary  fn  clz  refs 0  [builtin clz, prelude]
+    ...
+    #9  file#0  ordinary  fn  __builtin_trap  refs 0  [builtin __builtin_trap, reserved]
+    #10  file#0  ordinary  fn  main  refs 0  examples/002_variables.mx:2:8
+    #11  function#1  ordinary  let  x  refs 1  examples/002_variables.mx:4:7
+    #12  function#1  ordinary  let  y  refs 0  examples/002_variables.mx:5:7
 ```
+
+The declarations the language binds itself are marked with the name they are, so
+a `null` in a dump is never mistaken for a `true` — `[predefined …]` for the
+three names every unit starts with, `[builtin …]` for the bit operations and
+`__builtin_trap`, each with the scope it was bound in. `--refs` adds the uses
+underneath:
+
+```console
+$ mincc resolve --refs examples/002_variables.mx
+...
+  refs
+    examples/002_variables.mx:6:10  x  -> defs#11
+```
+
+`--ast` replaces the tables with the lowered tree — the file, the declarations,
+and the written tokens underneath each node — and `--unresolved` prints only the
+uses with no target, which is the view to reach for when a name does not
+resolve:
 
 ## `mincc check`
 
@@ -179,7 +197,7 @@ cast that merely names what the language would do anyway is reported by neither.
 
 ```console
 $ mincc check --stats examples/002_variables.mx
-# examples/002_variables.mx  (scopes 2, defs 6, refs 1, functions 1)  0 error(s), 0 warning(s)
+# examples/002_variables.mx  (scopes 2, defs 13, refs 1, functions 1)  0 error(s), 0 warning(s)
 $ mincc check --types examples/003_types.mx
 # types 23  target x86_64-unknown-linux-gnu  long=64  pointer=64
   #6  str  str  size=8  align=8

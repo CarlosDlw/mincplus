@@ -159,12 +159,63 @@ TEST(ErrorsTest, BoolAndStrAreNotArithmetic) {
   }
 }
 
-TEST(ErrorsTest, EqualityIsDefinedForArithmeticBoolAndStr) {
+TEST(ErrorsTest, AComparisonDoesNotChain) {
+  {
+    // The chain, and the sentence names both the reading and the fix. It is the
+    // *shape* being refused here and not an operand type: the operands are two
+    // fine `i32`s and the mistake is that three of them were compared in a row.
+    SemaFixture f;
+    f.source("fn i32 main() { let a: i32 = 1; let b: i32 = 2; let c: i32 = 3; let d = a < b > c; "
+             "return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-comparison-chain"));
+    EXPECT_NE(f.firstError().message.find("does not chain"), std::string::npos);
+  }
+  {
+    // The parenthesis is the whole difference, and it is why this is not a rule
+    // about the operator: `(a < b) > c` is the reader saying they meant it, so it
+    // gets the *operand* sentence and no chain sentence at all.
+    SemaFixture f;
+    f.source("fn i32 main() { let a: i32 = 1; let b: i32 = 2; let c: i32 = 3; let d = (a < b) > c; "
+             "return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_FALSE(f.hasError("sema-comparison-chain"));
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+  }
+  {
+    // `==` is not an ordering comparison: two `bool`s are equal, so
+    // `(a < b) == c` is a legal program and one `let c: bool` away from the chain
+    // a reader might have meant. No chain sentence, and no error at all.
+    SemaFixture f;
+    f.source(
+        "fn i32 main() { let a: i32 = 1; let b: i32 = 2; let c: bool = a < b; let d = c == (b < "
+        "a); return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_FALSE(f.hasError("sema-comparison-chain"));
+    EXPECT_FALSE(f.hasError("sema-invalid-operands"));
+  }
+}
+
+// Equality is defined for arithmetic values and for two `bool`s, and for nothing
+// else. A `str` is refused, and the refusal is the *same* rule that refuses
+// ordering one: `==` on two `str`s would be C's `s1 == s2`, an address
+// comparison, and a reader who writes it is asking about the bytes (`sema.md`,
+// decision 8; `tuples.md`, decision 17 cites this refusal when it explains why a
+// product has no equality either).
+TEST(ErrorsTest, EqualityIsNotDefinedForAStr) {
   {
     SemaFixture f;
     f.source("fn i32 main() { let a: str = \"x\"; let b: bool = a == a; return 0; }\n");
     ASSERT_TRUE(f.build());
-    EXPECT_FALSE(f.hasError("sema-invalid-operands"));
+    ASSERT_TRUE(f.hasError("sema-invalid-operands"));
+    EXPECT_NE(f.firstError().message.find("addresses, not contents"), std::string::npos)
+        << f.firstError().message;
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a: str = \"x\"; let b: bool = a != a; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
   }
   {
     SemaFixture f;
@@ -173,6 +224,14 @@ TEST(ErrorsTest, EqualityIsDefinedForArithmeticBoolAndStr) {
     // Ordering a `str` is refused: `a < b` on strings would compare addresses,
     // and that is the operator this language does not have.
     EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+  }
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a: bool = true; let b: bool = a == a; return 0; }\n");
+    ASSERT_TRUE(f.build());
+    // Two `bool`s are comparable -- the language gives that per type, and it is
+    // not arithmetic (`bool` does not promote to an integer here).
+    EXPECT_FALSE(f.hasError("sema-invalid-operands"));
   }
 }
 
@@ -652,6 +711,12 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       {"type P<T: number> = (T, T);\n", false},
       {"fn T twice<T: Number>(x: T) { return x + x; }\n"
        "fn i32 main() { let s = \"ab\"; return twice::<str>(s); }\n",
+       false},
+      // The chain code. The type rules already refuse `a < b > c` -- `>` on a
+      // `bool` is the operand sentence -- and this is the one input where the
+      // *shape* is the whole of the mistake, so the sentence names it
+      // (`casts.md`, decision 20).
+      {"fn i32 main() { let a: i32 = 1; let b: i32 = 2; let c: i32 = 3; return a < b > c; }\n",
        false},
   };
 

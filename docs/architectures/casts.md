@@ -104,19 +104,38 @@ a as i32 as i64   is  (a as i32) as i64 // left-associative, chains allowed
 f(a as i64, b)    is  f((a as i64), b)
 ```
 
-The type after `as` is a **complete type run** — the same `parseType` a binding's
-annotation uses, so `x as [4]i32`, `p as *u8` and `s as []u8` all parse and are
-refused or accepted by their own rule one stage down. `as` is a keyword, which is
-a new one in a list that is deliberately tiny; it earns its place the same way
-`let` does (it changes what the following tokens mean).
+The type after `as` is a **complete type**, read by the reader every other type
+position uses — a binding's annotation, a parameter, a return type, an alias's
+target. `x as [4]i32`, `p as *u8`, `s as []u8`, `q as (i32, bool)`, `v as Vec<u8>`
+and `p as Pair<T, K>` all read, and each is refused or accepted by its own rule one
+stage down. Nothing here is special to casts, and that is the point: an earlier
+draft gave the cast a reader of its own — constructors, then words, and stop —
+which made `as [4]i32` a type and `as (i32, i32)` not one. That difference was an
+artifact of which function ran, not a decision about the language.
+
+Two tokens delimit that read, and each is a decision of its own:
+
+- **the extent.** The type is the constructors, then one word, then its argument
+  list — and there it stops, because the expression around the cast begins there:
+  `a as i32 * 2` is a multiplication and not a pointer whose pointee never came,
+  and `a as i32 < 3` is a comparison (decision 18);
+- **the `<`.** In this one position a `<` after a word may be a list or the
+  comparison operator it also is, and the tokens around it settle which
+  (decision 19) — with no symbol table, and with the same answer after `import`
+  lands. Where a list and a comparison would be illegible together the program is
+  refused by name: a chain (decision 20).
+
+`as` is a keyword, which is a new one in a list that is deliberately tiny; it earns
+its place the same way `let` does (it changes what the following tokens mean).
 
 ### `(T)x` — the C spelling, and why it is unambiguous here
 
 The parser decides between a cast and a parenthesized expression with two
 questions, both lexical:
 
-1. is the run inside the parentheses a **complete type** (`typeRunLength` reads
-   it: `i32`, `*i32`, `[]u8`, `[4]i32`, `!`, nested combinations), **and**
+1. is the run inside the parentheses a **complete type** (`atCastStart` reads it:
+   `i32`, `*i32`, `[]u8`, `[4]i32`, `!`, nested combinations — **reserved names
+   only**, which is what keeps `(x) + 1` a parenthesised expression), **and**
 2. does the token after `)` **start an expression** (`isExpressionStart`, which
    already exists for statements).
 
@@ -230,6 +249,9 @@ type and **one** string type, and `'a'u8` says nothing that `'a' as u8` does not
 | 15 | **Constant casts fold through the same table** | A global initializer must be a constant; the folder and the run-time path sharing one answer is the only way `const A = (u8)300;` and `f((u8)300)` agree |
 | 16 | **Explicit casts are silent by default; `-Wcast` (new, opt-in) names the loss** | `-Wconversion` has one rule — an *implicit* conversion that loses — and folding casts in would make it fire on the mask idiom (`(u8)x`) that a cast is written for. `-Wcast` names *which* loss: range, sign, precision, truncation |
 | 17 | **Literal suffixes are lexical and one table**, shared by the scanner and the reader | C's rule: `10u8` is one token. Two tables would drift the day a width is added |
+| 18 | **The type after `as` is read by the one type reader, inside a bound the scan finds** | One grammar for a type in every position: the cast cannot accept a type the rest of the language refuses, and cannot refuse one it accepts. The scan answers the two questions a reader surrounded by an expression cannot — how far the type reaches, and whether the `<` is a list — and both are questions about tokens, which is what a scan is for |
+| 19 | **`<` is a list only when the tokens say so.** Four facts, in order of cost: a list hangs off a *word*; a **reserved** type word takes no arguments, so a `<` after one is a comparison; the contents must be type-shaped (a number is a type only inside `[N]`); and what follows the closer must be able to follow a complete cast — an expression after a *stray* `>` is a shift, a word or a literal after an exact one is an ordering comparison | `W < ... > ...` is two programs written the same way, and the decision has to be lexical. A symbol table would make it *order-sensitive* (C's typedef problem) and wrong the day `import` lands, while this reads the shape of what is written. The corner the facts leave — an unterminated list whose first argument is a reserved word — is read as the list it can only have been, and the other reading of that shape is illegal for a reason of its own (decision 20) |
+| 20 | **A comparison does not chain, and the sentence names the chain** | `a < b > c` is `(a < b) > c`, which the type rules refuse anyway — with a sentence about an operand that never names the shape the reader wrote. It is in this record because it is what makes decision 19 **total**: of the two readings of `x as W < ... > ...`, the comparison reading is a chain whenever the list reading is not the answer, so no legal program is ever read the other way. `clang` makes a chain a hard error too (`-Wparentheses`); minc+ makes it a sentence with the fix in it. `(a < b) > c` is not a chain: the parenthesis is the reader saying they meant it |
 
 ## The conversion matrix
 
@@ -358,8 +380,9 @@ reported under `-Wcast`.
 | `include/support/consteval/literal.h` + `literal.cc` | the **suffix table** (spelling → `{kind, width, signedness, target-dependent}`), read from the literal's spelling; the existing `u`/`l` acceptance becomes the real taxonomy, and `wb`/`uwb` join as *refused* | It is already the one reader of a literal's spelling, shared by `sema` and the preprocessor; the table is the same fact for the scanner |
 | `src/lex/literal_scanner.cc` | a trailing **known** suffix is claimed into the token (`IntegerLiteral`/`FloatLiteral`); an unknown run still ends the number | C's rule, and the existing `NumberStopsBeforeAnIdentifier` invariant is what limits it |
 | `include/lex/token_kind.h` | `KwAs` | A keyword that changes what the following tokens mean, which is the test the lexer's own comment states for one |
-| `src/parse/expression.cc` | `parseCast` at the unary level (`as` postfix, `(T)` prefix), one `SyntaxKind::CastExpr` | One node, and the type child is the `Type` node a binding already has |
-| `src/parse/declaration.cc` | nothing to add: `typeRunLength` is the predicate the C form needs | It was written for declarations and answers exactly "is this run a type" |
+| `src/parse/expression.cc` | `parseCast` at the unary level (`as` postfix, `(T)` prefix), one `SyntaxKind::CastExpr`; the `as` type is read through `scanTypeRun` under a `TokenBound` | One node, and the type child is the `Type` node a binding already has — read by the reader every other position uses, bounded by the scan |
+| `src/parse/type_scan.h` | the scan of a type run, moved out of the declaration reader and given the cast's two questions (`RunKind::Cast`, `typeArgListIsReal`) | Two readers ask what a run's shape is, and a spelling that closes a list is one fact about the language; a second copy of it is a second answer waiting to drift |
+| `src/parse/declaration.cc` | nothing to add: `scanTypeRun` is the run the declaration reader already used | It was written for declarations and answers the same question there — with `<` unconditional, because a declaration's run has no expression in it |
 | `include/parse/parse_error.h` | `InvalidLiteralSuffix`, `ExpectedCastOperand` | The parser owns adjacency (it has the spans) and the operand |
 | `include/ast/node.h`, `src/ast/lower.cc` | `NodeKind::CastExpr` (a `Type` child and one expression) | The AST is where the two spellings become one thing |
 | `include/sema/convert.h`, `src/sema/convert.cc` | `enum class CastKind`, `castable(types, from, to)`, `castKindFor(types, from, to)`, `castLoss(...)` | The matrix, as pure functions over types, beside the implicit rules it extends |
@@ -379,9 +402,9 @@ reported under `-Wcast`.
 2. **The lexer claims known suffixes**; the existing "number ends at the first
    byte that cannot continue it" tests stay green, and a new one asserts `10u8` is
    one token while `10z` is two.
-3. **The parser**: `KwAs` → `as` postfix; `(T)x` prefix behind `typeRunLength` +
-   `isExpressionStart`; `parse-invalid-literal-suffix`; the `CastExpr` node and its
-   lowering to the AST.
+3. **The parser**: `KwAs` → `as` postfix, with `scanTypeRun` + `TokenBound` for the
+   type; `(T)x` prefix behind `atCastStart` + `isExpressionStart`;
+   `parse-invalid-literal-suffix`; the `CastExpr` node and its lowering to the AST.
 4. **The reserved type names** in `resolve`, which is what makes step 3
    unambiguous — and the point at which `(i32)` stops being an unknown name and
    starts being a clear refusal.
@@ -438,6 +461,14 @@ Each step is a commit that passes the gates on its own; steps 1–4 are the surf
   instruction, and a function whose return type is `!` ends in `ret void` — never a
   `ret` fed the `void`-typed call its body ends in, which is a module the verifier
   rejects.
+- **The position, in the parser.** `parse/cast_type_test.cc` walks every type shape
+  after `as` (primitive, pointer, array, slice, product, use, use of a use, `!`), and
+  then the shapes where the same characters are two programs: a primitive followed by
+  `<`, contents that cannot be a list, a stray `>>` with an expression after it, a
+  `>>` that closes exactly the lists that were open, and a list followed by a
+  comparison. Each case asserts the *tree* — a list is a `TypeArgList` node, a
+  comparison is not — and the reconstruction, because an extent that is one token
+  too long still parses, it just parses something else.
 - **The row sweep.** `invariants_test.cc` gains the unguarded-`fptosi` input, so
   the new row is tripped like the twelve beside it.
 - **The guard, both builds.** A program that casts an out-of-range float traps in
@@ -525,8 +556,9 @@ Each step is a commit that passes the gates on its own; steps 1–4 are the surf
    language without a suffix fails the walk, and a suffix without a reader fails
    it the other way.
 3. **The reserved set is derived from the type table**, not written twice: the day
-   a type name is added, the parser's `typeRunLength` and the reservation both see
-   it because both read the same place.
+   a type name is added, `atCastStart` and the reservation both see it because both
+   read the same place — and `typeArgListIsReal` asks that same predicate from the
+   other side (a reserved word cannot be an operand either).
 4. **A user-defined type name is `as`-only, and this is the decision, not an
    oversight.** When `struct Point` lands, `(Point)p` cannot be parsed without a
    symbol table, and this record refuses to give the parser one: the C form stays

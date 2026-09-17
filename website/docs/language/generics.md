@@ -37,6 +37,43 @@ has the colons, and why Rust spells it the same way. The reader also splits a
 `>>` or `>>=` that closes two lists, so `Pair<Pair<i32, i32>, i32>` needs no
 spaces.
 
+A use is a type in **every** type position — a binding's annotation, a parameter,
+a return type, an alias's target, an array's element, and a cast:
+
+```minc
+type Vec<T> = [4]T;
+
+fn i32 first(v: Vec<i32>) { return v[0]; }   // a parameter
+let v = xs as Vec<i32>;                      // a cast
+```
+
+The cast earns its own sentence because it is the one type position an
+*expression* surrounds, so a `<` there is also the comparison operator. Tokens
+decide which, never a symbol table: `x as i32 < 3` is a comparison (a reserved
+type name takes no arguments, so there is nothing to decide), and
+`x as Vec<i32> * 2` is a multiplication on the cast's result. Where the two
+readings would both be legal, neither is: `x as Pair < y > 2` is a *chain*, and a
+chain is refused by name.
+
+### A product comes back through a binder
+
+The return type is a type position like any other, so a binder may fill it — and a
+product is how one declaration returns two values whose types come from the
+arguments:
+
+```minc
+fn (K, T) swap<T, K>(l: T, r: K) { return (r, l); }
+
+let s: (bool, i32) = swap(1, true);   // instance `swap<i32, bool>`
+```
+
+The body is checked once, against `(K, T)`; the instance substitutes both binders,
+and the product it hands back is the one the caller wrote. A named product works
+the same way — `fn Pair<T, K> makePair<T, K>(left: T, right: K)` — because
+`Pair<T, K>` *is* `(T, K)`. The product itself is [its own page](/language/tuples);
+what matters here is that a binder list is a sequence of pairs, which is why the
+product had to be read first.
+
 ## One body, many functions
 
 The body of a template is checked **once**, against the binder — not once per
@@ -208,6 +245,32 @@ user-declared constraints.
 * **Callable binders** — `fn i32 apply<F>(f: F, x: i32) { return f(x); }` needs
   both a constraint that says "callable with this signature" and a way to write a
   function type in a type position.
+
+## Where a binder list cannot go
+
+Each of these is refused with a sentence. A binder promises "one declaration, many
+signatures", and each of these positions promises the opposite:
+
+```minc
+extern fn T identity<T>(value: T);
+// a binder list and `extern` cannot both be true: `extern` promises one C symbol
+// for one signature, and a generic declaration has one signature per
+// instantiation (`sema-generic-extern`)
+
+fn i32 main<T>() { return 0; }
+// `main` is the entry point: it is one function with one signature, so it cannot
+// be generic (`sema-generic-main`)
+
+let p: Pair = (1, true);
+// `Pair` is generic: it takes 2 type arguments, and a generic name is only a type
+// once they are written (`Pair<...>`) (`sema-malformed-type`)
+
+fn T zero<T: Integer>() { return 1; }
+let a = zero();
+// nothing decides `T`: the arguments and the context are both silent about the
+// binder, so write the instantiation, as in `zero::<i32>(...)`
+// (`sema-generic-not-inferable`)
+```
 
 ## Where the instances go
 

@@ -464,8 +464,8 @@ the lexer has none.
 
 | Hazard | Policy |
 | --- | --- |
-| C cast `(T)x` vs `(a) * b` | If casts are added, resolve with a **bounded tentative parse** (marker + rollback), not by asking a symbol table from the parser. No lexer feedback, ever. |
-| Generic/angle `a < b > c` | Decide the syntax before implementing; if angle tokens are used, the disambiguation is explicit (an annotation token like Clang's), never a heuristic over arbitrary lookahead. |
+| C cast `(T)x` vs `(a) * b` | **Decided, and without a tentative parse.** Two lexical questions settle it — is the run inside the parentheses a complete type of **reserved** names, and does the token after `)` start an expression (`casts.md`, decisions 4–5). A name in the type table cannot be declared, so `(i32) + 1` is not a variable and there is nothing to roll back. No lexer feedback, ever. |
+| Generic/angle `a < b > c` | **Decided, and the answer is position.** A *type* position takes `<...>` without asking anything, because there is no expression inside it for the `<` to compare; a **cast** is the one place a type sits inside an expression, and there the token decides — a list hangs off a word, a reserved type name takes no arguments, the contents must be type-shaped, and what follows the closer must be able to follow a complete cast (`casts.md`, decisions 18–20). That rule is total over legal programs because the reading it rejects is a chain, which is refused by name. A call writes `::<>`, where the ambiguity is one the expression can reach. No annotation token, no rollback, no heuristic over arbitrary lookahead. |
 | `*` in declarators vs multiplication | Our declarator syntax is not yet decided; the parser will only accept `*` as a pointer in type position, never as a guess. |
 | Statement vs expression at the start of a line | Already removed by `let`/`const`/`return` being keywords. |
 

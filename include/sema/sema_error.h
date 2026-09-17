@@ -54,6 +54,18 @@ enum class SemaErrorCode : std::uint8_t {
   ConditionNotBool,
   // An operator applied to types it does not accept.
   InvalidOperands,
+  // A comparison whose left operand is another comparison, written without a
+  // parenthesis: `a < b > c`.
+  //
+  // The type rules already refuse it -- `>` on a `bool` is the operand sentence --
+  // and that sentence never names what the reader actually wrote. This is the
+  // class for naming it, and it exists because the **cast** position needs the
+  // distinction to be a *decision* rather than an accident: in `x as i32 < y > 2`
+  // the `<` is a comparison (`casts.md`, decision 20), and both readings of those
+  // characters are
+  // illegal programs, so the one sentence a reader gets should be about the chain
+  // they wrote and not about a type named `y`.
+  ComparisonChain,
   // The left side of an assignment is not a place a value can be stored.
   InvalidAssignment,
   // Assigning to, or incrementing, a `const` binding.

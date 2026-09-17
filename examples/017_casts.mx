@@ -12,6 +12,10 @@
 // The first two produce the **same node** -- same record, same instruction -- so
 // this is a choice of spelling and not a choice of meaning.
 
+// A cast names a *type*, and this file needs the ones it names: an alias is the
+// shortest way to write one down, and section 8 is where a cast reaches it.
+type Pair<T, K> = (T, K);
+
 // A function whose return type is `!` never gives control back, and its body may
 // end in the call that proves it -- no `return` after it, because there is no
 // "after it". Section 7 is where a value of that type is converted.
@@ -160,11 +164,40 @@ fn i32 main() {
   // is not a `!` cannot become one, and a type with no values cannot be arrived
   // at. `never.md` states both rules; here is where they meet a cast.
 
+  // ---------------------------------------------------------------------------
+  // 8. A cast names any type -- and the `<` that stayed a comparison.
+  // ---------------------------------------------------------------------------
+  //
+  // `as` is followed by a *type*, read by the same reader every other type position
+  // uses, so a product and a use are types here exactly as they are in an
+  // annotation. An identity cast (`from == to`) converts nothing and is accepted,
+  // which is what makes the spelling usable where the value's type is what the
+  // program is generic over:
+  //
+  //   p as (i32, i32)        a product, written out
+  //   p as Pair<i32, i32>    the same type through its name
+  //   p as *Pair<i32, i32>   a pointer to it
+  //
+  // The `<` after a *value* is still a comparison, and which one it is is decided by
+  // tokens and not by guesswork: `small as i64 < 3` is the comparison it looks like,
+  // because `i64` is a reserved type word and a word that can never take arguments
+  // has nothing to decide. With a use on the left, what settles it is what lies
+  // between the brackets and what follows the closer -- so `pair as Pair<i32,
+  // i32> == pair` is a cast compared with a value, while `small as Pair < y > 2`
+  // reads the `<` as a comparison and is refused by name
+  // (`sema-comparison-chain`): it compares a `bool` with a number.
+  let pair: (i32, i32) = (1, 2);
+  let same_pair = pair as (i32, i32);       // identity: nothing converts
+  let named = pair as Pair<i32, i32>;       // the same type through its alias
+  let addressed = &pair as *Pair<i32, i32>; // a pointer to the product
+  let below = (small as i64 < 3) as i32;    // the `<` is a comparison
+
   return count + truncated + (chained as i32) + (c_chained as i32) + (twelve as i32) +
          (rounded as i32) + (signed_bit as i32) + (flag as i32) + negative +
          (mask as i32) + (ratio as i32) + (plain as i32) + (bits as i32) +
          (unsigned_view as i32) + (as_float as i32) + (back as i32) +
-         (as_int as i32) + (as_real as i32) + (non_zero as i32);
+         (as_int as i32) + (as_real as i32) + (non_zero as i32) + same_pair.0 +
+         named.1 + (*addressed).0 + below;
 }
 
 // A `!` value in a value position, which is the case a reader expects to be

@@ -14,6 +14,7 @@
 #include <string>
 
 #include "token_class.h"
+#include "type_scan.h"
 
 namespace minc::parse {
 
@@ -222,197 +223,6 @@ void Parser::parseParam() {
 
   param.complete(SyntaxKind::Param);
 }
-
-// How many tokens a type run has, from the current position. A run is `*`,
-// `[N]` and identifier tokens, which is the same shape everything below reads and
-// the same shape a `Type` node holds.
-//
-// None of the three is given a meaning here. A pointer or an array type is a
-// sema question -- the parser does not know which words are type names and this
-// stage is not allowed to know -- so the run is collected whole and the rules
-// about where a `*` or a `[N]` may sit live in `sema/typespec.cc`, which is the
-// only place that can say "a pointer is written `*T`" and mean it.
-//
-// A *malformed* group -- `[` with no count, or with no `]` -- still joins the run
-// as one token. The alternative, ending the run there, would leave the count and
-// the bracket outside the `Type` node, so the group the parser reports on would
-// not be the group the reader wrote and the tokens after it would be read as the
-// element type. A tree that does not hold the source is a tree that cannot be
-// diagnosed from.
-// What the scan of one type run found. It answers the two questions the
-// declaration reader has -- how many tokens the run occupies, and where its last
-// *word* ends -- in one walk, because a second walk is a second rule about what a
-// word is (`tuples.md`).
-struct TypeRunScan {
-  // Tokens the run occupies, from here.
-  std::uint32_t tokens = 0;
-  // Words at the *top level* of the run: an identifier, or a whole `(T, U)`
-  // group. The identifiers **inside** a group are not words of this run, which is
-  // what keeps `fn (i32, bool) f()` from reading `bool` (or `f`) as the wrong
-  // word -- the name of a function is the last word of the run, and a product is
-  // one word.
-  std::uint32_t words = 0;
-  // The index of the last word's **first token** -- the name of the declaration.
-  // Everything before it is the type, and it is deliberately not "one past the
-  // word": `identity<T>` is *one* word whose name is `identity`, and the list
-  // that follows the identifier is the declaration's, not the word's.
-  std::uint32_t nameStart = 0;
-  // That last word was a `(T, U)` group and not an identifier: a run that ends
-  // this way has no name in it, and the reader has to say so.
-  bool lastWordIsGroup = false;
-};
-
-// One past the `>` that closes the argument list whose `<` is at `open`, walking
-// the four spellings a closer has.
-//
-// The *rule* of closing -- which tokens close one list, and which close two -- is
-// `Parser::closeList`'s, and this is the lookahead's copy of it, because a scan
-// cannot parse. The two are held together by a test that runs every spelling
-// through both: a drift here reads the name of a declaration from the wrong
-// token, which is the one mistake this scan exists to prevent.
-[[nodiscard]] static std::uint32_t skipTypeArgList(const Parser& parser, std::uint32_t open) {
-  // `open` indexes the `<`, so the first iteration is what depth 1 means.
-  std::uint32_t i = open;
-  std::int32_t depth = 0;
-  while (true) {
-    const lex::TokenKind kind = parser.nth(i);
-    if (kind == lex::TokenKind::EndOfFile) {
-      // Unterminated. The reader below is the one that reports it, with the span
-      // of the `<` to point at; the scan only has to stop somewhere.
-      return i;
-    }
-    std::int32_t closed = 0;
-    switch (kind) {
-    case lex::TokenKind::Less:
-      ++depth;
-      break;
-    case lex::TokenKind::Greater:
-    case lex::TokenKind::GreaterEqual:
-      closed = 1;
-      break;
-    case lex::TokenKind::GreaterGreater:
-    case lex::TokenKind::GreaterGreaterEqual:
-      closed = 2;
-      break;
-    default:
-      break;
-    }
-    if (closed != 0) {
-      depth -= closed;
-      if (depth <= 0) {
-        return i + 1;
-      }
-    }
-    ++i;
-  }
-}
-
-[[nodiscard]] static TypeRunScan scanTypeRun(const Parser& parser) {
-  TypeRunScan run;
-  std::uint32_t tokens = 0;
-  while (true) {
-    const lex::TokenKind kind = parser.nth(tokens);
-    if (kind == lex::TokenKind::Star || kind == lex::TokenKind::Identifier ||
-        // `!`, the bottom type. It is a type *token* rather than a word, which
-        // is why it is listed beside the two the grammar already had: a run is
-        // still what a type position holds, and `!` takes part in it exactly
-        // where a word would -- `fn ! f()` is a return type and a name, and the
-        // reader below splits the run the same way it splits `fn i32 f()`.
-        kind == lex::TokenKind::Bang) {
-      if (kind == lex::TokenKind::Identifier) {
-        // The one place a *word* is counted, so "how many words" and "where the
-        // name starts" cannot disagree.
-        run.words += 1;
-        run.nameStart = tokens;
-        run.lastWordIsGroup = false;
-        ++tokens;
-        // `<...>`, the list attached to this word: **part of the word**, and the
-        // reason `fn Vec<i32> f()` does not read `i32` as the name. In a
-        // declaration a `<` after a word has no other reading -- the run ends at
-        // the `(` of the parameter list, so there is no expression for it to be
-        // a comparison of -- which is what lets the scan take it without asking
-        // what is inside.
-        if (parser.nth(tokens) == lex::TokenKind::Less) {
-          tokens = skipTypeArgList(parser, tokens);
-        }
-        continue;
-      }
-      ++tokens;
-      continue;
-    }
-    // A `(T, U)` product, walked as one balanced group: **one word**, whose
-    // closing `)` is found by counting. Nothing inside is judged here -- the type
-    // reader one stage down is the only place that decides what a member may be,
-    // and a scan that tried to would be a second copy of that rule
-    // (`tuples.md`, decision 15).
-    //
-    // Two conditions, and both are about `fn`, which is the only thing this scan
-    // is for. A `(` continues the run **only at its start** (`run.words == 0`),
-    // because after a word the `(` is the *parameter list*: `fn i32 main(` has its
-    // type and its name behind it, and reading the list as a product would make
-    // `main` the return type. And the group must be non-empty, so `fn *(` is still
-    // the missing name it was before a product existed rather than an empty
-    // group that reads as a type.
-    if (kind == lex::TokenKind::LParen && run.words == 0 &&
-        parser.nth(tokens + 1) != lex::TokenKind::RParen) {
-      std::uint32_t depth = 0;
-      while (true) {
-        const lex::TokenKind in = parser.nth(tokens);
-        // Past the end, `nth` answers the end-of-file token (the source clamps),
-        // so an unterminated group ends the run here and the group's own reader
-        // reports the missing `)`.
-        if (in == lex::TokenKind::EndOfFile) {
-          break;
-        }
-        ++tokens;
-        if (in == lex::TokenKind::LParen) {
-          ++depth;
-          continue;
-        }
-        if (in == lex::TokenKind::RParen) {
-          --depth;
-          if (depth == 0) {
-            break;
-          }
-        }
-      }
-      run.words += 1;
-      // The group is one word and this is the token after it. When nothing
-      // follows, `lastWordIsGroup` is true and the reader reports the missing
-      // name instead of reading this index.
-      run.nameStart = tokens;
-      run.lastWordIsGroup = true;
-      continue;
-    }
-    // `[N]`, `[]`, or the bracket alone.
-    if (parser.nth(tokens) == lex::TokenKind::LBracket) {
-      const lex::TokenKind counted = parser.nth(tokens + 1);
-      if ((counted == lex::TokenKind::IntegerLiteral ||
-           (counted == lex::TokenKind::Identifier && parser.text(tokens + 1) == kInferredCount)) &&
-          parser.nth(tokens + 2) == lex::TokenKind::RBracket) {
-        tokens += 3;
-        continue;
-      }
-      // `[]T`, the slice: **two** tokens, and a complete type like the counted
-      // group above. The run is what a `Type` node holds, so a run that stopped
-      // at the `[` would put the `]` outside it -- and in a *declaration* that is
-      // not a cosmetic difference: the name is the last identifier of the run, so
-      // `fn []i32 f()` would split `]` as the name and report a function called
-      // `]`. One token pair here is the whole fix, and it is the same statement
-      // the type reader makes one stage down: `[]` is a type.
-      if (counted == lex::TokenKind::RBracket) {
-        tokens += 2;
-        continue;
-      }
-      ++tokens;
-      continue;
-    }
-    break;
-  }
-  run.tokens = tokens;
-  return run;
-}
-
 ListClose Parser::parseBoundTypeRun(std::uint32_t count) {
   const TokenBound bound(*this, count);
   ListClose close = parseTypeRun();
@@ -447,7 +257,7 @@ void Parser::parseTypeAndName() {
   // word's first token: `fn Vec<i32> f<T>()` is the type `Vec<i32>` and the name
   // `f`, with `<T>` left in the stream for `parseGenericParams`. Nothing after
   // the name is consumed here, because the binders are their own node.
-  const TypeRunScan run = scanTypeRun(*this);
+  const TypeRunScan run = scanTypeRun(*this, RunKind::Declaration);
   const std::uint32_t tokens = run.tokens;
   const std::uint32_t words = run.words;
   const std::uint32_t nameStart = run.nameStart;
@@ -596,11 +406,13 @@ void Parser::parseTypeAlias() {
 
 // `<T, K>`: the binders of a declaration (`generics.md`).
 //
-// The list holds **names** and nothing else today. A constraint -- `T: Ordered`
-// -- takes the `:` of every other binding, and its slot is deliberately not read
-// here yet: syntax that parses and is then ignored would let a declaration claim
-// a constraint the checker does not enforce, and an unenforced constraint is
-// worse than a missing one. The constraint arrives with its enforcement.
+// A binder is a **name** and an optional **class** (`T: Number`). The name is a
+// `Name` node and not a `Type`, so `resolve` treats it exactly as it treats any
+// other name; the class is read into the tree as a `Constraint` and *not* judged
+// here. Whether the word names one of the classes is `sema`'s question, for the
+// same reason no name is judged here: the grammar has no table of names, and the
+// stage that does is the one that can explain what the alternatives are
+// (`generics.md`, section 6).
 ListClose Parser::parseGenericParams() {
   // A `<` in this position is a binder list and nothing else, which is the
   // grammar's doing rather than a convention: the *type* is what precedes the

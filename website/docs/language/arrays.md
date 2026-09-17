@@ -120,18 +120,20 @@ may be written above the constant it uses.
 
 What cannot be there is anything with no value before the program starts, and each
 one is refused with the sentence that says *what* it was: a call, an indexed
-access (which reads memory), a dereference, a `let`, and the address of an object.
+access (which reads memory), a dereference, a `let`, and the address of an object.### Two limits, and why they are not surprises
 
-### Two limits, and why they are not surprises
-
-- **A frame object may be at most 16 MiB.** `let a: [1 << 40]u8;` is storage in a
-  frame, and a frame is a subtraction from the stack pointer. The refusal names
-the size and comes at the declaration.
-- **A non-zero fill is written out, up to 2²⁰ elements.** `[64]u8{0; 64}` is one
-  constant whatever the count -- a zero fill costs nothing -- but
-  `[2097152]u8{7; 2097152}` has to be materialised element by element, and the
-  language says where that stops instead of letting it be a slow build. A list is
-  never limited this way: its length is what you wrote.
+- **A frame object may be at most 16 MiB.** `let a: [16777217]u8;` is storage in
+  a frame, and a frame is a subtraction from the stack pointer. The refusal is
+  `ir-object-too-large`, it names the size, and it comes at the declaration for
+  an array in a block and for the file-scope object that a local fill builds.
+- **A non-zero file-scope fill is written out, up to 2²⁰ elements.**
+  `[64]u8{0; 64}` is one constant whatever the count -- a zero fill costs
+  nothing -- but `const A = [2097153]u8{7; 2097153};` has to be materialised
+  element by element, and the language says where that stops
+  (`ir-initializer-too-large`) instead of letting it be a slow build. A list is
+  never limited this way: its length is what you wrote. A fill inside a function
+  is a constant array stored into the frame slot, so what bounds it is the 16 MiB
+  above and not this count.
 
 ## Arrays and `extern`
 
@@ -156,7 +158,7 @@ extern fn i32 takes(p: *[4]i32);  // fine
 
 - **Slices** (`[]T`, a pointer and a length together) are the other thing brackets
   are for: `a[1..2]` is a *view* of `a`, two words that alias the array and never
-  copy it. They have their own page — [Slices](./slices.md) — and their own type:
+  copy it. They have their own page — [Slices](/language/slices) — and their own type:
   an array is storage and a view names storage, so `[4]i32` and `[]i32` never
   convert, and `f(a)` is an error where `f(a[..])` is a view.
 - **`sizeof`/`alignof`** are not in the grammar yet. The layout is defined and

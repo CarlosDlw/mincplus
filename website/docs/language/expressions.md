@@ -114,10 +114,36 @@ a as i64 * 2      is  (a as i64) * 2
 a as u8 as i64    is  (a as u8) as i64    // chains, left to right
 ```
 
-What follows `as` is a **complete type run** — the same type a binding's
-annotation uses — so `p as *u8`, `x as [4]i32` and `s as []u8` all *parse*.
-Whether each one is allowed is a question for the matrix, one stage down: the
-grammar says what was written, and never guesses at whether it was right.
+What follows `as` is a **complete type**, read by the same reader a binding's
+annotation uses — so `p as *u8`, `x as [4]i32`, `s as []u8`, `q as (i32, bool)`,
+`v as Vec<u8>` and `p as Pair<T, K>` all *parse*. Whether each one is allowed is a
+question for the matrix, one stage down: the grammar says what was written, and
+never guesses at whether it was right.
+
+A `<` after a word is also the comparison operator, and this is the one position
+where a type and an expression meet. Four facts decide it, all of them lexical —
+there is no symbol table:
+
+- a list hangs off a **word**, so `x as Vec<i32> < y` compares the cast's result;
+- a **reserved** type name takes no arguments, so `x as i32 < 3` is a comparison
+  and nothing else;
+- what lies between the brackets has to be a list of types, so `x as Foo < 3 > 2`
+  is a comparison too;
+- what follows the closer has to be able to follow a complete cast, so
+  `x as Foo < y >> 2` is `(x as Foo) < (y >> 2)`.
+
+```minc
+type Vec<T> = [4]T;
+
+let bytes: Vec<u8> = x as Vec<u8>;   // a list hangs off the word: the type
+let big = n as u64 * 2;              // `*` after a primitive: the cast, then `*`
+let small = n as i64 < 3;            // a comparison, and legal
+let chain = n as i64 < y > 2;        // error: comparison does not chain
+```
+
+Where both readings would be legal, none is: of the two readings of `x as W < … >
+…`, the comparison one is always a chain, and a chain is refused by name
+(`sema-comparison-chain`) rather than accepted as something nobody meant.
 
 ### `(T)value` — C's spelling, and why it is unambiguous here
 

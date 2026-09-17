@@ -79,14 +79,20 @@ asked for by a flag:
 
 | Flag | What it reports |
 | --- | --- |
-| `-Wunused` | a binding that is declared and never read (a name starting with `_` is exempt) |
+| `-Wunused` | a binding or declaration that nothing reads (a name starting with `_` is exempt) |
 | `-Wshadow` | a declaration that shadows an outer one; the message names both sites |
 | `-Wconversion` | an implicit conversion that may lose information |
-| `-Werror` | treat every warning as an error |
+| `-Wcast` | a cast the program wrote that may lose information (`sema-cast-loses`) |
+| `-Wprovenance` | a cast between a pointer and an integer — the model's `expose` and `with_exposed_provenance` |
 
 Some warnings are on by default because they are about a mistake and not about a
 style: `sema-unreachable-code`, for example, reports a statement the checker can
 prove cannot run.
+
+There is no `-Werror` yet: a warning is a diagnostic the language decided not to
+refuse, and turning every one into a refusal is a decision the flag would have to
+make per warning rather than in bulk. What CI does instead is build with `-Werror`
+for the *compiler's own* C++, which is a build flag and not this one.
 
 ## Color and layout
 
@@ -97,47 +103,73 @@ the same reason: the renderer's job is to be readable wherever it lands.
 
 ## The full list
 
+Every code each stage can print, with the `-` removed for reading. The table the
+renderer reads is the same table this list is taken from, so a code that exists
+here and nowhere else is a code that cannot be printed.
+
 **`lex-`** — `invalid-character`, `unterminated-string`, `unterminated-char`,
-`unterminated-comment`, `unknown-escape`, `escape-out-of-range`, `empty-char`,
-`missing-digits`.
+`unterminated-comment`, `unknown-escape`, `named-escape`, `escape-out-of-range`,
+`escape-digits`, `escape-too-wide`, `empty-char`, `missing-digits`,
+`misplaced-separator`.
 
 **`pp-`** — `invalid-directive`, `unknown-pragma`, `not-supported`,
 `error-directive`, `warning-directive`, `invalid-line`, `unterminated-conditional`,
 `unexpected-conditional`, `else-after-else`, `conditional-nesting`,
 `macro-redefined`, `macro-parameter-limit`, `missing-macro-arguments`,
 `too-many-macro-arguments`, `unterminated-macro-arguments`, `invalid-paste`,
-`invalid-hash-operand`, `missing-macro-name`, `expansion-depth`,
-`expansion-budget`, `expression-syntax`, `undefined-identifier`, `stray-hash`,
-`invalid-pragma-operand`, `include-not-found`, `include-unreadable`,
-`include-self-reference`, `include-depth`, `include-budget`,
-`missing-include-guard`, `output-budget`, `token-too-long`,
+`invalid-hash-operand`, `missing-macro-name`, `reserved-identifier`,
+`expansion-depth`, `expansion-budget`, `expression-syntax`, `undefined-identifier`,
+`stray-hash`, `invalid-pragma-operand`, `include-not-found`,
+`include-unreadable`, `include-self-reference`, `include-depth`,
+`include-budget`, `missing-include-guard`, `output-budget`, `token-too-long`,
 `date-without-epoch`.
 
 **`parse-`** — `expected-token`, `expected-item`, `expected-name`,
-`expected-type`, `expected-expression`, `expected-statement`, `missing-extern`,
-`extern-with-body`, `variadic-definition`, `variadic-position`, `aborted`.
+`expected-type`, `expected-expression`, `expected-statement`,
+`expected-array-count`, `expected-array-count-close`, `expected-type-arg-close`,
+`expected-type-group-close`, `stray-type-arg-close`, `leading-point-number`,
+`invalid-literal-suffix`, `brace-without-type`, `cast-to-product`,
+`missing-extern`, `extern-with-body`, `extern-binding`, `static-position`,
+`conflicting-linkage`, `type-alias-linkage`, `variadic-definition`,
+`variadic-position`, `aborted`.
 
-**`ast-`** — `missing-type`, `const-without-value`, `node-limit`.
+**`ast-`** — `missing-type`, `const-without-value`, `pattern-at-file-scope`,
+`node-limit`.
 
-**`resolve-`** — `unknown-name`, `redeclaration`, `unused-entity`,
-`shadowed-name`, `limit-defs`, `limit-scopes`, `limit-refs`.
+**`resolve-`** — `unknown-name`, `redeclaration`, `reserved-identifier`,
+`unused-entity`, `shadowed-name`, `limit-defs`, `limit-scopes`, `limit-refs`.
 
-**`sema-`** — `unknown-type`, `malformed-type`, `type-not-value`,
-`literal-out-of-range`, `condition-not-bool`, `invalid-operands`,
-`invalid-assignment`, `assign-to-const`, `incdec-not-lvalue`, `never-returns`,
-`never-body-completes`, `not-a-function`, `argument-count`, `return-mismatch`,
-`return-missing-value`, `return-void-value`, `missing-return`,
+**`sema-`** — `unknown-type`, `malformed-type`, `type-not-value`, `unknown-member`,
+`literal-out-of-range`, `literal-type-unknown`, `condition-not-bool`,
+`invalid-operands`, `comparison-chain`, `invalid-assignment`, `assign-to-const`,
+`incdec-not-lvalue`, `initializer-shape`, `index-out-of-range`,
+`index-not-integer`, `slice-bounds-reversed`, `slice-not-viewable`,
+`slice-pointer-needs-both-bounds`, `variadic-aggregate`, `extern-aggregate`,
+`never-returns`, `never-body-completes`, `not-a-function`, `argument-count`,
+`return-mismatch`, `return-missing-value`, `return-void-value`, `missing-return`,
 `main-signature`, `function-redefinition`, `signature-mismatch`,
 `break-outside-loop`, `continue-outside-loop`, `division-by-zero`,
 `constant-out-of-range`, `shift-count-out-of-range`, `use-before-assignment`,
 `deref-not-pointer`, `pointer-void-access`, `pointer-void-arithmetic`,
-`address-of-non-lvalue`, `address-of-const`, `index-not-integer`,
-`pointer-mismatch`, `pointer-integer`, `limit-types`, `unreachable-code`,
-`implicit-conversion`.
+`address-of-non-lvalue`, `address-of-const`, `pointer-mismatch`,
+`pointer-integer`, `address-from-constant`, `provenance-cast`,
+`cast-invalid`, `cast-loses`, `implicit-conversion`, `builtin-width`,
+`builtin-not-a-value`, `type-alias-cycle`, `destructuring-arity`,
+`destructuring-not-product`, `global-cycle`, `global-not-constant`,
+`constraint-not-a-class`, `constraint-unsatisfied`, `generic-extern`,
+`generic-main`, `generic-name-not-value`, `generic-not-inferable`,
+`generic-operation`, `generic-type-args`, `generic-instance-limit`,
+`limit-types`, `unreachable-code`.
 
 **`ir-`** — `unsupported-type`, `unsupported-node`, `unsupported-target`,
-`missing-obligation`, `assumption`, `alignment`, `unguarded-op`, `internal`.
+`missing-obligation`, `assumption`, `alignment`, `unguarded-op`, `internal`,
+`object-too-large`, `initializer-too-large`, `cast-out-of-range`.
 
-Each `-unknown` code is the fallback for a value that reached the renderer from
-outside its own table, and it exists so an unrecognized code prints as *a code*
+**`memory-`** — the checked build's traps, printed by a running program rather
+than by the compiler: `memory-null`, `memory-misaligned`,
+`memory-out-of-bounds`. See
+[the memory model](/language/memory-model#what-a-checked-build-reports).
+
+Every stage also has a `-unknown` code, the fallback for a value that reached the
+renderer from outside its own table, so an unrecognized code prints as *a code*
 rather than as a blank.

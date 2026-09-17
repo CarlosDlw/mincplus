@@ -284,6 +284,43 @@ TEST(CheckTest, AskingTwiceGivesTheSameAnswer) {
 
 // --- control flow ------------------------------------------------------------
 
+// `==` is defined for arithmetic values and for two `bool`s, and refused for
+// everything else. A `str` is the case worth a test of its own: the operator is
+// there in the source, it would answer an address comparison, and the sentence
+// has to say so rather than talk about arithmetic (`sema.md`, decision 8).
+TEST(CheckTest, EqualityIsRefusedOnAStrBecauseItWouldCompareAddresses) {
+  {
+    SemaFixture f;
+    f.source("fn i32 main() { let a: str = \"x\"; let b: str = \"y\"; return a == b ? 1 : 0; }\n");
+    ASSERT_TRUE(f.build());
+    ASSERT_TRUE(f.hasError("sema-invalid-operands")) << f.errorCount();
+    EXPECT_NE(f.firstError().message.find("addresses, not contents"), std::string::npos)
+        << f.firstError().message;
+  }
+  {
+    // `!=` is the same rule and not a second one.
+    SemaFixture f;
+    f.source("fn i32 main() { let a: str = \"x\"; return a != a ? 1 : 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+  }
+  {
+    // A `str` against something else is the same refusal with the same sentence.
+    SemaFixture f;
+    f.source("fn i32 main() { let a: str = \"x\"; return a == 1 ? 1 : 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_TRUE(f.hasError("sema-invalid-operands"));
+  }
+  {
+    // And nothing else moved: two `bool`s are comparable, which is what the
+    // language gives per type rather than through arithmetic.
+    SemaFixture f;
+    f.source("fn i32 main() { let a: bool = true; let b: bool = false; return a == b ? 1 : 0; }\n");
+    ASSERT_TRUE(f.build());
+    EXPECT_EQ(f.errorCount(), 0u) << (f.errorCount() == 0 ? "" : f.firstError().message);
+  }
+}
+
 TEST(CheckTest, ConditionsMustBeBoolInEveryConstruct) {
   // One rule, one owner: `if`, `while` and `for` disagree about nothing here.
   for (const std::string source :

@@ -79,6 +79,7 @@ minc_add_executable(minc_unit_tests
     parse/type_alias_test.cc
     parse/tuple_test.cc
     parse/generics_test.cc
+    parse/cast_type_test.cc
     parse/initializer_test.cc
     parse/error_codes_test.cc
     parse/examples_parse_test.cc
@@ -112,7 +113,7 @@ minc_add_executable(minc_unit_tests
     sema/generic_alias_test.cc
     sema/generic_call_test.cc
     sema/constraint_test.cc
-  sema/global_test.cc
+    sema/global_test.cc
     sema/examples_test.cc
     ir/lower_test.cc
     ir/checks_test.cc

@@ -161,7 +161,7 @@ smaller than this record first planned.
 | Stage | Change |
 | --- | --- |
 | `lex` | nothing: `[`, `]`, `;` and integer literals are already tokens. The count's *spelling* is read once, by the same literal reader `#if` and the checker use |
-| `parse` | `typeRunLength` and `parseType`/`parseTypeAndName` accept a bracketed count between the `*`s and the words; a primary expression may start with `[`, with the one-token rule above. Two new syntax kinds (`ArrayLiteral`, `TypedInitializer`), and a `Type` node that keeps its brackets and count as children so the tree stays lossless |
+| `parse` | `scanTypeRun` and `parseType`/`parseTypeAndName` accept a bracketed count between the `*`s and the words; a primary expression may start with `[`, with the one-token rule above. Two new syntax kinds (`ArrayLiteral`, `TypedInitializer`), and a `Type` node that keeps its brackets and count as children so the tree stays lossless |
 | `ast` | `TypePart` gains the array shape: `isArray` plus the count's spelling, in source order, so `*[4]i32` and `[4]*i32` are different runs of parts |
 | `validate` | the structural rules: a count is present, the element type is present and not `void`/`!`/a function, and a typed initializer's braces are not empty. (`[]` is no longer a refusal: it is the *slice* type, and its own record is [`slices.md`](slices.md)) |
 | `resolve` | nothing: an array is a type, and a type is not a name |

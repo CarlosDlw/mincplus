@@ -43,7 +43,6 @@ constexpr auto kParseErrorCodeInfos = std::to_array<ParseErrorCodeInfo>({
     {ParseErrorCode::InvalidLiteralSuffix, "parse-invalid-literal-suffix"},
     {ParseErrorCode::ExpectedTypeArgClose, "parse-expected-type-arg-close"},
     {ParseErrorCode::StrayTypeArgClose, "parse-stray-type-arg-close"},
-    {ParseErrorCode::CastToGenericType, "parse-cast-to-generic-type"},
     {ParseErrorCode::Aborted, "parse-aborted"},
 });
 

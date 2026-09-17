@@ -139,9 +139,7 @@ bad.mx:3:3: error[parse-expected-token]: expected ';'
     ^^^^^^
 ```
 
-The message says what was expected, at the place the parser noticed — and `check`
-prints nothing at all when the file is correct, which is what makes it usable in
-a script.
+The message says what was expected, at the place the parser noticed.
 
 Diagnostics do not stop at the first one; they are produced in source order, and
 `-ferror-limit=N` caps how many are shown. [The diagnostics page](/tools/diagnostics)

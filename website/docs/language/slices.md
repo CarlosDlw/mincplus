@@ -109,7 +109,7 @@ A bound that is not a constant is the **programmer's word**, exactly as a runtim
 ## Lifetime
 
 A view must not outlive what it views. That is the programmer's promise today, and
-the reason a slice **has no literal**: a literal would live in a temporary, and
+the reason a slice **has no literal**: a literal would live in a temporary, and a
 view of a temporary is a view of nothing:
 
 ```minc

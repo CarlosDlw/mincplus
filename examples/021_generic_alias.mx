@@ -16,13 +16,13 @@
 //     `(Vec<u8>, bool)`, `[4]Pair<i32, i32>`;
 //   * a binder is a name *of that declaration only*: `T` outside the `type` that
 //     introduced it is an unknown type, exactly as it looks;
-//   * constraints on a binder -- `<T: Ordered>` -- are not read yet, and the parser
-//     refuses one by name rather than reading it and ignoring it.
+//   * a constraint on a binder -- `<T: Ordered>` -- is read, and a use that does not
+//     satisfy it is refused at the use (`023_constraints.mx`).
 //
-// A generic `fn` is the next stage: it needs the binder in scope for its body and
-// one function per instantiation, which is what the symbols and the debug records
-// in `generics.md` are about. Declaring one today is refused with one sentence
-// instead of one unknown name per use of `T`.
+// A use is a type in **every** position, the cast included: `p as Pair<i32, bool>`
+// reads the same list an annotation reads, because there is one type reader and the
+// cast asks it (`casts.md`, decision 18). A generic `fn` and its instances are
+// `022_generics.mx`.
 
 // One binder becomes a product, so a use is a product type.
 type Pair<T, K> = (T, K);

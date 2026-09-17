@@ -80,26 +80,33 @@ let snake_case_name = 3;
 
 ## Keywords
 
-The set is thirteen words, and small on purpose. These cannot be used as names:
+The set is fourteen words, and small on purpose. These cannot be used as names:
 
 `as` · `break` · `const` · `continue` · `else` · `extern` · `fn` · `for` · `if` ·
-`let` · `return` · `static` · `while`
+`let` · `return` · `static` · `type` · `while`
 
 A word earns a place in it by changing what the tokens after it mean: `as`
 introduces a type where an expression could have continued, `static` says what a
-declaration's linkage is, and `let` is not a name that could stand where a
-statement starts.
+declaration's linkage is, `type` starts a declaration that binds a *name for a
+type*, and `let` is not a name that could stand where a statement starts.
 
 Everything else a reader might expect to be a keyword is not one:
 
 - **Primitive type names are not keywords — and they are still reserved.**
   `i32`, `u8`, `bool`, `str`, `int`, `long` and the rest are ordinary names that
   the type reader understands, so the lexer has no table for them. What the
-  language does not allow is a *declaration* of one: `let int = 2;` is
-  `resolve-reserved-identifier`, "`int` names a type, and a type name is
-  reserved". That reservation is not tidiness — it is what makes the C-style
-  cast unambiguous, because `(i32) + 1` can then never be a reference to a
-  variable. See [Casts](/language/expressions#casts).
+  language does not allow is a *declaration* of one, and the sentence says why:
+
+  ```console
+  $ printf 'fn i32 main() { let int = 2; return 0; }\n' | mincc check -
+  <stdin>:1:21: error[resolve-reserved-identifier]: 'int' names a type, and a type name is reserved: it is what makes `(T)x` a cast rather than a call -- choose another name
+    fn i32 main() { let int = 2; return 0; }
+                        ^^^
+  ```
+
+  That reservation is not tidiness — it is what makes the C-style cast
+  unambiguous, because `(i32) + 1` can then never be a reference to a variable.
+  See [Casts](/language/expressions#casts).
 - **`true`, `false` and `null` are not keywords either.** They are the names the
   language binds before any source is read, so they behave like any other name:
   `let true = 0;` shadows one, and `-Wshadow` says so. That is why `#if`

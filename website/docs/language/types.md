@@ -139,9 +139,17 @@ That includes `type P = *P;`. Recursion needs a type that names *itself* — a
 `struct`, when it arrives — and a name that stands for another type never does.
 
 **The name survives in messages and in the debugger.** A diagnostic prints what
-you wrote and expands it,`Arr (aka `[8]u8`)`, and `mincc build -g` emits one
-`DW_TAG_typedef` per declaration and points every binding that wrote the name at
-it:
+you wrote and what it stands for, side by side:
+
+```console
+$ mincc check main.mx
+main.mx:2:30: error[sema-invalid-assignment]: `i32` cannot be used as `Arr (aka `[8]u8`)` in this initializer
+    let a: Arr = 1;
+                 ^
+```
+
+and `mincc build -g` emits one `DW_TAG_typedef` per declaration and points every
+binding that wrote the name at it:
 
 ```console
 $ gdb -batch -ex 'break main' -ex run -ex 'whatis d' prog.bin
@@ -202,15 +210,27 @@ Escape sequences in a string or character literal:
 
 | Written | Is |
 | --- | --- |
-| `\n` `\t` `\r` `\0` | newline, tab, carriage return, NUL |
-| `\\` `\'` `\"` | backslash, single quote, double quote |
-| `\xNN` | one byte, from two hex digits |
-| `\uNNNN` | a Unicode code point, encoded as UTF-8 |
+| `\n` `\r` `\t` `\v` `\f` `\b` `\a` | the control characters |
+| `\e` | `0x1B`, ESC |
+| `\?` `\"` `\'` `\\` | themselves |
+| `\nnn` | octal, one to three digits |
+| `\o{n...}` | octal, delimited |
+| `\xn...` `\x{n...}` | hex — the delimited form says where the run ends |
+| `\unnnn` `\Unnnnnnnn` | a code point, four or eight hex digits, encoded as UTF-8 |
+| `\u{n...}` `\U{n...}` | the same, delimited |
+| `\` + end of line | nothing: the literal continues on the next line |
+| anything else | refused by name (`lex-unknown-escape`) |
+
+A `str` is a sequence of **bytes**, so an escape names bytes: `\xNN` and `\o{...}`
+are one byte each, and a code point is its UTF-8 encoding on every target.
+[Expressions](/language/expressions#characters-strings-and-escapes) is the full
+table, with what each refusal says.
 
 :::note[Not implemented yet]
-Anything that would need an aggregate type — indexing a string, taking its
-length, `char*` arithmetic — waits for arrays and pointers-to-`char`. Today a
-`str` is passed around and given to functions that take one.
+A `str` cannot be indexed, has no readable length, and does not take part in
+`char*` arithmetic: a `str` is passed around, given to a function that takes one,
+and converted to a pointer by a cast. Those three arrive with the library surface
+rather than with the type.
 :::
 
 ## `void`
@@ -231,9 +251,12 @@ fn void touch(value: i32)
 
 An empty parameter list is written `()`, not `(void)`.
 
-:::note[Not implemented yet]
-`*void`, the untyped pointer, *is* implemented, and it is the one pointer type
-that converts to and from every other — see [Pointers](/language/pointers).
+:::note[`void` is a return type and nothing else]
+An object of type `void` does not exist, so there is nothing to declare, pass or
+read: `void` appears in the return position of a function and nowhere else.
+`*void` is a different thing and *is* implemented — it is the untyped pointer,
+the one pointer type that converts to and from every other, and it cannot be
+dereferenced or stepped. See [Pointers](/language/pointers).
 :::
 
 ## `!`
