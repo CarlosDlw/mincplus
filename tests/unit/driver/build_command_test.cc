@@ -447,6 +447,37 @@ TEST(BuildCommandTest, LinkingProducesAnExecutableAndRunReturnsItsStatus) {
   EXPECT_EQ(executed.code, 42) << executed.err;
 }
 
+// Two units that each instantiate the same template at the same type: the
+// ordinary shape of a program split across files, and one that used to end in
+// `ld: multiple definition of __M2_idi32`. An instance was emitted with the
+// *declaration's* linkage -- external for a file-scope `fn` -- under a name the
+// compiler chose, so the source could not rename it away and `static` was advice
+// that did not exist. The instance is private to its unit now, which is what the
+// reachability rule says: no unit can call another's instance (`resolve` reads one
+// file at a time), so there was never anything to share.
+//
+// Both files declare `id`, because that is what makes the two instances two
+// functions: without modules, a declaration in one file is not visible in the
+// other (`resolve-unknown-name`), and the copies are unrelated by design.
+TEST(BuildCommandTest, TwoUnitsMayInstantiateTheSameTemplate) {
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+  const std::string helper = scratch.write(
+      "id_helper.mx", "fn T id<T>(x: T) { return x; }\nfn i32 twice() { return id(2); }\n");
+  const std::string program = scratch.write(
+      "id_main.mx", "fn T id<T>(x: T) { return x; }\nfn i32 main() { return id(41); }\n");
+
+  BuildRequest request = requestFor(program);
+  request.inputs.push_back(helper);
+  request.run = true;
+  const Outcome outcome = run(request, /*execute=*/true);
+  if (outcome.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(outcome.code, 41) << outcome.err;
+  EXPECT_EQ(outcome.err.find("multiple definition"), std::string::npos) << outcome.err;
+}
+
 // --- the checked build --------------------------------------------------------
 
 // A program that reads one element past the end of a two-element view. The program

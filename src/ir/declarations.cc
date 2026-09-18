@@ -182,15 +182,44 @@ void Lowering::declareInstances() {
             "the instance `" + info.name + "` has a type that is not a function type");
       continue;
     }
-    // The linkage is the *declaration*'s: `static fn T id<T>(x: T)` is one unit's
-    // own family, and every instance of it inherits that -- read from the same
-    // place the non-generic path reads it, so the two cannot disagree.
-    const std::optional<resolve::DefId> def = defAtName(childOf(decl.decl, ast::NodeKind::Name));
-    const bool internal = def.has_value() && def->index < defs_.defs.size() &&
-                          defs_.defs[def->index].linkage == resolve::Linkage::Internal;
-    llvm::Function* function = llvm::Function::Create(
-        type, internal ? llvm::GlobalValue::InternalLinkage : llvm::GlobalValue::ExternalLinkage,
-        info.symbol, module_);
+    // **The instance is private to this unit**, whatever the declaration's own
+    // linkage says.
+    //
+    // A symbol's linkage answers one question -- may another unit call *this
+    // name* -- and an instance's name is decided here: `__M2_idi32` is not
+    // writable from any source, and no unit can reach it from another, because
+    // resolution reads one unit at a time (a second file calling `id` without
+    // declaring it is `resolve-unknown-name`, and there is no import yet). So
+    // external linkage bought nothing and cost the whole program: two units that
+    // each instantiate the same generic at the same type emitted **one** external
+    // symbol twice, and the link ended in
+    //
+    //     ld: unit1.o: multiple definition of `__M2_idi32`
+    //
+    // which is a duplicate the source cannot rename -- the compiler chose the
+    // name -- and therefore the one case `static` cannot be advised for.
+    //
+    // The two market answers are both unavailable here, and knowing why is the
+    // reason to take this one. C++ instantiates a template in every unit and lets
+    // the linker fold the copies (`linkonce_odr`, COMDAT), which is sound only
+    // because the one-definition rule makes the bodies *identical*: two `.mx`
+    // files are free to declare different functions under one name, so folding
+    // could run the other file's body -- and even for identical text the
+    // `-fcheck` guards carry the site's file and line, so the bodies are not
+    // byte-identical and the message could name a file that has no such line.
+    // Rust escapes this because **one crate owns the generic** and every copy
+    // comes from one body of MIR.
+    //
+    // So the copies are private, exactly as clang emits an internal-linkage
+    // template's instance, and `static fn T id<T>` and `fn T id<T>` agree here --
+    // not a loss: the declaration's linkage is about the *declaration's* name,
+    // which no linker will ever be shown (a generic declaration has no body to
+    // emit), so nothing is widened or narrowed by it. The day a unit can import a
+    // declaration, the module that owns it owns its instances, and a shared
+    // weakly-linked instance becomes sound *then* -- behind the export map
+    // modules need anyway (`generics.md`, § 7).
+    llvm::Function* function =
+        llvm::Function::Create(type, llvm::GlobalValue::InternalLinkage, info.symbol, module_);
     if (types_.isNever(types_.get(info.functionType).returnType)) {
       function->addFnAttr(llvm::Attribute::NoReturn);
     }

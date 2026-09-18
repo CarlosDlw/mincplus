@@ -242,6 +242,33 @@ TEST(IrLowerTest, ANegationAndAStepAreTheOperandsOwnKind) {
   EXPECT_EQ(text.find("i0 "), std::string::npos) << text;
 }
 
+// An instance is a **private copy**, and the linkage is what lets two units
+// instantiate the same template at the same type without the linker refusing the
+// program: before this, both objects defined the same external `__M2_idi32` and
+// the link ended in "multiple definition" -- a duplicate the source cannot rename,
+// because the compiler chose the name.
+//
+// Private and not shared because there is nothing to share: resolution reads one
+// unit at a time (a second file calling `id` without declaring it is
+// `resolve-unknown-name`), so no unit can reach another's instance, and the two
+// market answers -- COMDAT folding, a crate that owns the generic -- need a single
+// definition point this language does not have until modules exist.
+TEST(IrLowerTest, AnInstanceIsPrivateToItsUnit) {
+  test::IrFixture fixture;
+  fixture.source("fn T id<T>(x: T) { return x; }\n"
+                 "fn i32 main() { return id(7); }\n");
+  ASSERT_TRUE(fixture.build());
+  ASSERT_TRUE(fixture.moduleBuilt()) << fixture.module();
+
+  const std::string text = fixture.module();
+  EXPECT_NE(text.find("define internal i32 @__M2_idi32("), std::string::npos) << text;
+  // The template itself is never emitted -- a generic declaration has no body of
+  // its own -- so the instance is the only definition here, and the declaration's
+  // own linkage has nothing to narrow: `static fn T id<T>` and `fn T id<T>` give
+  // the instance the same linkage.
+  EXPECT_EQ(text.find("define i32 @__M2_idi32("), std::string::npos) << text;
+}
+
 TEST(IrLowerTest, AnIndexIsAPlainGetElementPtr) {
   test::IrFixture fixture;
   fixture.source("fn i32 read(p: *i32, i: i64)\n"

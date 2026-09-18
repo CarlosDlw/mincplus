@@ -289,9 +289,45 @@ let a = zero();
 
 ## Where the instances go
 
-Each instance is one function with the symbol `__M8_identityi32`, emitted once
-however many calls reach it, and one `DW_TAG_subprogram` whose `DW_AT_name` is
-`identity<i32>` — so `break identity` in a debugger stops in every instance.
+Each instance is one function, emitted once however many calls reach it, and one
+`DW_TAG_subprogram` whose `DW_AT_name` is `identity<i32>` — the spelling a
+diagnostic prints — whose parameters are the **instantiated** types, and whose
+`DW_AT_decl_line` is the declaration's line and not an instantiation site.
+
+To stop in **every** instance, `rbreak identity`: it matches the DWARF names and
+sets one breakpoint per instance.
+
+```console
+$ gdb -batch -ex 'rbreak identify' -ex run ./prog
+Breakpoint 1 at 0x1166: file two.mx, line 1.
+Breakpoint 2 at 0x1154: file two.mx, line 1.
+Successfully created breakpoints 1-2.
+Breakpoint 2, __M8_identifyi32 (x=7) at two.mx:1
+```
+
+`break identity` is *not* the way, and it is worth knowing why: a breakpoint name
+is resolved through the **symbol**, and gdb has no demangler for ours. The linkage
+leaders get `break identity` for free because gdb ships a demangler for Itanium
+and for Rust's v0 mangling; for this language that is a `gdb` addition, not a
+compiler trick — writing `<` and `>` into the symbol would buy it and cost a name
+no linker script, `.def` file or debugger's parser is promised to carry.
+
+The **symbol** is `__M8_identityi32`, and it is private to the unit that
+instantiated it, because there is nothing to share yet: until a declaration can be
+imported, two files that both declare `id` are two unrelated functions. A linker
+*de-duplicates* a weak symbol and *refuses* two strong definitions of one name, so
+emitting `__M2_idi32` as an external symbol in both objects made the obvious
+program fail to build; each unit gets a local copy instead:
+
+```console
+$ mincc build a.mx b.mx -o prog         # both files declare and call id<T>
+$ nm prog | grep idi32                  # two objects, two local symbols
+0000000000001140 t __M2_idi32           # `t`: local to the object it came from
+0000000000001160 t __M2_idi32
+```
+
+When a unit can import a declaration, the module that owns it owns its instances,
+and that is when one copy can be shared.
 
 The set of instances is found by a worklist keyed on `(declaration, arguments)`,
 seeded by the concrete calls and expanded per instance of an enclosing template:

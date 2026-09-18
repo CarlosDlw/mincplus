@@ -607,14 +607,60 @@ a hash:
   the crate's metadata into the symbol (`_ZN2mg8identity17ha40aaaaaa9cd2685E`,
   measured), which is why two instantiations of the same function carry
   indistinguishable demangled names and why the scheme had to be redesigned.
-  Ours is a function of the declaration's name and the arguments, so two units
-  compiling the same instantiation produce the same symbol and the linker
-  de-duplicates them.
+  Ours is a function of the declaration's name and the arguments, so the same
+  instantiation written twice in one unit is one symbol, and a symbol is readable
+  in a debugger, a log, or a disassembly without a demangler.
 - **Ready for a unit.** When modules land, two units may each declare an
   `identity`; the encoding has room for a unit component in front of the name,
   and the record does not decide the module syntax, only that the mangling is
   `(unit, name, args)` with the unit empty today. `modules.md` is where
   `Lowering::linkageName` gets that component.
+
+**4. An instance is private to the unit that instantiated it.**
+
+This decision was written *after* the code, and it is the correction of a real
+defect rather than a preference. The bullet above used to end *“so two units
+compiling the same instantiation produce the same symbol and the linker
+de-duplicates them”* — and **that sentence was wrong about the linker.** A linker
+de-duplicates *weak* symbols; two strong definitions of one name are an error, so
+the sentence described the mechanism and not the outcome:
+
+```console
+$ mincc build a.mx b.mx -o prog                       # both declare and call id<T>
+ld: unit1.o: multiple definition of `__M2_idi32`
+    unit0.o: defined first here
+```
+
+A duplicate the *source cannot rename*, because the compiler chose the name — the
+one case `static` cannot be advised for. And what a symbol's linkage answers is
+one question: may another unit call **this name**. It cannot, here. `resolve`
+reads one unit at a time, and there is no import yet, so a file that calls an
+`id` it does not declare gets `error[resolve-unknown-name]` (measured: the same
+error whether the other file declares it or not). Nothing outside the object can
+name `__M2_idi32`, and nothing inside can reach another unit's copy.
+
+So the instance is emitted with **internal linkage**, whatever the declaration's
+own linkage said. `static fn T id<T>` and `fn T id<T>` therefore agree here, and
+that is not a loss: a generic declaration has no body to emit, so its own linkage
+is never shown to a linker at all.
+
+The two market answers are both unavailable today, and knowing *why* is the
+argument for this one. **C++** instantiates a template in every unit that uses it
+and lets the linker fold the copies (COMDAT, `linkonce_odr`), which is sound only
+because the one-definition rule makes the bodies identical. Two `.mx` files are
+free to declare *different* functions under one name — that is what “no import”
+means — so folding them could run the other file's body; and even when the text is
+identical, a `-fcheck` guard carries the **site's file and line** (`checks.md`),
+so the bodies are not byte-identical and the surviving copy could print a file
+that has no such line. **Rust** escapes this because one crate *owns* the generic
+and every copy comes from one body of MIR; `cargo` even has to be told
+(`-Zshare-generics`) to share an instance across crates at all.
+
+When modules land, a declaration gets an owner and every instance of it gets one
+definition point. That is the day a shared, weakly-linked instance becomes sound
+— and it will need the export map modules require anyway, so this decision closes
+no door: it just declines to borrow an ODR assumption the language cannot make
+yet.
 
 ## 8. Debug information: one subprogram per instance
 
@@ -655,6 +701,35 @@ Breakpoint 1.1, identity<int> (value=7) at mg.cpp:2
 A regex on the bare name matches **every** instantiation, and the breakpoint is a
 multi-location breakpoint. Rust's gdb session is the same shape
 (`static fn mg::identity<f64>(f64) -> f64`).
+
+**Ours, measured** on a unit with one instance at `i32` and one at `f64`:
+
+```console
+$ llvm-dwarfdump --debug-info two | grep -A3 'DW_AT_name.*identify'
+                DW_AT_name	("identify<i32>")
+                DW_AT_decl_file	("two.mx")
+                DW_AT_decl_line	(1)
+$ gdb -batch -ex 'rbreak identify' -ex run ./two
+Breakpoint 1 at 0x1166: file two.mx, line 1.
+Breakpoint 2 at 0x1154: file two.mx, line 1.
+Successfully created breakpoints 1-2.
+Breakpoint 2, __M8_identifyi32 (x=7) at two.mx:1
+```
+
+One thing does **not** work, and it is worth writing down so nobody "fixes" it by
+mailing the symbol: `break identify` and `break identify<i32>` are both *not
+defined*. A breakpoint name is resolved through the **symbol**, and ours is
+`__M8_identifyi32` — a name gdb has no demangler for. The leaders get
+`break identity` for free because their linkage names are Itanium and v0 mangled
+and gdb ships a demangler for each; the honest fix for us is a `minc+` demangler
+(a `gdb` addition, not a compiler trick), and the tempting shortcut — putting `<`
+and `>` in the symbol — is refused by § 7 for exactly this reason: they are not
+characters a linker script, a `.def` file or a debugger's parser is promised to
+carry. The regex form is what works today, and it matches the DWARF name.
+
+An instance is also `static` in the DIE, because it *is* private to its unit
+(§ 7, decision 4) — gdb prints it that way, and so does it print a `static fn`.
+The name a debugger shows is unchanged by that; only the linkage is.
 
 So the `-g` contract is: one instance, one subprogram DIE, `DW_AT_name` =
 `identity<i32>` (the same spelling a diagnostic prints, one formatter), the
@@ -807,7 +882,7 @@ The whole of it: the **parser**, the **alias**, the **generic function** and the
 | `ast` | nothing: the tree lowering is structural, so both nodes ride it. The `NodeKind` values are `GenericParams` and `TypeArgList` |
 | `a declaration's return type` | read by the **type reader** and not walked token by token, and that needed a mechanism the grammar did not have: a **bound**. The scan (`scanTypeRun`) finds where the name begins, and `parseBoundTypeRun` reads up to that token with `TokenBound` making `atEnd()` true there — so `fn Vec<i32> f()` gets a `TypeArgList` like every other type position instead of the flat words `Vec < i32 >`, and `fn Pair<T, K> make<T, K>()` is a return type the reader below can resolve. A bound is a token *range*, restored by RAII; a flag on the parser would be state that survives the token stream going the wrong way, which is the failure this parser does not recover from |
 | `sema` | the **instance**: `runInstantiations`, a worklist keyed on `(declaration, arguments)` seeded by the concrete calls and expanded per instance of an enclosing generic, with `options.maxInstances` as the budget and `CallTarget` recording which instance each **call site** reaches — keyed on the pair, because one call node inside a generic body is lowered once per instance of the function that contains it |
-| `sema` | the **two names** of an instance: `identity<i32>` (what a diagnostic and a `DW_AT_name` print) and `__M8_identityi32` (what the linker sees), both derived from `(name, arguments)` |
+| `sema` | the **two names** of an instance: `identity<i32>` (what a diagnostic and a `DW_AT_name` print) and `__M8_identityi32` (the symbol, private to the unit — § 7 decision 4), both derived from `(name, arguments)` |
 | `ir` | a **function per instance**: `defineFunction` takes the instance's substituted signature, the body is lowered once per instance with the binders replaced, the debug record emits one `DW_TAG_subprogram` per instance with `DW_AT_name = identity<i32>` and a `DW_TAG_template_type_parameter` per binder, and a call reaches its instance through `callTarget` |
 | `driver` | `check --ast` prints the instance table (`# instances`) — the one fact the tree cannot show, because every call says `identity` and the *set* of functions is what changes |
 | `sema` | one new kind, `Param`, whose identity is `(unit, owner, binder)` and whose spelling is a fact kept beside it; `TypeStore::substitute`, which rebuilds a type through the same builders so the *result* meets the array and product rules a written type meets; `TypePart.hasArgs` and `TypeName.{binders, owner, unit}`, which is how a use reaches the template; and the three refusals a use can produce — a generic name with no arguments, the wrong count, arguments on a name that takes none — each a `sema-malformed-type` sentence that names the numbers and the spelling to write |
@@ -867,7 +942,8 @@ reachable.
 | 14 | **Instantiation is a worklist keyed on `(declaration, arguments)`, expanded with the instance's substitution** | The arguments inside a generic body are written in terms of its binders, so the set cannot be enumerated by one walk of the program (`id<i32>` and `id<f64>` come from one body). A repeated key is not re-expanded, which is what makes a recursive generic terminate |
 | 15 | **The instance list has a budget, and overrunning it is a diagnostic** | `g::<*T>` grows forever; a compiler that follows it exhausts memory instead of reporting. rustc reports 'reached the recursion limit while instantiating' |
 | 16 | **The symbol is `__M<name><args>`, restricted to `[A-Za-z0-9_]`, with the `__` prefix reserved by the language** | Rust's v0 mangling states the reason to stay inside `[A-Za-z0-9_]`: *'other characters might have special meaning in some context (e.g. `.` for MSVC DEF files)'*. The `$` this record first proposed was measured through LLVM for ELF, COFF and Mach-O — but that measures the emitter, not the tools that read the object afterwards, and it is not a C identifier character. Unreachability from source then comes from a rule (C's `__*` reservation) instead of from a character, and the length-prefixed name is what delimits it without a separator |
-| 17 | **The mangling is readable and deterministic, not a hash** | Rust's legacy mangling folds a metadata hash into the symbol (measured), which is why its demangled names cannot distinguish two instantiations and why it was redesigned. A function of the name and the arguments de-duplicates across units |
+| 17 | **The mangling is readable and deterministic, not a hash** | Rust's legacy mangling folds a metadata hash into the symbol (measured), which is why its demangled names cannot distinguish two instantiations and why it was redesigned. A function of the name and the arguments is readable in a debugger without a demangler, and survives a change to the mangling elsewhere |
+| 17a | **An instance's symbol is internal to its unit** | Measured, the hard way: with the declaration's linkage the two copies were two strong external definitions and the *program* did not link — `multiple definition of __M2_idi32`, under a name no source can rename. A symbol's linkage answers 'may another unit call this name', and no unit can reach another's instance at all. C++'s COMDAT folding presumes one definition rule across units (two `.mx` files may declare different functions under one name, and `-fcheck` guards embed the site's file, so even equal text is not byte-equal); Rust presumes a crate that owns the generic. Neither presumption holds here until modules exist |
 | 18 | **One subprogram DIE per instance: `DW_AT_name` is `identity<i32>`, `DW_AT_linkage_name` is the symbol, `DW_AT_decl_line` is the declaration, one `DW_TAG_template_type_parameter` per binder** | Measured from clang and rustc, and measured again in gdb: `info functions identity` lists every instance and `break identity` is a multi-location breakpoint |
 | 19 | **Monomorphization, not Go's dictionaries** | Go's own document says its DWARF *'indicates the dictionary entry that will contain the concrete type'* — the debugger resolves a variable's type at run time. Here `value` is `i32` in the DWARF, statically, because the instance is a real function |
 | 20 | **A `Param` never reaches `ir`; the lowering stopping on one is an internal error** | The invariant that makes the substitution boundary a fact instead of a hope, and it is the one thing a test can assert for the whole stage |

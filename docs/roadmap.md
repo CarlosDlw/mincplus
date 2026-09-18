@@ -952,6 +952,9 @@ the two cannot disagree about what the pipeline means.
       runs. A generic **function** is `identity::<i32>(x)` or `identity(x)`: the
       binders follow the name, the body is checked **once** under them, and every
       distinct argument list is one instance with the symbol `__M8_identityi32`
+      — **private to the unit that instantiated it**, so two files may each
+      declare and instantiate one template without the link failing
+      (`generics.md`, § 7) —
       and one `DW_TAG_subprogram` whose `DW_AT_name` is `identity<i32>`, found by
       a worklist keyed on the pair (`examples/022_generics.mx` runs). The binders
       follow the name being declared (`fn T identity<T>(value: T)`,
