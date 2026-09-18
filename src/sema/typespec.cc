@@ -476,7 +476,7 @@ TypeSpecResult readType(std::span<const TypePart> parts, TypeStore& types,
                                  "`, and a type argument has to be one of the types that "
                                  "class admits");
       }
-      usedBase = types.substitute(row->type, arguments, row->owner);
+      usedBase = types.substitute(row->type, arguments, row->unit, row->owner);
       if (!usedBase.valid()) {
         // The substitution itself was refused. It is *not* the store's budget,
         // which reports itself: this is the target's own rules meeting the

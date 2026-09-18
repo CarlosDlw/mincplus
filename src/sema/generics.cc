@@ -134,12 +134,12 @@ void Checker::readBinderRows(ast::AstId params, std::uint32_t owner, std::vector
     }
     // The spelling is kept beside the row for the sentences that have to name a
     // binder, and it is *not* recoverable from the type afterwards: a `Param`'s
-    // identity is `(owner, binder)` and an unsound binder has no `Param` at all.
-    // The class travels the same way and for the same reason (`BinderRow`).
+    // identity is `(unit, owner, binder)` and an unsound binder has no `Param` at
+    // all. The class travels the same way and for the same reason (`BinderRow`).
     BinderRow row;
     row.spelling = written;
     row.klass = klass;
-    row.param = sound ? types_.param(owner, count, written, klass) : kInvalidType;
+    row.param = sound ? types_.param(unit(), owner, count, written, klass) : kInvalidType;
     out.push_back(row);
     ++count;
   }
@@ -192,7 +192,7 @@ bool Checker::mentionsParam(TypeId type, std::uint32_t owner) const {
   if (!types_.known(type)) {
     return false;
   }
-  if (types_.isParamOf(type, owner)) {
+  if (types_.isParamOf(type, unit(), owner)) {
     return true;
   }
   const Type& shape = types_.get(type);
@@ -486,7 +486,7 @@ bool Checker::solve(std::uint32_t owner, TypeId pattern, TypeId actual,
   if (!types_.known(pattern) || !mentionsParam(pattern, owner)) {
     return true;
   }
-  if (types_.isParamOf(pattern, owner)) {
+  if (types_.isParamOf(pattern, unit(), owner)) {
     const std::uint32_t binder = types_.get(pattern).binder;
     if (binder >= solution.size()) {
       return true; // unreachable: the table is the declaration's binder list
@@ -644,7 +644,7 @@ std::uint32_t Checker::internInstance(std::uint32_t function, std::span<const Ty
   // meeting the arguments -- `[4]T` with `T := void`, a count that does not fit the
   // address space -- and the sentence says that the argument list is what produced
   // it.
-  const TypeId signature = types_.substitute(decl.functionType, args, decl.owner);
+  const TypeId signature = types_.substitute(decl.functionType, args, unit(), decl.owner);
   if (!signature.valid()) {
     error(at, SemaErrorCode::GenericTypeArgs,
           "this type argument list has no instance: the arguments are substituted into the "
@@ -698,7 +698,7 @@ void Checker::runInstantiations() {
       args.reserve(site.args.size());
       bool concrete = true;
       for (const TypeId arg : site.args) {
-        const TypeId substituted = types_.substitute(arg, instance.args, decl.owner);
+        const TypeId substituted = types_.substitute(arg, instance.args, unit(), decl.owner);
         if (!substituted.valid()) {
           concrete = false;
           break;
@@ -866,7 +866,7 @@ TypeId Checker::checkGenericCall(ast::AstId expr, ast::AstId callee, std::uint32
   // template's parameter type was the context an argument was checked in; the
   // instance's is what it is converted to, and the conversion is recorded here
   // because only now are both sides known (`coerce.cc`).
-  const TypeId signature = types_.substitute(decl.functionType, solution, owner);
+  const TypeId signature = types_.substitute(decl.functionType, solution, unit(), owner);
   if (!signature.valid()) {
     error(expr, SemaErrorCode::GenericTypeArgs,
           "this type argument list has no instance: the arguments are substituted into the "

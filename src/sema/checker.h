@@ -63,6 +63,16 @@ public:
 private:
   // --- tree access -----------------------------------------------------------
 
+  // The unit this checker is checking. A tree is numbered from zero **per file**
+  // (`ast.h`, `LoweredFile::root()`), and the type store is one per compilation,
+  // so an `owner` -- a node id -- names a declaration only together with this.
+  // Every `Param` this checker interns and every substitution it asks for is
+  // qualified by it, and that qualification is what keeps two files' binders from
+  // being one type (`type.h`, the `unit` field).
+  [[nodiscard]] support::FileId unit() const {
+    return file_.file();
+  }
+
   [[nodiscard]] bool inError(ast::AstId id) const {
     return file_.inErrorRegion(id);
   }

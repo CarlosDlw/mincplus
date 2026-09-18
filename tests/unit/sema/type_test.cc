@@ -62,6 +62,62 @@ TEST(TypeStoreTest, IdentityIsStructureAndNotSpelling) {
   EXPECT_NE(types.signedInt(32), types.signedInt(64));
 }
 
+// A type parameter's identity is the **triple** `(unit, owner, binder)`.
+//
+// `owner` is an id in one unit's tree and a tree is numbered from zero per file
+// (`ast.h`, `LoweredFile::root()`), while the store is one per compilation -- so
+// "node 5" names a declaration in *every* file at once. Keyed by the node alone,
+// the first binder read answered for the second declaration too, with the first
+// one's class: a `Number` body was told its binder was `Ordered`, and the file
+// that reported it depended on the order the inputs were named on the command
+// line.
+TEST(TypeStoreTest, AParamIsIdentifiedByItsUnitAndNode) {
+  TypeStore types;
+  const TypeId here = types.param(0, 5, 0, "T", support::ConstraintClass::Number);
+  const TypeId there = types.param(1, 5, 0, "T", support::ConstraintClass::Ordered);
+  ASSERT_TRUE(types.known(here));
+  ASSERT_TRUE(types.known(there));
+
+  // One spelling, two types -- which is the whole reason `Param` is a nominal
+  // kind -- and each keeps the class its own declaration wrote.
+  EXPECT_EQ(types.spelling(here), "T");
+  EXPECT_EQ(types.spelling(there), "T");
+  EXPECT_NE(here, there);
+  EXPECT_EQ(types.binderClass(here), support::ConstraintClass::Number);
+  EXPECT_EQ(types.binderClass(there), support::ConstraintClass::Ordered);
+
+  // Reading the same binder twice is one type, and the class is **not** part of
+  // that question: it is a fact about the binder, and a binder list is read once.
+  EXPECT_EQ(here, types.param(0, 5, 0, "T"));
+  EXPECT_EQ(types.binderClass(here), support::ConstraintClass::Number);
+
+  // The identity asked about is the same triple, and a node or a unit off by one
+  // is a different declaration.
+  EXPECT_TRUE(types.isParamOf(here, 0, 5));
+  EXPECT_FALSE(types.isParamOf(here, 1, 5));
+  EXPECT_FALSE(types.isParamOf(here, 0, 6));
+  EXPECT_FALSE(types.isParamOf(kTypeI32, 0, 5));
+  // A binder at another node of the *same* unit is another type as well, which is
+  // the half of the rule that always held.
+  EXPECT_NE(here, types.param(0, 6, 0, "T"));
+  // A pointer to a binder is not a binder: the question is asked of `Param`s.
+  EXPECT_FALSE(types.isParamOf(types.pointerTo(here), 0, 5));
+
+  // And substitution follows the identity: this file's binder is replaced by this
+  // file's arguments, the other file's binder is left alone -- there and back, so
+  // a store that mixed the two up would fail one of the four.
+  const std::vector<TypeId> args{kTypeI32};
+  EXPECT_EQ(types.substitute(here, args, 0, 5), kTypeI32);
+  EXPECT_EQ(types.substitute(here, args, 1, 5), here);
+  EXPECT_EQ(types.substitute(there, args, 1, 5), kTypeI32);
+  EXPECT_EQ(types.substitute(there, args, 0, 5), there);
+  // Inside a structure, which is where a real signature does it: `*T` is `*i32`
+  // for the declaration that owns the binder and `*T` untouched for the other.
+  const TypeId pointer = types.pointerTo(here);
+  EXPECT_EQ(types.substitute(pointer, args, 0, 5), types.pointerTo(kTypeI32));
+  EXPECT_EQ(types.substitute(pointer, args, 1, 5), pointer);
+}
+
 TEST(TypeStoreTest, AFunctionTypeIsIdentifiedByItsSignature) {
   TypeStore types;
   const TypeId first = types.function(kTypeI32, {}, /*variadic=*/false);

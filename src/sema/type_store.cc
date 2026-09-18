@@ -305,10 +305,15 @@ std::uint64_t TypeStore::hashOf(const Type& type, std::span<const TypeId> parts)
   // one call site (`sema/type.h`).
   hash = mix(hash, type.variadic ? 1U : 0U);
   hash = mix(hash, type.name);
-  // A type parameter's identity is `(owner, binder)` and not its structure, so
-  // both are mixed: two declarations that each call their binder `T` must not
-  // land in one bucket, and `spelling` is deliberately left out because it is a
+  // A type parameter's identity is `(unit, owner, binder)` and not its structure,
+  // so all three are mixed: two declarations that each call their binder `T` must
+  // not land in one bucket, and `spelling` is deliberately left out because it is a
   // third fact about the type and not part of what makes two of them the same.
+  //
+  // `unit` is mixed for the reason the other two are, and it is the one that was
+  // missing: an id is an index into *one* file's tree, so `(owner, binder)` names a
+  // binder per file and the store is per compilation.
+  hash = mix(hash, type.unit);
   hash = mix(hash, type.owner);
   hash = mix(hash, type.binder);
   // The member sequence is part of the structure; without it every `fn f(a)` and
@@ -323,7 +328,7 @@ bool TypeStore::equalFields(const Type& a, const Type& b) const {
   return a.kind == b.kind && a.isSigned == b.isSigned && a.bits == b.bits &&
          a.pointee == b.pointee && a.count == b.count && a.returnType == b.returnType &&
          a.name == b.name && a.variadic == b.variadic && a.paramCount == b.paramCount &&
-         a.owner == b.owner && a.binder == b.binder;
+         a.owner == b.owner && a.binder == b.binder && a.unit == b.unit;
 }
 
 bool TypeStore::equalParts(const Type& type, std::span<const TypeId> parts) const {
@@ -480,20 +485,28 @@ TypeId TypeStore::sliceOf(TypeId element) {
   return intern(type);
 }
 
-TypeId TypeStore::param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling,
-                        support::ConstraintClass klass) {
+TypeId TypeStore::param(support::FileId unit, std::uint32_t owner, std::uint32_t binder,
+                        std::string_view spelling, support::ConstraintClass klass) {
   paramSpellings_.emplace_back(spelling);
   Type type;
   type.kind = TypeKind::Param;
+  type.unit = unit;
   type.owner = owner;
   type.binder = binder;
   type.paramSpelling = paramSpellings_.back();
   type.binderClass = klass;
   // Interned like every other type, and the class is not compared for identity
-  // (`equalFields` mixes the pair above and not this) -- so a binder that is read
-  // twice comes back as one type, which is what "the identity is `(owner, binder)`"
-  // has to mean. The value is a function of the pair, so there is nothing to
-  // reconcile: the second read writes the same class the first one did.
+  // (`equalFields` mixes the triple above and not this) -- so a binder that is read
+  // twice comes back as one type, which is what "the identity is
+  // `(unit, owner, binder)`" has to mean. The class is a function of that triple
+  // -- a binder list is read once, from one piece of source -- so the second read
+  // writes the class the first one did.
+  //
+  // The triple is not a detail. A `Param` used to be keyed by `(owner, binder)`, on
+  // the assumption that a store's scope is one unit; a store is one per
+  // *compilation*, and a tree is numbered from zero per file, so the first binder
+  // declared at node 5 of one input answered for the binder declared at node 5 of
+  // another -- with the wrong class, silently (`type.h`, `unit`).
   return intern(type);
 }
 
@@ -559,7 +572,8 @@ bool TypeStore::hasConstant(TypeId id, support::TypeConstant constant) const {
   }
 }
 
-TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::uint32_t owner) {
+TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, support::FileId unit,
+                             std::uint32_t owner) {
   if (!known(subject)) {
     return subject;
   }
@@ -568,15 +582,19 @@ TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::
   const Type type = get(subject);
   switch (type.kind) {
   case TypeKind::Param:
-    // The one place a substitution ends. A binder of *another* declaration keeps
-    // its identity, which is what makes a generic body that mentions an enclosing
-    // binder still be about that binder (decision 6).
-    if (type.owner != owner || type.binder >= args.size()) {
+    // The one place a substitution ends. A binder of *another* declaration -- in
+    // this unit or any other -- keeps its identity, which is what makes a generic
+    // body that mentions an enclosing binder still be about that binder
+    // (decision 6). The unit is compared before the node id, and it is not
+    // bookkeeping: both are per-file coordinates, and a definition of this
+    // declaration living in another file would otherwise be substituted by this
+    // one's arguments (`type.h`, `unit`).
+    if (type.unit != unit || type.owner != owner || type.binder >= args.size()) {
       return subject;
     }
     return args[type.binder];
   case TypeKind::Pointer: {
-    const TypeId pointee = substitute(type.pointee, args, owner);
+    const TypeId pointee = substitute(type.pointee, args, unit, owner);
     return pointee.valid() ? pointerTo(pointee) : kInvalidType;
   }
   case TypeKind::Array: {
@@ -584,11 +602,11 @@ TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::
     // against the substituted type: `[4]T` with `T := i32` is an array the store
     // is allowed to have, and `[4]T` with `T := (i32, bool)` is refused here, by
     // the same arithmetic that would have refused it if it had been written.
-    const TypeId element = substitute(type.pointee, args, owner);
+    const TypeId element = substitute(type.pointee, args, unit, owner);
     return element.valid() ? arrayOf(element, type.count) : kInvalidType;
   }
   case TypeKind::Slice: {
-    const TypeId element = substitute(type.pointee, args, owner);
+    const TypeId element = substitute(type.pointee, args, unit, owner);
     return element.valid() ? sliceOf(element) : kInvalidType;
   }
   case TypeKind::Tuple: {
@@ -599,7 +617,7 @@ TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::
     std::vector<TypeId> replaced;
     replaced.reserve(original.size());
     for (const TypeId member : original) {
-      const TypeId one = substitute(member, args, owner);
+      const TypeId one = substitute(member, args, unit, owner);
       if (!one.valid()) {
         return kInvalidType;
       }
@@ -612,13 +630,13 @@ TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::
     std::vector<TypeId> replaced;
     replaced.reserve(original.size());
     for (const TypeId param : original) {
-      const TypeId one = substitute(param, args, owner);
+      const TypeId one = substitute(param, args, unit, owner);
       if (!one.valid()) {
         return kInvalidType;
       }
       replaced.push_back(one);
     }
-    const TypeId returns = substitute(type.returnType, args, owner);
+    const TypeId returns = substitute(type.returnType, args, unit, owner);
     if (!returns.valid()) {
       return kInvalidType;
     }
@@ -825,8 +843,8 @@ bool TypeStore::isTuple(TypeId id) const {
 bool TypeStore::isParam(TypeId id) const {
   return known(id) && get(id).kind == TypeKind::Param;
 }
-bool TypeStore::isParamOf(TypeId id, std::uint32_t owner) const {
-  return isParam(id) && get(id).owner == owner;
+bool TypeStore::isParamOf(TypeId id, support::FileId unit, std::uint32_t owner) const {
+  return isParam(id) && get(id).unit == unit && get(id).owner == owner;
 }
 bool TypeStore::hasUnknownSize(TypeId id) const {
   // Stored with the layout, and the rule is `layoutOf`'s: a binder has no width

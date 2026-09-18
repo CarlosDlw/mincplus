@@ -382,7 +382,7 @@ sema::TypeId Lowering::concrete(sema::TypeId type) const {
   // declaration is left alone -- which cannot happen from a body inside this unit
   // (a function scope holds one binder list), and is left alone rather than
   // guessed at if it ever does.
-  return types_.substitute(type, instanceArgs_, instanceOwner_);
+  return types_.substitute(type, instanceArgs_, file_.file(), instanceOwner_);
 }
 
 bool Lowering::isAccessNode(ast::AstId id) const {

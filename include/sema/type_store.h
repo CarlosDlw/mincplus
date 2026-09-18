@@ -31,6 +31,7 @@
 #include "sema/target.h"
 #include "sema/type.h"
 #include "support/limits.h"
+#include "support/span/file_id.h"
 
 namespace minc::sema {
 
@@ -141,20 +142,23 @@ public:
   [[nodiscard]] TypeId function(TypeId returnType, std::span<const TypeId> params, bool variadic);
   // A **type parameter**: `T` of `fn T identity<T>(value: T)` (`generics.md`).
   //
-  // Its identity is `(owner, binder)` and not its structure, which is the whole
-  // reason it is a kind: two declarations may each call their binder `T`, and they
-  // are two types. `owner` is the declaring node's id in the unit's tree, `binder`
-  // is the position in that declaration's binder list, and `spelling` is what a
-  // diagnostic prints -- the *third* fact, kept beside the identity and not part
-  // of it. The store copies the spelling, so the caller's view need not outlive
-  // the call.
+  // Its identity is `(unit, owner, binder)` and not its structure, which is the
+  // whole reason it is a kind: two declarations may each call their binder `T`, and
+  // they are two types. `unit` is the file that declared it and `owner` the
+  // declaring node's id **in that file's tree** -- both, because a tree is numbered
+  // from zero per file while this store is one per compilation, so `owner` alone
+  // names a declaration in every file at once. `binder` is the position in that
+  // declaration's binder list, and `spelling` is what a diagnostic prints -- the
+  // *fourth* fact, kept beside the identity and not part of it. The store copies
+  // the spelling, so the caller's view need not outlive the call.
   //
-  // `klass` is the *fourth* fact and travels the same way: the constraint the
+  // `klass` is the *fifth* fact and travels the same way: the constraint the
   // binder wrote, which decides what its body may do with it and which type
   // arguments may fill it. It is not part of the identity for the same reason the
   // spelling is not -- both are properties of the bound name, and the identity is
   // which binder it is.
-  [[nodiscard]] TypeId param(std::uint32_t owner, std::uint32_t binder, std::string_view spelling,
+  [[nodiscard]] TypeId param(support::FileId unit, std::uint32_t owner, std::uint32_t binder,
+                             std::string_view spelling,
                              support::ConstraintClass klass = support::ConstraintClass::Any);
   // The constraint a binder was declared with, or `Any` for a type that is not a
   // binder at all. One question, asked where an operation is about to be allowed
@@ -192,11 +196,13 @@ public:
   // Is this the parameter of *that* declaration? One question, because a binder
   // is only ever substituted by the declaration that owns it: a body referring to
   // an enclosing binder keeps it (decision 6), so "is this mine" is what every
-  // substitution asks.
-  [[nodiscard]] bool isParamOf(TypeId id, std::uint32_t owner) const;
+  // substitution asks -- and the unit is asked too, because "node 5" names a
+  // declaration in *each* unit (`type.h`, the `unit` field).
+  [[nodiscard]] bool isParamOf(TypeId id, support::FileId unit, std::uint32_t owner) const;
   [[nodiscard]] bool isParam(TypeId id) const;
-  // **Substitution.** Every `Param` of `owner` in `subject` is replaced by the
-  // corresponding entry of `args`, and the result is interned like any other type
+  // **Substitution.** Every `Param` of `owner` -- the declaration at `owner` **in
+  // `unit`** -- in `subject` is replaced by the corresponding entry of `args`, and
+  // the result is interned like any other type
   // -- so `Pair<i32, bool>` *is* `(i32, bool)`, the check is an id equality, and
   // the store did not grow a second kind of type (decision 8).
   //
@@ -211,7 +217,7 @@ public:
   // invalid answer is a diagnostic the caller reports, never an allocation that
   // already happened.
   [[nodiscard]] TypeId substitute(TypeId subject, std::span<const TypeId> args,
-                                  std::uint32_t owner);
+                                  support::FileId unit, std::uint32_t owner);
 
   // --- access ---------------------------------------------------------------
 

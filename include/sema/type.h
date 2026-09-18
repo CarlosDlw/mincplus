@@ -26,6 +26,7 @@
 #include <string_view>
 
 #include "support/intern/sym_id.h"
+#include "support/span/file_id.h"
 
 namespace minc::sema {
 
@@ -181,12 +182,19 @@ struct Type {
   bool variadic = false;
   // Reserved: a named type (`struct S`, a typedef).
   support::SymId name = support::kInvalidSym;
-  // Param: **the identity**, which is `(owner, binder)` and not the structure.
+  // Param: **the identity**, which is `(unit, owner, binder)` and not the
+  // structure.
   //
-  // The owner is the declaring node's id in the unit's tree, which is stable for
-  // as long as a unit is being checked and unique within it -- and a unit is the
-  // scope a `TypeStore` has today. Two declarations that both call their binder
-  // `T` get two types, which is the whole point of a nominal kind here.
+  // `owner` is the declaring node's id in *its own* unit's tree, and a unit's
+  // tree is numbered from zero (`LoweredFile::root()` is `AstId{0}`) -- so two
+  // units both declare something at id 5, and "node 5" alone does not name a
+  // declaration. `unit` is what makes the pair a name: one store serves the whole
+  // compilation (`sema::Context` owns it and every input's `TypeId` indexes it),
+  // while a tree is one file's, which is exactly the mismatch this field closes.
+  //
+  // Not the structure, and this is the whole point of a nominal kind here: two
+  // declarations that both call their binder `T` get two types.
+  support::FileId unit = support::kInvalidFile;
   std::uint32_t owner = 0;
   std::uint32_t binder = 0;
   // Param: what a diagnostic prints (`T`). Deliberately **not** part of the
@@ -199,11 +207,13 @@ struct Type {
   // it (`generics.md`, § 6, `support/constraint`).
   //
   // Kept beside the spelling and for the same reason, and like the spelling it is
-  // **not** compared for identity (`equalFields` mixes the pair above): a class is
-  // a fact *about* a binder, and two `Param`s differing only in their class would
-  // be the same type declared twice. It is a pure function of `(owner, binder)` --
-  // a binder list is read once, from one piece of source -- so there is nothing to
-  // reconcile and nothing to keep in sync.
+  // **not** compared for identity (`equalFields` mixes the triple above): a class
+  // is a fact *about* a binder, and two `Param`s differing only in their class
+  // would be the same type declared twice. It is a pure function of
+  // `(unit, owner, binder)` -- a binder list is read once, from one piece of
+  // source -- so there is nothing to reconcile and nothing to keep in sync *as
+  // long as the triple names one declaration*, which is the invariant the `unit`
+  // field is there to hold.
   //
   // The default is `Any`, which is the class of a binder that wrote no constraint,
   // so `<T>` and `<T: Any>` are the same declaration and every generic body that

@@ -98,6 +98,18 @@ struct TypeName {
   // declaration, built once). Empty for a name with no binders, which is every
   // ordinary alias.
   std::span<const BinderRow> rows = {};
+  // Which file's tree `owner` indexes. A row names a *declaration*, and a
+  // declaration is a node of one unit's tree -- while a tree is numbered from zero
+  // per file (`ast.h`, `LoweredFile::root()`). `owner` alone therefore names a
+  // declaration in every file at once, which is how two inputs' binders became one
+  // type; the pair is what a substitution is asked for
+  // (`TypeStore::substitute`), and the pair is what this row carries.
+  //
+  // Last in the row on purpose: the two-field and three-field rows written
+  // positionally across this stage must keep meaning what they mean. A row that
+  // names no declaration -- a binder's own name, whose type *is* the `Param` --
+  // leaves it at `kInvalidFile`, the same way that row leaves `owner` at 0.
+  support::FileId unit = support::kInvalidFile;
 };
 
 // The row that answers a word, or `nullptr` when the word is no name of this

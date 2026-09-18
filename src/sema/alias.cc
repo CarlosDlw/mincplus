@@ -208,7 +208,7 @@ void Checker::checkBlockAlias(ast::AstId decl) {
     // `pushBinderRows` above, so a use cannot see a class the declaration did not
     // write.
     addTypeName(TypeName{word, binding.type, static_cast<std::uint32_t>(index), binding.binders,
-                         binding.owner, binderRowsOf(binding.owner)});
+                         binding.owner, binderRowsOf(binding.owner), unit()});
   }
 }
 
@@ -299,7 +299,7 @@ void Checker::runAliases() {
       // reads the classes from (`TypeName::rows`).
       addTypeName(TypeName{written, aliases_[index].type, static_cast<std::uint32_t>(index),
                            aliases_[index].binders, aliases_[index].owner,
-                           binderRowsOf(aliases_[index].owner)});
+                           binderRowsOf(aliases_[index].owner), unit()});
     }
   };
 

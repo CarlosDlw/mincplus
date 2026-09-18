@@ -946,7 +946,7 @@ the two cannot disagree about what the pipeline means.
       lexer — with `::` added to the lexical grammar as one token, and the two
       mistakes that are about a *character* (`A<B>>`, `A<i32`) named by their own
       codes. On the
-      type side: `Param` with identity `(owner, binder)`, and a use that
+      type side: `Param` with identity `(unit, owner, binder)`, and a use that
       **substitutes** into the declaration's template — so `Pair<i32, bool>` *is*
       `(i32, bool)`, the check is an id equality, and `examples/021_generic_alias.mx`
       runs. A generic **function** is `identity::<i32>(x)` or `identity(x)`: the

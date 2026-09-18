@@ -192,6 +192,34 @@ TEST(CheckCommandTest, ConversionIsAWarningAndKeepsTheExitCode) {
   EXPECT_NE(with.out.find("1 warning(s)"), std::string::npos);
 }
 
+// One invocation, two units, one type store -- and a tree is numbered from zero
+// **per file**, so the two declarations below write their binder list at the same
+// node id. A `Param` keyed by that node alone is one type for both files: the
+// first one checked wins, the second declaration's body is checked against the
+// first one's class, and which file fails depends on the order the inputs are
+// named. That is not hypothetical -- it is how `check examples/*.mx` failed on
+// two of the three CI runners while passing on the third, whose `readdir` order
+// differed (`type.h`, the `unit` field).
+//
+// Both orders are run because the bug was order-dependent, and the same file is
+// checked twice because the *first* file must keep its own class after the
+// second one is read.
+TEST(CheckCommandTest, TwoUnitsKeepTheirOwnBinders) {
+  TempFile numbers("minc_check_binder_numbers.mx",
+                   "fn T sum<T: Number>(a: T, b: T) { return a + b; }\n");
+  TempFile compares("minc_check_binder_ordered.mx",
+                    "fn bool below<T: Ordered>(a: T, b: T) { return a < b; }\n");
+
+  for (const std::vector<std::string>& order :
+       {std::vector<std::string>{numbers.path(), compares.path()},
+        std::vector<std::string>{compares.path(), numbers.path()},
+        std::vector<std::string>{numbers.path(), compares.path(), numbers.path()}}) {
+    const CheckRun result = run(order, /*showAst=*/false, /*showTypes=*/false, /*stats=*/true);
+    EXPECT_EQ(result.code, exitCode(ExitCode::Ok)) << result.err;
+    EXPECT_EQ(result.err.find("error["), std::string::npos) << result.err;
+  }
+}
+
 TEST(CheckCommandTest, EveryExampleChecks) {
   namespace fs = std::filesystem;
   std::vector<std::string> files;
