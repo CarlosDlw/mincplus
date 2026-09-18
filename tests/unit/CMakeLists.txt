@@ -58,6 +58,7 @@ minc_add_executable(minc_unit_tests
     support/expected/expected_test.cc
     support/intern/interner_test.cc
     support/session/session_test.cc
+    support/process/process_test.cc
     support/term/terminal_test.cc
     support/utf8/utf8_test.cc
     support/consteval/literal_test.cc

@@ -575,20 +575,28 @@ mincc run [options] <files...> [-- <program arguments>]
   does, untranslated: a program that returns `2` makes `run` exit `2`, which is
   what lets `run` be the thing a test harness drives. A program that *did not
   exit* is not a status, and that is the next bullet.
-- **"Did not exit" is one rule over two platforms, and it is arithmetic.**
-  `llvm::sys::ExecuteAndWait` returns `-1` for a program that could not be
-  executed, `-2` for a signal death (POSIX `WIFSIGNALED`) or a timeout, and — on
-  Windows — an **unhandled exception** as the NTSTATUS code read as a signed
-  `int`: `__builtin_trap`'s `ud2` arrives as `0xC000001D`, an access violation as
-  `0xC0000005`. No program's own status is ever negative (POSIX reports the low
-  eight bits, and LLVM's Windows mapping clears the sign bit before returning), so
-  `status < -1` is "the child died" on both, written once instead of behind an
-  `#if`. The signal's *number* is deliberately not named — that is `waitpid` on
-  one platform and `GetExitCodeProcess` on the other, and the module that may
-  contain platform code is `support/term` (`architecture.md`). Windows is why
-  this is a range and not the single value `-2`: an equality against `-2` passed
-  on Linux, macOS and MinGW and failed on the Windows runner, where a trap is an
-  exception and not a signal.
+- **"Did not exit" is a fact the platform is asked for, not a number that is
+  interpreted.** The spawn belongs to `support/process`: `posix_spawn` +
+  `waitpid` on one side, `CreateProcessW` + `GetExitCodeProcess` on the other, and
+  the answer is three separate things — *started*, *exited*, *status*. The signal's
+  number is deliberately not named, because naming it is `waitpid` on one platform
+  and `WSTATUS` on the other; "did not exit normally" is the portable truth and all
+  a user needs. This is the fourth file in the tree that contains a platform branch
+  (`architecture.md`), beside the other three in `support`.
+- **Why not `llvm::sys::ExecuteAndWait`, which does all of that already.**
+  Because it *cannot* answer "started" and "status" separately: the Unix side of it
+  gives a child whose `execve` failed `_exit(errno == ENOENT ? 127 : 126)`, and its
+  `Wait` maps those two statuses back to `-1` with an error string — so a program
+  that returned 127 and a program that never started arrive as the same answer. The
+  statuses it maps are exactly the two a program is entitled to use, and this
+  compiler used to report "cannot run" for a program whose `main` returned 127.
+  Windows is lossy in a different place in the same layer (`status & 0xFF == 0` is
+  answered with `1`, so a program exiting `256` is reported as exiting `1`). The fix
+  is not to match on the error strings — those are prose, not an interface — it is
+  to ask the platform, and `support/process/process.h` states the argument in full.
+  What is *kept* from LLVM is the discovery of the linker driver
+  (`llvm::sys::findProgramByName`, `PATHEXT` included): that is lookup, not spawn,
+  and the platform's rules for it are worth inheriting.
 - **The temporary executable is removed on every exit path.** The child is
   waited for before the directory is torn down, because the file is still being
   read by the kernel while the process starts.

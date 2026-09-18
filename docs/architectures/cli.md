@@ -407,7 +407,7 @@ undocumented environment variable is a hidden option.
 ## Cross-platform
 
 The CLI adds **no** platform branch, and that is a rule rather than a hope
-(`architecture.md` states it: the whole platform branch is three files, all in
+(`architecture.md` states it: the whole platform branch is four files, all in
 `support`). Two things here are platform questions, and both are asked of
 `support/term`:
 

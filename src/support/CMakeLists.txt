@@ -2,6 +2,7 @@ add_subdirectory(span)
 add_subdirectory(line)
 add_subdirectory(source)
 add_subdirectory(term)
+add_subdirectory(process)
 add_subdirectory(diag)
 add_subdirectory(mem)
 add_subdirectory(intern)
@@ -19,6 +20,7 @@ target_link_libraries(minc_support INTERFACE
   minc_line
   minc_source
   minc_term
+  minc_process
   minc_diag
   minc_mem
   minc_intern

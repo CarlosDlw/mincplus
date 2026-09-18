@@ -361,11 +361,14 @@ int compile(const BuildRequest& request, bool execute, std::ostream& err) {
     return exitCode(ExitCode::Failure);
   }
   if (runResult.crashed) {
-    // The child died from a signal or a timeout. Naming the signal is platform
-    // work (`waitpid` on one side, `GetExitCodeProcess` on the other) and this
-    // module contains none, so the honest report is that it did not exit
-    // normally -- which is the distinction `run` exists to make (`codegen.md`).
-    err << kProgName << ": error: the program was terminated abnormally\n";
+    // The child died from a signal or, on Windows, an unhandled exception. Naming
+    // which is platform work (`waitpid` on one side, `GetExitCodeProcess` on the
+    // other) and this module contains none, so the honest report is that it did
+    // not exit normally -- which is the distinction `run` exists to make
+    // (`codegen.md`). The platform's own words are appended when it gave any,
+    // which is the case when it ran and the ending itself could not be learned.
+    err << kProgName << ": error: the program was terminated abnormally"
+        << (runResult.error.empty() ? std::string{} : ": " + runResult.error) << '\n';
     return exitCode(ExitCode::Failure);
   }
   // The program's status, verbatim: `run` is a launcher, not an interpreter, and

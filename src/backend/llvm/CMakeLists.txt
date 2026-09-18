@@ -19,7 +19,7 @@ minc_add_library(minc_backend
     link.cc
     run.cc
     files.cc
-  DEPS minc_ir minc_sema minc_span minc_fs
+  DEPS minc_ir minc_sema minc_span minc_fs minc_process
 )
 minc_target_llvm(minc_backend PRIVATE)
 

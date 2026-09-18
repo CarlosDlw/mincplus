@@ -76,9 +76,15 @@ end whole.
 implementation, because a rule copied into two modules is two answers waiting to
 differ.
 
-**The platform branch is three files.** `support/term` (terminal mode),
-`support/fs` (files, case rules) and the driver's toolchain invocation are the
-whole of it. Everything above is written to behave identically everywhere.
+**The platform branch is four files, all in `support`.** `support/term`
+(terminal mode), `support/fs` (files and case rules), `support/source/file_io`
+(how a path is encoded) and `support/process` (starting a child and waiting for
+it). Everything above is written to behave identically everywhere, and that is
+checkable rather than aspirational: `grep -rn _WIN32 src include` is the whole
+issue. The spawning one is the newest and the one that shows the rule's value —
+the portable layer it replaced merged "the program exited 127" with "the program
+never started", and no amount of care at a call site could have separated them
+again.
 
 **Nothing is committed to the optimizer that the program did not state.** The
 lowering's assumption list is closed, lives in one file, and is scanned: no

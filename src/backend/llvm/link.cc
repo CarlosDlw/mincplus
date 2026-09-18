@@ -14,11 +14,12 @@
 //
 // Three properties of the invocation are the point of this file:
 //
-// 1. **An `argv` array, never a shell string.** `ExecuteAndWait` spawns the child
-//    with these exact words, so there is nothing to quote, no `$` to expand, and
-//    no command injection -- and none of the Windows quoting rules for a path
+// 1. **An `argv` array, never a shell string.** `support::runAndWait` hands these
+//    exact words to the platform, so there is nothing to quote, no `$` to expand,
+//    and no command injection -- and none of the Windows quoting rules for a path
 //    with a space in it to get wrong. The user's paths are passed as data,
-//    because they are data.
+//    because they are data. (The *one* place those rules exist is inside that
+//    module, where the platform requires a command line instead of an array.)
 // 2. **The child's streams are inherited and its status is the answer.** Its own
 //    message has already been printed in its own format; parsing that text would
 //    be a second implementation of someone else's diagnostics, and swallowing it
@@ -26,6 +27,11 @@
 // 3. **The driver is discovered with the platform's rules**
 //    (`findProgramByName`, including `PATHEXT` on Windows), so a `.exe` suffix
 //    and a `PATH` separator are the platform's business and not ours.
+//
+// The spawn is `support/process`'s for one reason beyond sharing: a linker driver
+// that exits 127 is a linker driver that *ran and reported 127*, and
+// `llvm::sys::ExecuteAndWait` could not tell that apart from a driver that never
+// started. Both are failures, but only one of them is "install a C toolchain".
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -33,12 +39,11 @@
 #include <utility>
 #include <vector>
 
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Program.h"
 
 #include "backend/codegen.h"
+#include "support/process/process.h"
 
 namespace minc::backend {
 namespace {
@@ -154,43 +159,33 @@ LinkResult linkExecutable(const LinkRequest& request) {
     return result;
   }
 
-  // `argv[0]` is the resolved path, so what runs is what `-v` printed modulo the
-  // resolution itself.
   std::vector<std::string> argv = std::move(result.command);
   argv[0] = *driver;
   result.command = argv;
 
-  llvm::SmallVector<llvm::StringRef, 32> arguments;
-  arguments.reserve(argv.size());
-  for (const std::string& argument : argv) {
-    arguments.emplace_back(argument);
-  }
+  // `argv[0]` is the resolved path, and the rest are the words unchanged: what
+  // runs is what `-v` printed, modulo the resolution itself.
+  const support::ProcessOutcome outcome =
+      support::runAndWait(*driver, std::vector<std::string>(argv.begin() + 1, argv.end()));
 
-  std::string errorMessage;
-  bool executionFailed = false;
-  const int status = llvm::sys::ExecuteAndWait(*driver, arguments, /*Env=*/std::nullopt,
-                                               /*Redirects=*/{}, /*SecondsToWait=*/0,
-                                               /*MemoryLimit=*/0, &errorMessage, &executionFailed);
-
-  if (executionFailed || status == -1) {
-    // `-1` and the flag mean the same thing ("could not execute"); the flag is
-    // the one LLVM documents for it, and both are checked so neither spelling of
-    // the answer is missed.
+  if (!outcome.started) {
     add(result.diagnostics, CodegenDiagnosticCode::LinkerNotFound,
         "cannot run the linker driver `" + *driver + "`" +
-            (errorMessage.empty() ? std::string{} : ": " + errorMessage));
+            (outcome.error.empty() ? std::string{} : ": " + outcome.error));
     return result;
   }
-  // A driver that did not exit on its own: `-2` is the portable layer's signal or
-  // timeout, and on Windows it is an NTSTATUS exception code
-  // (`abnormalTermination`). Without the range, a linker that died of an access
-  // violation would be reported with a negative "status" and nothing else.
-  if (abnormalTermination(status)) {
+  // A driver that ran and did not exit on its own: a signal, or an unhandled
+  // exception on Windows. Without this branch a linker that died of an access
+  // violation would be reported as "exited with status <negative>", which reads
+  // as a status the driver chose.
+  if (!outcome.exited) {
     add(result.diagnostics, CodegenDiagnosticCode::LinkFailed,
-        "the linker driver `" + *driver + "` crashed");
-    result.exitCode = status;
+        "the linker driver `" + *driver + "` crashed" +
+            (outcome.error.empty() ? std::string{} : ": " + outcome.error));
+    result.exitCode = 1;
     return result;
   }
+  const int status = outcome.status;
   if (status != 0) {
     // **The program's failure, and the linker's message is already on stderr.**
     // We do not paraphrase it: the linker's text is more precise than anything
