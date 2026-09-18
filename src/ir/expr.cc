@@ -156,6 +156,9 @@ Value Lowering::lowerExpr(ast::AstId expr) {
   case ast::NodeKind::ArrayLiteral:
     result = lowerArrayInitializer(expr);
     break;
+  case ast::NodeKind::QualifiedExpr:
+    result = lowerTypeConstant(expr);
+    break;
   default:
     fatal(spanOf(expr), IRDiagnosticCode::UnsupportedNode,
           "this expression is not lowered yet: " + std::string(parse::toString(kindOf(expr))));
@@ -174,6 +177,106 @@ Value Lowering::lowerExpr(ast::AstId expr) {
 }
 
 // --- literals ------------------------------------------------------------------
+
+Value Lowering::lowerTypeConstant(ast::AstId expr) {
+  // `T::ZERO`, `i32::MAX`, `f64::EPSILON`: a name that *is* a value, and the value
+  // is the type's. The substitution already happened -- `T` is the argument of this
+  // instance, because the checker read the type through the same reader every type
+  // position uses -- so this is one switch on a concrete type and no re-checking of
+  // anything (`type_constants.md`).
+  const sema::TypeId type = typeOf(expr);
+  llvm::Type* shape = llvmType(type);
+  if (shape == nullptr) {
+    fatal(spanOf(expr), IRDiagnosticCode::Internal,
+          "a type constant reached lowering with no LLVM type");
+    return {};
+  }
+  // The constant's name is the **second word**, and the words are the two
+  // `Identifier` tokens the parser kept -- not operands, which this node has none
+  // of (the same reason the checker reads them from the child list).
+  std::string_view written;
+  const ast::NodeKind identifier = parse::toSyntaxKind(lex::TokenKind::Identifier);
+  std::size_t seen = 0;
+  for (const ast::AstId child : file_.childrenOf(expr)) {
+    if (kindOf(child) != identifier) {
+      continue;
+    }
+    if (seen == 1) {
+      written = spelling(child);
+      break;
+    }
+    ++seen;
+  }
+  const std::optional<support::TypeConstant> constant = support::typeConstantFromName(written);
+  if (!constant.has_value()) {
+    // Unreachable: the checker refused every name that is not in the table, so a
+    // node here has one. A `fatal` rather than a silent zero, because a wrong value
+    // is worse than a missing one.
+    fatal(spanOf(expr), IRDiagnosticCode::Internal,
+          "this qualified name reached lowering without a constant: " + std::string(written));
+    return {};
+  }
+
+  if (shape->isFloatingPointTy()) {
+    // The **float** half, built from the semantics and never from a `double`: an
+    // `f80` has values a `double` cannot hold, and `ConstantFP::get(Type*, double)`
+    // would round the very constants that exist to say "the largest", "the
+    // smallest gap" (`type_constants.md`).
+    const llvm::fltSemantics& semantics = shape->getFltSemantics();
+    llvm::APFloat value = llvm::APFloat::getZero(semantics);
+    switch (*constant) {
+    case support::TypeConstant::Zero:
+      break;
+    case support::TypeConstant::One:
+      value = llvm::APFloat::getOne(semantics);
+      break;
+    case support::TypeConstant::Min: {
+      value = llvm::APFloat::getLargest(semantics);
+      value.changeSign(); // the most negative finite value: `Max` with its sign flipped
+      break;
+    }
+    case support::TypeConstant::Max:
+      value = llvm::APFloat::getLargest(semantics);
+      break;
+    case support::TypeConstant::Epsilon: {
+      // The gap above `1`: one step toward `+inf` and back again, which is exact
+      // in the type's own semantics and is the definition of the machine epsilon.
+      llvm::APFloat one = llvm::APFloat::getOne(semantics);
+      llvm::APFloat next(one);
+      next.next(/*nextDown=*/false);
+      value = next - one;
+      break;
+    }
+    case support::TypeConstant::Infinity:
+      value = llvm::APFloat::getInf(semantics);
+      break;
+    case support::TypeConstant::Nan:
+      value = llvm::APFloat::getNaN(semantics);
+      break;
+    }
+    return Value{llvm::ConstantFP::get(shape, value), type};
+  }
+
+  // The **integer** half, from the same rule the checker folded with
+  // (`support::integerConstantValue`) -- at the type's own width, so an `i128`
+  // constant is the exact value and not a truncated one.
+  const unsigned width = shape->getIntegerBitWidth();
+  // The signedness is the *type's*, not the LLVM type's: `char` is an unsigned
+  // byte here whatever `i8` is, and the two must agree with the checker's fold.
+  const sema::Type& declared = types_.get(type);
+  const bool isSigned = declared.kind == sema::TypeKind::Int && declared.isSigned;
+  const auto bits = support::integerConstantValue(width, isSigned, *constant);
+  if (!bits.has_value()) {
+    fatal(spanOf(expr), IRDiagnosticCode::Internal,
+          "`" + std::string(written) + "` is not a constant of " +
+              std::string(types_.spelling(type)));
+    return {};
+  }
+  llvm::APInt pattern =
+      width <= 64 ? llvm::APInt(width, bits->low)
+                  : llvm::APInt(width, llvm::ArrayRef<std::uint64_t>({bits->low, bits->high}));
+  return Value{llvm::ConstantInt::get(shape, pattern), type};
+}
 
 Value Lowering::lowerLiteral(ast::AstId expr) {
   const ast::AstId token = tokenOf(expr);

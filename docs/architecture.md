@@ -74,7 +74,9 @@ minc_support               INTERFACE alias over the support libraries
   ├── minc_span            leaves: no support dependencies
   ├── minc_line
   ├── minc_utf8
-  ├── minc_term            the only platform-specific code (tty, ANSI/VT)
+  ├── minc_term            the four leaves that may contain platform code
+  ├── minc_process         (tty, file identity, path encoding, spawning)
+  ├── minc_fs
   ├── minc_mem             Arena
   ├── minc_intern          Interner
   ├── (expected)           header-only: Expected / Unexpected / Fallible
@@ -131,16 +133,27 @@ Rules:
 - `src/ast/` and `src/resolve/` have **no platform branch**: a file is named by
   `support::FileId`, and the path identity behind it comes from `support`. Unix
   and Windows cannot disagree about which name a program means.
-- **The whole platform branch is three files, all in `support`**: `support/term`
+- **The whole platform branch is four files, all in `support`**: `support/term`
   (`<windows.h>`/`<unistd.h>`, virtual-terminal mode), `support/fs` (`stat`
   versus the Windows file index, case rules — see
-  [`architectures/preprocessor.md`](architectures/preprocessor.md)) and
+  [`architectures/preprocessor.md`](architectures/preprocessor.md)),
   `support/source/file_io` (binary mode on `stdin`, and the UTF-16 path
-  conversion that bypasses the ANSI code page). No other file in `src/` or
-  `include/` contains a platform branch, and the last two exist for the same
-  reason as the first: a question is asked, a yes/no comes back, and the caller
-  never learns which OS answered. This is checkable rather than aspirational —
+  conversion that bypasses the ANSI code page) and `support/process`
+  (`posix_spawn`/`waitpid` versus `CreateProcessW`/`GetExitCodeProcess` — see
+  [`architectures/codegen.md`](architectures/codegen.md)). No other file in `src/`
+  or `include/` contains a platform branch, and each of them exists for the same
+  reason: a question is asked, an answer comes back, and the caller never learns
+  which OS answered. This is checkable rather than aspirational —
   `grep -rn _WIN32 src include` is the whole issue.
+- **An answer is taken from the platform, not from an API that has already
+  decided how to phrase it.** `support/process` is the case that makes the rule
+  concrete: the spawn could have stayed one call to
+  `llvm::sys::ExecuteAndWait`, and that call *cannot* distinguish a program that
+  exited 127 from one that never started, because the Unix side of it uses those
+  two statuses as its own channel for a failed `exec` and then maps them back to
+  one value. Two facts that the caller needs separately, and one API that merges
+  them, is a bug that no amount of care at the call site repairs — so the platform
+  is asked directly, and the cost is one file and the platform's quoting rules.
 - Targets are created with `minc_add_library` / `minc_add_executable`, which
   apply the include dirs, the C++ standard, and the shared warning set. A new
   module is a directory with a three-line `CMakeLists.txt`.
@@ -847,6 +860,15 @@ warnings inside them are dropped at the report step while errors are not.
   sentence naming the class to write when an operation is not granted), an
   instantiation is refused when the argument is outside the class, and a literal
   in a binder's position is decided by the class rather than by its own default.
+  **Type constants** (`i32::MAX`, `f64::EPSILON`, `T::ZERO`) are the other half of
+  what a class promises: the vocabulary is seven words in `support/constraint`,
+  granted to a class by the same rule that grants an operation (*every member
+  has it*), read from the type rather than from a symbol table, and answered
+  where the value lives — a `ConstInt` where it fits the fold, and an `APFloat`
+  built in the type's own semantics, never through a `double`. Inside a generic
+  body `T::ZERO` is the zero *of the instantiation*, which is the one thing a body
+  checked once can say about a value it cannot name
+  ([`architectures/type_constants.md`](architectures/type_constants.md)).
 
   Design record: [`architectures/sema.md`](architectures/sema.md) — the type
   model, the conversion rules, the node-by-node surface, which stage owns which

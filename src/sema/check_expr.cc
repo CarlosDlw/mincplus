@@ -307,6 +307,9 @@ TypeId Checker::checkExpr(ast::AstId expr, TypeId expected) {
   case ast::NodeKind::PathExpr:
     type = checkPath(expr, info);
     break;
+  case ast::NodeKind::QualifiedExpr:
+    type = checkQualified(expr, info);
+    break;
   case ast::NodeKind::ParenExpr: {
     const std::vector<ast::AstId> operands = operandsOf(expr);
     if (operands.empty()) {
@@ -1708,6 +1711,171 @@ TypeId Checker::checkArrayLiteral(ast::AstId expr, TypeId expected, ExprInfo& in
   return checkElements(expr, operands, 0, isFill, expected, info);
 }
 
+std::string Checker::constantNamesOfType(TypeId type) const {
+  std::string names;
+  for (const support::TypeConstantInfo& row : support::typeConstants()) {
+    if (!types_.hasConstant(type, row.constant)) {
+      continue;
+    }
+    if (!names.empty()) {
+      names += ", ";
+    }
+    names += "`" + std::string(row.name) + "`";
+  }
+  return names;
+}
+
+std::string Checker::constantNamesOfClass(support::ConstraintClass klass) const {
+  std::string names;
+  for (const support::TypeConstantInfo& row : support::typeConstants()) {
+    if (!support::constraintGrantsConstant(klass, row.constant)) {
+      continue;
+    }
+    if (!names.empty()) {
+      names += ", ";
+    }
+    names += "`" + std::string(row.name) + "`";
+  }
+  return names;
+}
+
+TypeId Checker::checkQualified(ast::AstId expr, ExprInfo& info) {
+  // `T::ZERO`, `i32::MAX`. Two words and nothing between them but `::`: the first
+  // names a **type** -- a reserved type word, a name this unit gave a type, or a
+  // binder in scope -- and the second is one of the constants that type has.
+  //
+  // Read with the *same* type reader every other type position uses, and with the
+  // same names in scope, which is the whole of why `T::ZERO` works inside a
+  // generic body: `T` is a name the binder list published, so it resolves to the
+  // `Param` and the question becomes "what does this binder's class grant".
+  // The two words are **tokens** -- they are the `Identifier` leaves the parser
+  // kept, exactly as a `PathExpr`'s name is -- so they are read from the child
+  // list and not from `operandsOf`, which is the list of a node's *operand
+  // nodes*: this node has no operands in that sense, and asking for them would
+  // answer "none" and silently type the whole expression as an error.
+  const ast::NodeKind identifier = parse::toSyntaxKind(lex::TokenKind::Identifier);
+  std::array<ast::AstId, 2> segments{};
+  std::size_t found = 0;
+  for (const ast::AstId child : file_.childrenOf(expr)) {
+    if (kindOf(child) != identifier || found == segments.size()) {
+      continue;
+    }
+    segments[found] = child;
+    ++found;
+  }
+  if (found != segments.size()) {
+    // The grammar builds this node with exactly two words. A tree with any other
+    // count is a compiler bug and not a program, so there is no sentence.
+    return kTypeError;
+  }
+  const ast::AstId typeWord = segments[0];
+  const ast::AstId constantWord = segments[1];
+  const std::string_view first = spelling(typeWord);
+  const std::array<std::string_view, 1> words = {first};
+  const TypeSpecResult spec = readTypeSpec(words, types_, names());
+  if (!spec.ok) {
+    error(typeWord, codeOf(spec), spec.message);
+    return kTypeError;
+  }
+  if (spec.brokenName) {
+    // A name whose expansion already failed, reported where it failed: the same
+    // rule `resolveTypeNode` applies, for the same reason (`type_alias.md`).
+    return kTypeError;
+  }
+  if (!spec.type.valid()) {
+    reportLimit(typeWord);
+    return kTypeError;
+  }
+
+  const std::string_view written = spelling(constantWord);
+  const std::optional<support::TypeConstant> constant = support::typeConstantFromName(written);
+  const std::string quotedName = "`" + std::string(written) + "`";
+  const std::string typeName(types_.spelling(spec.type));
+  if (!constant.has_value()) {
+    // A word that is not a constant, and the two ways it can be one of those:
+    // a name no type has, and a name this type does not have. The sentence names
+    // the set, because a reader who guessed has no other way to learn it.
+    const std::string known = types_.isParam(spec.type)
+                                  ? constantNamesOfClass(types_.binderClass(spec.type))
+                                  : constantNamesOfType(spec.type);
+    error(constantWord, SemaErrorCode::TypeConstantUnknown,
+          quotedName + " is not a constant of `" + typeName + "`: " +
+              (known.empty()
+                   ? std::string("this type has no constants at all -- the constants of a "
+                                 "number are `ZERO`, `ONE`, `MIN` and `MAX`, and a float has "
+                                 "`EPSILON`, `INFINITY` and `NAN` with them")
+                   : "its constants are " + known));
+    return kTypeError;
+  }
+
+  if (types_.isParam(spec.type)) {
+    const support::ConstraintClass klass = types_.binderClass(spec.type);
+    if (!support::constraintGrantsConstant(klass, *constant)) {
+      // A binder has the constants its declaration's class promised, and the
+      // class is what the body was checked against -- so this is the same rule as
+      // an operation the class does not grant, one word further out.
+      const support::ConstraintClass needed = support::constraintForConstant(*constant);
+      const std::string grants = constantNamesOfClass(klass).empty()
+                                     ? std::string("none -- and that is the class, not a gap: "
+                                                   "`Eq` admits `bool`, `str` and pointers, and "
+                                                   "none of them has a zero")
+                                     : constantNamesOfClass(klass);
+      // The advice is advice only when the class it names could be this
+      // declaration's: `Pointer` and `Ordered` share no member, so a `Pointer`
+      // binder told to widen would be a declaration every call fails against -- the
+      // same rule `refuseOperation` follows.
+      const std::string fix = classesOverlap(klass, needed)
+                                  ? "Widen the constraint to `" +
+                                        std::string(support::constraintClassName(needed)) +
+                                        "`, or write the value in the type you mean"
+                                  : "No class grants this one for a `" +
+                                        std::string(support::constraintClassName(klass)) +
+                                        "` value, so write the value in the type you mean";
+      error(constantWord, SemaErrorCode::TypeConstantNotGranted,
+            "`" + typeName + "` is constrained to `" +
+                std::string(support::constraintClassName(klass)) + "`, which does not promise " +
+                quotedName + ": the constants this class grants are " + grants + ". " + fix);
+      return kTypeError;
+    }
+  } else if (!types_.hasConstant(spec.type, *constant)) {
+    // The type is concrete and the constant is not one it has: `i32::EPSILON`,
+    // `bool::ZERO`. Named with the set it does have, which turns a guess into one
+    // edit.
+    error(constantWord, SemaErrorCode::TypeConstantNotGranted,
+          "`" + typeName + "` has no " + quotedName + ": the constants it has are " +
+              (constantNamesOfType(spec.type).empty()
+                   ? std::string("none. Only a number has one -- `ZERO`, `ONE`, `MIN` and "
+                                 "`MAX` for every integer and float, and `EPSILON`, `INFINITY` "
+                                 "and `NAN` for a float")
+                   : constantNamesOfType(spec.type)));
+    return kTypeError;
+  }
+
+  // The **value**, when it is an integer the constant core can hold. Not a folded
+  // float, and for the same reason a float literal is not: the core is 64 bits and
+  // a float's value needs a reader whose rounding this stage cannot verify. A
+  // value wider than the core is left unfolded rather than truncated, exactly as a
+  // literal too large already is -- the *lowering* builds both exactly, at the
+  // type's own width.
+  info.isConstant = true;
+  const Type& shape = types_.get(spec.type);
+  if (shape.kind == TypeKind::Int || shape.kind == TypeKind::Char) {
+    // `char` is a byte with no sign bit of its own (`char` is always unsigned, a
+    // decision the type model records), so only an `Int` is signed here -- and the
+    // test is written as two facts rather than as `isSigned` alone, because a
+    // wider reading of that flag by the type store would otherwise turn `char`'s
+    // `MAX` into a signed 255.
+    const bool valueIsSigned = shape.kind == TypeKind::Int && shape.isSigned;
+    if (const std::optional<support::IntConstant> value =
+            support::integerConstantValue(shape.bits, valueIsSigned, *constant);
+        value.has_value() && shape.bits <= support::kConstIntWidth) {
+      info.value = support::ConstInt{value->low, value->isUnsigned};
+      info.hasIntValue = true;
+    }
+  }
+  return spec.type;
+}
+
 TypeId Checker::checkTypedInitializer(ast::AstId expr, ExprInfo& info) {
   // `[3]i32{1, 2, 3}`, `[_]u8{...}`, `[64]u8{0; 64}`. The type is written, so
   // nothing is inferred and nothing is deferred: the element rules below are the
@@ -2140,7 +2308,21 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
         // The two values are compared at their common type, and the pair is
         // recorded: `u8 == i32` is an `icmp` at `i32`, so the conversion is
         // required by the IR rather than an optimisation of it.
+        //
+        // **`isArithmetic` is true of a literal whatever its class**, so two
+        // numbers of *different* classes reach here -- `1 == 0.0` -- and the pair
+        // has no common type for `usualArithmetic` to give. Refused here, with the
+        // sentence the arithmetic path gives for the same pair: without it the node
+        // is `bool` over two operands nothing converted, and the lowering's `icmp`
+        // compares an `i32` with an `f64` -- which LLVM refuses by *asserting*, a
+        // crash in the compiler rather than a diagnostic about the program.
         const TypeId opType = usualArithmetic(types_, left, right);
+        if (types_.isError(opType)) {
+          error(expr, SemaErrorCode::InvalidOperands,
+                "`" + std::string(opText(kind)) + "` cannot combine `" + types_.spelling(left) +
+                    "` and `" + types_.spelling(right) + "`: " + mixingAdvice(left));
+          return kTypeError;
+        }
         recordOperationOperand(expr, 0, lhs, opType);
         recordOperationOperand(expr, 1, rhs, opType);
       }
@@ -2152,7 +2334,16 @@ TypeId Checker::checkBinary(ast::AstId expr, ExprInfo& info) {
                 types_.spelling(left) + "` and `" + types_.spelling(right) + "`");
       return kTypeError;
     }
+    // The ordering four have the same hole `==` has and the same refusal closes it:
+    // `1 < 0.0` is an integer beside a float *literal*, both arithmetic, and no
+    // common type (`convertible`).
     const TypeId opType = usualArithmetic(types_, left, right);
+    if (types_.isError(opType)) {
+      error(expr, SemaErrorCode::InvalidOperands,
+            "`" + std::string(opText(kind)) + "` cannot combine `" + types_.spelling(left) +
+                "` and `" + types_.spelling(right) + "`: " + mixingAdvice(left));
+      return kTypeError;
+    }
     recordOperationOperand(expr, 0, lhs, opType);
     recordOperationOperand(expr, 1, rhs, opType);
     return kTypeBool;

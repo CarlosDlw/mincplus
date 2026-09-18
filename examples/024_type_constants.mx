@@ -1,0 +1,64 @@
+// Type constants: `T::ZERO`, `i32::MAX`, `f64::EPSILON`.
+//
+// The second word of a qualified name is a **constant of the type the first word
+// names**. Nothing is computed at run time and nothing is looked up at run time:
+// the value belongs to the type, so `u8::MAX` is 255 wherever it is written, and
+// the checker folds it into a constant like any literal.
+//
+// The set is small on purpose. `ZERO` and `ONE` are the two identities, `MIN` and
+// `MAX` the two bounds (the smallest and the largest value of the type, so
+// `f64::MIN` is the most *negative* finite number and not the smallest positive
+// one), and `EPSILON`, `INFINITY` and `NAN` are the three only a float has.
+
+// Inside a generic body the constant is what a constraint promises: `T::ZERO` is
+// the zero *of whatever `T` turns out to be*, which is the one thing a body
+// checked once against a class can say about a value it cannot name.
+fn T nonNegative<T: Ordered>(x: T) { return x < T::ZERO ? T::ZERO : x; }
+
+fn T atLeastOne<T: Ordered>(x: T) { return x < T::ONE ? T::ZERO : x; }
+
+// The bounds are values like any other, so they take part in expressions: this is
+// the largest multiple of a thousand that fits in an `i64`, computed at compile
+// time because both operands are constants.
+fn i64 lastThousand() { return i64::MAX - (i64::MAX % 1000); }
+
+fn i32 main() {
+  // Every integer type, at its own width, read from the type rather than written
+  // out. `isize`/`usize` are the pointer-sized ones, so `isize::MAX` is what the
+  // target says it is -- one spelling, two hosts.
+  let small = (i8::MIN == -128) && (i8::MAX == 127) && (u8::MIN == 0) && (u8::MAX == 255);
+  let medium = (i16::MIN == -32768) && (u16::MAX == 65535);
+  let wide = (i32::MAX == 2147483647) && (u32::MAX == 4294967295);
+  let wider = (i64::MIN < 0) && (i64::MAX > 0) && (u64::MAX > 0);
+  let widest = (i128::MIN < 0) && (i128::MAX > 0) && (u128::MAX > 0);
+  let sized = (isize::MAX > 0) && (usize::MIN == 0);
+
+  // `char` is an unsigned byte internally, so it has the four every integer has.
+  let character = (char::MIN == 0) && (char::MAX == 255);
+
+  // The float half. `EPSILON` is the gap above one, `MAX` the largest finite
+  // value, and `MIN` its negation -- and `f80` is the same three names at the
+  // x87 width on the machines that have that format.
+  let real = (f32::EPSILON > 0.0) && (f32::EPSILON < 1.0f32) && (f64::EPSILON > 0.0) &&
+             (f64::EPSILON < 1.0);
+  let bounds = (f64::MAX > 1.0e308) && (f64::MIN < -1.0e308) && (f64::INFINITY > f64::MAX);
+  let notANumber = (f64::NAN == f64::NAN) == false;
+
+  // A name the unit gave a type answers the same table: `Meters::ZERO` is
+  // `f64::ZERO`, and the alias is transparent to it.
+  type Meters = f64;
+  let aliased = Meters::ZERO == 0.0;
+
+  // The constants inside a generic body, instantiated twice: the same text, two
+  // types, and one answer each.
+  let clampedInteger = nonNegative(-5) + atLeastOne(-5);
+  let clampedFloat = nonNegative(-2.5) + atLeastOne(-2.5);
+
+  let ok = small && medium && wide && wider && widest && sized && character && real && bounds &&
+           notANumber && aliased && (clampedInteger == 0) && (clampedFloat == 0.0) &&
+           (lastThousand() == 9223372036854775000i64) && (lastThousand() > 0);
+
+  // `1` when every one of them held -- which is what makes this an example that
+  // can be *run* and not only checked.
+  return ok ? 1 : 2;
+}

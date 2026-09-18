@@ -83,6 +83,7 @@ postfix         := primary ( "(" args ")"
                           | "." integer-literal
                           | "++" | "--" )*
 primary         := literal | name | "(" expr ")"
+                 | name "::" name          (* a type constant: see below *)
                  | "(" expr "," expr ( "," expr )* ")"
                  | "[" [ elements ] "]"
                  | "[" ( count | "]" ) type "{" [ elements ] "}"
@@ -142,6 +143,13 @@ as a `Name` and does not judge — whether the word is one of the classes is
 list is written where a type is (`Pair<i32, bool>`) or, in an expression, after
 `::` (`twice::<i32>(3)`): the two-character token is what tells the argument list
 of a call from a comparison.
+
+**`Name :: Name` is a type constant.** The first word is read as a *type* — by the
+same reader every type position uses — and the second word names a value of it
+(`i32::MAX`, `f64::EPSILON`, and `T::ZERO` inside a body whose binder promises
+one). The form is decided by one token and by nothing else: `::` followed by `<`
+is a call with explicit type arguments, and `::` followed by a word is this. See
+[Type constants](/language/type-constants).
 
 **A product is a type, a value and a pattern.** `(T, U)` in a type position is a
 type; `(1, 2)` in an expression is an initializer for one; and `let (q, r) = …` is

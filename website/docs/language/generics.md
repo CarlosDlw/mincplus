@@ -102,17 +102,25 @@ A constraint says what may be done with the hole. The classes are the language's
 own, and a class is two facts:
 
 * its **members** — which type arguments may be used;
-* its **grants** — which operations the body may perform.
+* its **grants** — which operations the body may perform;
+* its **constants** — which values of the type the body may name
+  (`T::ZERO`, `T::MAX`, …), granted by the same rule the operations are: *every
+  member has it*.
 
-| class | members | grants |
-|---|---|---|
-| `Any` | every object | nothing beyond storing, copying, passing and returning |
-| `Eq` | arithmetic, `bool`, `str`, pointer | `==` `!=` |
-| `Ordered` | arithmetic | `Eq` and `<` `<=` `>` `>=` |
-| `Number` | arithmetic | `Ordered` and `+` `-` `*` `/`, unary `-`, `++` `--` |
-| `Integer` | the integers and `char` | `Number` and `%` `&` `\|` `^` `~` `<<` `>>` |
-| `Float` | `f32`, `f64`, `f80` | `Number`, over fewer types |
-| `Pointer` | `*T` | the comparisons, and nothing else |
+| class | members | grants | constants |
+|---|---|---|---|
+| `Any` | every object | nothing beyond storing, copying, passing and returning | none |
+| `Eq` | arithmetic, `bool`, `str`, pointer | `==` `!=` | none |
+| `Ordered` | arithmetic | `Eq` and `<` `<=` `>` `>=` | `ZERO` `ONE` `MIN` `MAX` |
+| `Number` | arithmetic | `Ordered` and `+` `-` `*` `/`, unary `-`, `++` `--` | `ZERO` `ONE` `MIN` `MAX` |
+| `Integer` | the integers and `char` | `Number` and `%` `&` `\|` `^` `~` `<<` `>>` | those four |
+| `Float` | `f32`, `f64`, `f80` | `Number`, over fewer types | those four and `EPSILON` `INFINITY` `NAN` |
+| `Pointer` | `*T` | the comparisons, and nothing else | none |
+
+The `constants` column is not a second list to keep in step: it follows from the
+members, which is why `Eq` has none — `bool`, `str` and a pointer are its members
+and none of them has a zero. [Type constants](/language/type-constants) has the
+vocabulary and the refusals.
 
 ```minc
 fn T twice<T: Number>(x: T) {

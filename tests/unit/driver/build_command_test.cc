@@ -616,6 +616,52 @@ TEST(BuildCommandTest, TheBitOperationsAnswerWhatTheLanguageSays) {
   EXPECT_EQ(bytes.code, 1) << bytes.err;
 }
 
+TEST(BuildCommandTest, TheTypeConstantsAreTheValuesTheLanguageNames) {
+  // Every constant, **run**. A name whose value were one bit off is a wrong program
+  // that no check can see -- `i32::MAX` is a number the compiler folds and a number
+  // the machine computes with, and the two have to be the same one -- so each
+  // program below answers `1` when the value is what the name claims.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
+
+  const Outcome integers = runProgram(
+      scratch, "ints.mx",
+      "fn i32 main() {\n"
+      "  let ok = (i8::MIN == -128) && (i8::MAX == 127) && (u8::MIN == 0) && (u8::MAX == 255) &&\n"
+      "           (i16::MIN == -32768) && (u16::MAX == 65535) && (i32::MAX == 2147483647) &&\n"
+      "           (u32::MAX == 4294967295) && (i64::MAX > 0) && (i64::MIN < 0) &&\n"
+      "           (u64::MAX > 0) && (i128::MAX > 0) && (i128::MIN < 0) && (u128::MAX > 0) &&\n"
+      "           (isize::MAX > 0) && (usize::MIN == 0) && (char::MIN == 0) && (char::MAX == "
+      "255);\n"
+      "  return ok ? 1 : 2;\n"
+      "}\n");
+  if (integers.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(integers.code, 1) << integers.err;
+
+  const Outcome floats = runProgram(
+      scratch, "floats.mx",
+      "fn i32 main() {\n"
+      "  let ok = (f64::EPSILON > 0.0) && (f64::EPSILON < 1.0) && (f32::EPSILON > 0.0f32) &&\n"
+      "           (f32::EPSILON < 1.0f32) && (f64::MAX > 1.0e308) && (f64::MIN < -1.0e308) &&\n"
+      "           (f64::INFINITY > f64::MAX) && ((f64::NAN == f64::NAN) == false);\n"
+      "  return ok ? 1 : 2;\n"
+      "}\n");
+  EXPECT_EQ(floats.code, 1) << floats.err;
+
+  // The constants inside a **generic body**, instantiated at two types: the same
+  // text, and each instance's own zero.
+  const Outcome generic = runProgram(scratch, "generic.mx",
+                                     "fn T atLeastOne<T: Ordered>(x: T) {\n"
+                                     "  return x < T::ONE ? T::ZERO : x;\n"
+                                     "}\n"
+                                     "fn i32 main() {\n"
+                                     "  return (atLeastOne(0) + atLeastOne(2.5) == 2.5) ? 1 : 2;\n"
+                                     "}\n");
+  EXPECT_EQ(generic.code, 1) << generic.err;
+}
+
 TEST(BuildCommandTest, ZeroIsTheWidthAndNotUndefined) {
   // The promise, on the machine: LLVM's `ctlz(0)` is poison unless the flag says
   // otherwise, and this language defines it as the width. A compiler that passed
@@ -727,41 +773,60 @@ TEST(BuildCommandTest, ASliceCrossesACallAsAValue) {
   EXPECT_EQ(fromPointer.code, 13) << fromPointer.err;
 }
 
-TEST(BuildCommandTest, AChildThatDidNotExitIsNotAnExitStatus) {
-  // Two platforms spell "the child died" differently, and the portable layer
-  // documents one spelling. The rule is therefore pinned with the number each
-  // platform actually produces, the Windows one included: it is the value that
-  // used to be read as a program's own status, so on Linux, macOS and MinGW this
-  // project reported a trap and on the Windows runner it reported nothing while
-  // the test passed -- which is why the guard is arithmetic over the range rather
-  // than an equality against one code.
+TEST(BuildCommandTest, AStatusThePlatformReservesIsStillTheProgramsStatus) {
+  // A Unix child uses 126 and 127 as its own convention for a failed `exec`:
+  // `llvm/lib/Support/Unix/Program.inc` ends a child whose `execve` failed with
+  // `_exit(errno == ENOENT ? 127 : 126)`, and its `Wait` maps those two statuses
+  // back to `-1` with an error string. `llvm::sys::ExecuteAndWait` therefore
+  // reports *a program that returned 127* and *a program that never started* with
+  // one indistinguishable answer, and this compiler read that answer as "nothing
+  // ran": `mincc: error: cannot run \`.../a.out\`` for a program that ran
+  // perfectly well and exited 127. A real status was replaced by a lie, and a
+  // harness comparing exit codes saw 1.
+  //
+  // The repair is not a message to match on -- those strings are prose, not an
+  // interface. The spawn moved to `support/process`, which asks the platform
+  // (`posix_spawn`, `CreateProcessW`) instead of an API that has already thrown the
+  // answer away, and `runAndWait` reports three separate facts: started, exited,
+  // status. The two statuses that used to break are pinned here, and 0/1/255
+  // beside them, because the rule is one rule: **the program's status is its own**.
+  ScratchDir scratch;
+  ASSERT_TRUE(scratch.valid());
 
-  // POSIX: `WIFSIGNALED` (a trap is `SIGILL`), and the timeout path.
-  EXPECT_TRUE(backend::abnormalTermination(-2));
-  // Windows: `ud2` -- what `__builtin_trap` lowers to -- raises an
-  // illegal-instruction exception, `GetExitCodeProcess` reports `0xC000001D`, and
-  // `sys::Wait` returns it with its sign intact, so what arrives here is that code
-  // read as a signed 32-bit value.
-  EXPECT_TRUE(backend::abnormalTermination(static_cast<int>(0xC000001DU)));
-  // An access violation, reported the same way: `0xC0000005`.
-  EXPECT_TRUE(backend::abnormalTermination(static_cast<int>(0xC0000005U)));
+  const Outcome zero = runProgram(scratch, "s0.mx", returning("0"));
+  if (zero.skippedForNoLinker()) {
+    GTEST_SKIP() << "no C linker driver on PATH";
+  }
+  EXPECT_EQ(zero.code, 0) << zero.err;
 
-  // What is *not* a death: `-1` is "could not execute", which is `spawnFailed`
-  // and not `crashed` -- nothing ran, so nothing died -- and a program's own
-  // status is never negative on either platform.
-  EXPECT_FALSE(backend::abnormalTermination(-1));
-  EXPECT_FALSE(backend::abnormalTermination(0));
-  EXPECT_FALSE(backend::abnormalTermination(1));
-  EXPECT_FALSE(backend::abnormalTermination(255));
+  const Outcome one = runProgram(scratch, "s1.mx", returning("1"));
+  EXPECT_EQ(one.code, 1) << one.err;
+
+  // The two the platform reserves. `err` is checked as well: a status reported
+  // correctly *and* a "cannot run" sentence printed beside it would be the old bug
+  // with a new number.
+  const Outcome reserved = runProgram(scratch, "s126.mx", returning("126"));
+  EXPECT_EQ(reserved.code, 126) << reserved.err;
+  EXPECT_EQ(reserved.err.find("cannot run"), std::string::npos) << reserved.err;
+
+  const Outcome notFound = runProgram(scratch, "s127.mx", returning("127"));
+  EXPECT_EQ(notFound.code, 127) << notFound.err;
+  EXPECT_EQ(notFound.err.find("cannot run"), std::string::npos) << notFound.err;
+
+  const Outcome byte = runProgram(scratch, "s255.mx", returning("255"));
+  EXPECT_EQ(byte.code, 255) << byte.err;
 }
 
 TEST(BuildCommandTest, ATrapStopsTheProgramWhereItStands) {
   // `__builtin_trap` is the primitive `assert` is built on: not a return, not an
   // exit status the program chose. Two facts, and both are asserted: nothing after
   // it runs, and what `run` reports is not the status the program would have
-  // returned. The `return 0;` after the call is what makes the second fact
-  // checkable -- a compiler that let the call return would exit 0 -- and the sema
-  // calling it unreachable is the warning it already is.
+  // returned. The platform spells the death two ways -- `SIGILL` and an NTSTATUS
+  // exception -- and `support/process` answers both as one fact (`exited` false),
+  // so what reaches here is "terminated abnormally" on every platform rather than
+  // a negative number this identity would have had to interpret. The `return 0;` after the call is
+  // what makes the second fact checkable -- a compiler that let the call return would exit 0 -- and
+  // the sema calling it unreachable is the warning it already is.
   ScratchDir scratch;
   ASSERT_TRUE(scratch.valid());
 

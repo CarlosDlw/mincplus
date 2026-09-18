@@ -609,6 +609,18 @@ private:
   // form's type comes from; the typed form carries its own.
   [[nodiscard]] TypeId checkArrayLiteral(ast::AstId expr, TypeId expected, ExprInfo& info);
   [[nodiscard]] TypeId checkTypedInitializer(ast::AstId expr, ExprInfo& info);
+  // `T::ZERO`, `i32::MAX`, `f64::EPSILON`: a qualified name whose first word is a
+  // type and whose second is one of the constants that type has. The two
+  // questions it asks are `TypeStore::hasConstant` (for a concrete type) and
+  // `support::constraintGrantsConstant` (for a binder, whose value is only known
+  // when the instance is) -- which is what makes the same spelling work inside a
+  // generic body and outside it (`type_constants.md`).
+  [[nodiscard]] TypeId checkQualified(ast::AstId expr, ExprInfo& info);
+  // The constants a diagnostic may name as the repair: the ones a type has, or
+  // the ones a class grants. Written once so the two refusals cannot list two
+  // different sets.
+  [[nodiscard]] std::string constantNamesOfType(TypeId type) const;
+  [[nodiscard]] std::string constantNamesOfClass(support::ConstraintClass klass) const;
   // Whether the `;` of a filled initializer is written, which is the one thing
   // that tells a fill from a list.
   [[nodiscard]] bool hasFillSeparator(ast::AstId expr) const;

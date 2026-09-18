@@ -361,6 +361,9 @@ private:
   // else -- so this asks the node and not the type, which is the whole reason the
   // alias is transparent in the type store.
   [[nodiscard]] AliasName aliasNameAt(ast::AstId typeNode) const;
+  // `T::ZERO`, `i32::MAX`, `f64::EPSILON`: the value a type's constant *is*, at
+  // the type's own width and in the type's own semantics (`type_constants.md`).
+  [[nodiscard]] Value lowerTypeConstant(ast::AstId expr);
   [[nodiscard]] llvm::AllocaInst* declareLocal(resolve::DefId def, sema::TypeId type,
                                                std::string_view name, ast::AstId at,
                                                unsigned parameterNumber = 0,

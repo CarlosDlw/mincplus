@@ -429,5 +429,23 @@ TEST(GenericsParseTest, TheExplicitCallFormRequiresItsCall) {
       << fixture.errorMessages();
 }
 
+TEST(GenericsTest, TheTwoUsesOfColonColonAreOneTokenApart) {
+  // `f::<i32>(x)` is an instantiation, `i32::MAX` is a qualified name, and what
+  // tells them apart is the token after the `::`: a `<` opens a type argument list
+  // and a word is a member of what the first word names. The two readings are
+  // pinned here because a reader that took one for the other would build a
+  // *different tree* -- a call with a list, or a name with a member -- and neither
+  // reader downstream can tell that it happened (`type_constants.md`).
+  const ParseFixture qualified("fn i32 main() { let m = i32::MAX; return 0; }\n");
+  expectLossless(qualified);
+  EXPECT_TRUE(findFirst(qualified.tree().root(), SyntaxKind::QualifiedExpr).has_value());
+  EXPECT_FALSE(findFirst(qualified.tree().root(), SyntaxKind::TypeArgList).has_value());
+
+  const ParseFixture instance("fn i32 main() { let m = identity::<i32>(1); return 0; }\n");
+  expectLossless(instance);
+  EXPECT_TRUE(findFirst(instance.tree().root(), SyntaxKind::TypeArgList).has_value());
+  EXPECT_FALSE(findFirst(instance.tree().root(), SyntaxKind::QualifiedExpr).has_value());
+}
+
 } // namespace
 } // namespace minc::parse

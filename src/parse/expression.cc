@@ -496,6 +496,20 @@ CompletedMarker Parser::parsePrimary() {
     return literal.complete(SyntaxKind::LiteralExpr);
   }
   case lex::TokenKind::Identifier: {
+    // `T::ZERO`, `i32::MAX`: a word, `::`, and a second word -- a *qualified*
+    // name. It is read here and judged a stage down, because what the second word
+    // is depends on what the first one names: a binder's constant or a type's.
+    //
+    // One token of lookahead tells it from the other use of `::`, which is the
+    // turbofish of an explicit instantiation (`f::<i32>(x)`, read as a postfix):
+    // a `<` after the `::` is a type argument list, and a word is a member.
+    if (nth(1) == lex::TokenKind::ColonColon && nth(2) == lex::TokenKind::Identifier) {
+      Marker qualified = start();
+      bump(); // the word
+      bump(); // `::`
+      bump(); // the member
+      return qualified.complete(SyntaxKind::QualifiedExpr);
+    }
     // A type written out in front of its value: `Row{1, 2, 3}`,
     // `Vec<i32>{...}`. The brace is what says the word was a *type*, which is the
     // same statement the bracket form makes and the reason neither needs a

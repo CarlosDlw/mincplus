@@ -53,6 +53,7 @@ constexpr auto kNodeKindInfos = std::to_array<NodeKindInfo>({
     {SyntaxKind::Type, "Type"},
     {SyntaxKind::LiteralExpr, "LiteralExpr"},
     {SyntaxKind::PathExpr, "PathExpr"},
+    {SyntaxKind::QualifiedExpr, "QualifiedExpr"},
     {SyntaxKind::ParenExpr, "ParenExpr"},
     {SyntaxKind::CastExpr, "CastExpr"},
     {SyntaxKind::PrefixExpr, "PrefixExpr"},

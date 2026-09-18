@@ -702,6 +702,18 @@ sweep below, and the triple matrix.
       in `src/backend/llvm/diagnostics.cc`, with `allDiagnosticCodes()` derived
       from the table so a code without a name is a failing test rather than a
       printed number
+- [x] The **spawn is the compiler's own**, not LLVM's: `support/process`
+      (`posix_spawn` + `waitpid`, `CreateProcessW` + `GetExitCodeProcess`) is the
+      one place that answers *started*, *exited* and *status* as three separate
+      facts. It replaced `llvm::sys::ExecuteAndWait`, which reports a child that
+      exited 126 or 127 exactly as it reports one that never started — those two
+      statuses are the Unix side's own channel for a failed `exec`, and its
+      Windows side folds `status & 0xFF == 0` to `1` — so `mincc run` reported a
+      program whose `main` returned 127 as one that could not be started. A
+      program's status is its own, which is the one thing `run` exists to hand
+      back, and the platform is now asked instead of an API that had already
+      merged the answer. The linker invocation goes through the same module, so a
+      driver that exits 127 is "exited with status 127" and not "could not run"
 - [ ] The failure table's **per-code test input and unreachability sweep**, in
       the shape of every earlier stage's enumeration: today the table is proven
       complete and the *inputs* for the hardest rows (a missing linker driver,
@@ -971,6 +983,26 @@ the two cannot disagree about what the pipeline means.
       member" held by a test. The design, the market evidence, the refusals, the
       classes and the seam a `Number` body still cannot cross (`T::ZERO`) are in
       [`architectures/generics.md`](architectures/generics.md)
+- [x] **Type constants** `Type::NAME`: **landed**, and it is the half of a class
+      that the constraint work stopped short of. Seven names — `ZERO`, `ONE`,
+      `MIN` (the *smallest value*, so `MIN < MAX` holds for every type), `MAX`,
+      and `EPSILON`/`INFINITY`/`NAN` for a float — granted to a class by the same
+      rule that grants an operation (every member has it), with the vocabulary
+      living in `support/constraint` so the checker's fold and the lowering's
+      constant cannot disagree. `i32::MAX`, `f64::EPSILON`, `char::MAX`,
+      `Meters::ZERO` through an alias, and `T::ZERO`/`T::MAX` inside a generic
+      body, where the value is the *instantiation's*: the one thing a body
+      checked once can say about a value it cannot name. The first word is read
+      as a type by the reader every type position uses, so nothing is resolved
+      and one token (`::` then `<`, or `::` then a word) decides the form. Exact
+      at the type's own width — an `i128` bound is not a 64-bit fold, and a float
+      constant is built in the type's semantics rather than through a `double` —
+      and folded like a literal wherever it fits, including at file scope. The
+      vocabulary, the grants, the refusals and the crash this work turned up in
+      the *comparison* path are in
+      [`architectures/type_constants.md`](architectures/type_constants.md)
+- [ ] Constants of your own (`T::MY_CONST`), which need associated items
+- [ ] `T::SIZE` / `T::ALIGN`, which need `sizeof` to exist first
 - [ ] Top-level types: `struct`, `enum`, and `union`, with **nominal**
       identity across modules (`architectures/modules.md`, seam S4 — the type
       store interns by structure today, which is right for scalars and wrong for

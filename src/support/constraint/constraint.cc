@@ -15,6 +15,20 @@ constexpr std::uint64_t bit(Operation op) {
   return std::uint64_t{1} << static_cast<std::uint8_t>(op);
 }
 
+// The constants, in one place and in the order a diagnostic lists them: the two
+// identities, the two bounds, and the three a float has. The spelling is here and
+// nowhere else, so the parser's reader, the checker's refusal and the dump cannot
+// disagree about what a constant is called (`type_constants.md`).
+constexpr std::array<TypeConstantInfo, 7> kTypeConstants = {{
+    {TypeConstant::Zero, "ZERO"},
+    {TypeConstant::One, "ONE"},
+    {TypeConstant::Min, "MIN"},
+    {TypeConstant::Max, "MAX"},
+    {TypeConstant::Epsilon, "EPSILON"},
+    {TypeConstant::Infinity, "INFINITY"},
+    {TypeConstant::Nan, "NAN"},
+}};
+
 // The two operations every **scalar** admits and nothing else does. `bool`, `str`
 // and a pointer are equatable and are not arithmetic, so `Eq` is wider than the
 // arithmetic classes in members and narrower in grants -- which is the whole reason
@@ -159,6 +173,115 @@ bool literalAdmittedBy(LiteralClass admitted, bool isFloatLiteral) {
   // by an extra test: a class that admits no literal admits neither spelling.
   return (admitted == LiteralClass::Integer && !isFloatLiteral) ||
          (admitted == LiteralClass::Float && isFloatLiteral);
+}
+
+// --- the constants ------------------------------------------------------------
+
+std::span<const TypeConstantInfo> typeConstants() {
+  return kTypeConstants;
+}
+
+std::optional<TypeConstant> typeConstantFromName(std::string_view name) {
+  for (const TypeConstantInfo& row : kTypeConstants) {
+    if (name == row.name) {
+      return row.constant;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string_view typeConstantName(TypeConstant constant) {
+  for (const TypeConstantInfo& row : kTypeConstants) {
+    if (row.constant == constant) {
+      return row.name;
+    }
+  }
+  return {};
+}
+
+ConstraintClass constraintForConstant(TypeConstant constant) {
+  switch (constant) {
+  case TypeConstant::Zero:
+  case TypeConstant::One:
+  case TypeConstant::Min:
+  case TypeConstant::Max:
+    return ConstraintClass::Ordered;
+  case TypeConstant::Epsilon:
+  case TypeConstant::Infinity:
+  case TypeConstant::Nan:
+    return ConstraintClass::Float;
+  }
+  return ConstraintClass::Any;
+}
+
+std::optional<IntConstant> integerConstantValue(unsigned bits, bool isSigned,
+                                                TypeConstant constant) {
+  if (bits < 1 || bits > 128) {
+    return std::nullopt;
+  }
+  IntConstant value;
+  value.isUnsigned = !isSigned;
+  switch (constant) {
+  case TypeConstant::Zero:
+    return value; // both halves already zero
+  case TypeConstant::One:
+    value.low = 1;
+    return value;
+  case TypeConstant::Min:
+    if (!isSigned) {
+      return value; // an unsigned type's smallest value is zero
+    }
+    // The sign bit alone is `-2^(bits-1)`, which is exactly the smallest value of
+    // a two's complement type -- and the *bits*, so no negation is performed here
+    // and the width is the type's.
+    if (bits <= 64) {
+      value.low = std::uint64_t{1} << (bits - 1);
+    } else {
+      value.high = std::uint64_t{1} << (bits - 65);
+    }
+    return value;
+  case TypeConstant::Max:
+    // Every bit but the sign bit, when signed; every bit, when not.
+    if (bits <= 64) {
+      value.low = bits == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
+      if (isSigned) {
+        value.low >>= 1;
+      }
+      return value;
+    }
+    value.low = ~std::uint64_t{0};
+    value.high = bits == 128 ? ~std::uint64_t{0} : (std::uint64_t{1} << (bits - 64)) - 1;
+    if (isSigned) {
+      value.high >>= 1;
+    }
+    return value;
+  case TypeConstant::Epsilon:
+  case TypeConstant::Infinity:
+  case TypeConstant::Nan:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+bool constraintGrantsConstant(ConstraintClass klass, TypeConstant constant) {
+  // One sentence, applied: a class grants a constant when every member of the
+  // class has it. The four every number has, and the three only a float has --
+  // and `Float` is the only class whose members are all floats, so it is the only
+  // one that grants the second group (`constraint_test.cc` holds the two sets
+  // together, per class, over the type vocabulary).
+  switch (constant) {
+  case TypeConstant::Zero:
+  case TypeConstant::One:
+  case TypeConstant::Min:
+  case TypeConstant::Max:
+    return klass == ConstraintClass::Ordered || klass == ConstraintClass::Number ||
+           klass == ConstraintClass::Integer || klass == ConstraintClass::Float;
+  case TypeConstant::Epsilon:
+  case TypeConstant::Infinity:
+  case TypeConstant::Nan:
+    return klass == ConstraintClass::Float;
+  }
+  return false;
 }
 
 } // namespace minc::support

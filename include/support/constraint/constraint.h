@@ -118,6 +118,104 @@ enum class ConstraintClass : std::uint8_t {
   Pointer,
 };
 
+// A **constant a type has**: the second word of a qualified name (`T::ZERO`,
+// `i32::MAX`), named for what it is and not for how it is spelled per type.
+//
+// The set is deliberately small and every entry is a *fact about a type* rather
+// than a value the language happens to know:
+//
+//   * `Zero` and `One` -- the two identities, and the two every arithmetic type
+//     has. They are what a body under a constraint can use without naming a
+//     width (`n < T::ONE`).
+//   * `Min` and `Max` -- the smallest and the largest value of the type, which
+//     is the pair a sentinel is written with. Deliberately *not* Rust's four-way
+//     split (`MIN`/`MAX`/`MIN_POSITIVE`/`LOWEST`), where `f64::MIN` means the
+//     most negative finite value and the name reads like the smallest positive
+//     one -- one name per question here: `Min` is the smallest value, `Max` the
+//     largest, and "the smallest positive" is `EPSILON`'s neighbour and not a
+//     name of its own.
+//   * `Epsilon`, `Infinity`, `Nan` -- the three a float has and nothing else
+//     does. Floats only, so a class that grants them is a class all of whose
+//     members are floats.
+//
+// Nothing here is a *value*: the number is the type's, and the stage that knows
+// the type's layout is the one that turns the name into an `APFloat` or an
+// `APInt` (`ir`).
+//
+// A type has a constant or it does not, and that predicate lives in `sema` with
+// the type store, exactly as a class's *members* do -- this file holds the other
+// half: which class **grants** which constant, and that is a fact about the class
+// and not about the constant.
+enum class TypeConstant : std::uint8_t {
+  Zero,
+  One,
+  Min,
+  Max,
+  Epsilon,
+  Infinity,
+  Nan,
+};
+
+// A constant's name, which is the spelling both readers match and every
+// diagnostic prints. Capitalized, like the class names, and for the same reason:
+// no type-name word and no keyword is spelled that way, so `ZERO` can never be
+// confused with a type or a binding.
+struct TypeConstantInfo {
+  TypeConstant constant;
+  const char* name;
+};
+
+// Every constant, in declaration order.
+[[nodiscard]] std::span<const TypeConstantInfo> typeConstants();
+
+// The constant a written name denotes, or `nullopt` when there is no such
+// constant. Case-sensitive, like every other word of the language.
+[[nodiscard]] std::optional<TypeConstant> typeConstantFromName(std::string_view name);
+
+// What a constant prints as (`MAX`).
+[[nodiscard]] std::string_view typeConstantName(TypeConstant constant);
+
+// True when the class grants the constant -- asked of a binder's class when the
+// qualified name's first word is a binder (`T::ZERO`), and read by the test that
+// holds the grant table to the member sets.
+//
+// The rule behind the table is one sentence: **a class grants every constant all
+// of its members have.** So the three classes whose members are all numbers grant
+// the four every number has, `Float` grants the three only floats have, and `Eq`,
+// `Pointer` and `Any` grant none -- `bool`, `str` and a pointer have no zero, and
+// the rule is what says so rather than a list somebody remembered to edit.
+[[nodiscard]] bool constraintGrantsConstant(ConstraintClass klass, TypeConstant constant);
+
+// The **bit pattern** of an integer constant of a type, at the type's own width.
+//
+// Two words and not a `ConstInt`: the constant core is 64 bits wide (`#if`'s own
+// width), and `i128::MAX` is a value this language has and a `ConstInt` cannot
+// hold. The pair is little-endian by significance, which is what an `APInt` is
+// built from and what the fold reads the low half of.
+struct IntConstant {
+  std::uint64_t low = 0;
+  std::uint64_t high = 0;
+  bool isUnsigned = false;
+};
+
+// What an integer constant *is* for a width and a signedness: `ZERO` and `ONE`
+// are the same two bits everywhere, `MIN` is the smallest value (the sign bit
+// alone when signed, zero when not) and `MAX` the largest. `nullopt` for a
+// constant an integer does not have (`EPSILON` and the two that are not numbers),
+// and for a width outside `1..128`, which is not an integer type this language
+// has.
+[[nodiscard]] std::optional<IntConstant> integerConstantValue(unsigned bits, bool isSigned,
+                                                              TypeConstant constant);
+
+// The class a refusal should tell the reader to write for this constant, or `Any`
+// when **no** class grants it.
+//
+// The least powerful class that grants it, which is `constraintForOperation`'s own
+// rule applied to the other half of the table: `Ordered` for the four every number
+// has, because a body that only needs a value to compare with is not asking for
+// arithmetic, and `Float` for the three only a float has.
+[[nodiscard]] ConstraintClass constraintForConstant(TypeConstant constant);
+
 // The kind of literal a class admits, for the one rule that needs to know: a
 // **deferred** literal in a binder's position. `let x: T = 1;` is not decidable from
 // `T` alone -- `1` is an integer literal -- so it is decided from the class, and

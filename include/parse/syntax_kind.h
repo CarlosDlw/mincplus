@@ -104,6 +104,19 @@ enum class SyntaxKind : std::uint16_t {
   // Expressions.
   LiteralExpr,
   PathExpr,
+  // `Name::Name`: two words and the `::` between them. A *qualified* name -- the
+  // second word is a member of what the first names, and not a name of its own.
+  //
+  // The node exists so that the two words are kept as written: `T::ZERO` is read
+  // by the checker (a binder's constant), `i32::MAX` by the same reader (a type's),
+  // and `Color::Red` will be read by it again when an enum's variant arrives --
+  // one shape, three answers, and no spelling that has to be re-decided per
+  // feature (`type_constants.md`).
+  //
+  // It is deliberately *not* a `PathExpr`: that node carries one interned name
+  // and resolution answers it, while this one names a *type* first and resolves
+  // nothing at that stage.
+  QualifiedExpr,
   ParenExpr,
   // `x as T` and `(T)x`: **one kind for both spellings**, because they are one
   // operation. The parse tree keeps the tokens of whichever was written (the

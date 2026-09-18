@@ -531,6 +531,34 @@ bool TypeStore::satisfies(support::ConstraintClass klass, TypeId type) const {
   return true;
 }
 
+bool TypeStore::hasConstant(TypeId id, support::TypeConstant constant) const {
+  if (!known(id) || isError(id)) {
+    return false;
+  }
+  const Type& shape = get(id);
+  // Two groups, and the split is the vocabulary's: the four every number has, and
+  // the three a float alone has. `char` is an integer here (it *is* an unsigned
+  // byte, by decision), so it takes the first group with the rest of them --
+  // `char::MAX` is 255 and not a question.
+  const bool anyNumber =
+      constant == support::TypeConstant::Zero || constant == support::TypeConstant::One ||
+      constant == support::TypeConstant::Min || constant == support::TypeConstant::Max;
+  const bool floatOnly = constant == support::TypeConstant::Epsilon ||
+                         constant == support::TypeConstant::Infinity ||
+                         constant == support::TypeConstant::Nan;
+  switch (shape.kind) {
+  case TypeKind::Int:
+  case TypeKind::Char:
+    return anyNumber;
+  case TypeKind::Float:
+    return anyNumber || floatOnly;
+  default:
+    // A binder is not judged here on purpose: an abstract type has a constant
+    // when its class grants one, and the checker asks that question first.
+    return false;
+  }
+}
+
 TypeId TypeStore::substitute(TypeId subject, std::span<const TypeId> args, std::uint32_t owner) {
   if (!known(subject)) {
     return subject;

@@ -109,6 +109,19 @@ first-class types; the examples use the primitive names. See
       the call; and a literal in a binder's position is decided by the class
       (`Integer` takes `1`, `Float` takes `1.0`). See
       [Generics](/language/generics)
+- [x] Type constants `Type::NAME` — a value a type *has*: `i32::MAX`,
+      `f64::EPSILON`, `char::MAX`, and `T::ZERO` inside a generic body, where it
+      is the zero of the instantiation and the only way to name a constant the
+      body cannot spell. Seven names (`ZERO`, `ONE`, `MIN`, `MAX`, `EPSILON`,
+      `INFINITY`, `NAN`), granted by a constraint class under the same rule as an
+      operation (every member has it), read from a **type** rather than from a
+      symbol (`::` followed by a word is this; `::` followed by `<` is an
+      explicit instantiation), folded like a literal wherever the value fits the
+      fold, and exact at the type's own width where it does not (`i128::MAX`, an
+      `f80` value). See [Type constants](/language/type-constants)
+- [ ] Constants of your own (`T::MY_CONST`), `T::SIZE`/`T::ALIGN`, and a constant
+      as an array count — the three that need associated items, `sizeof`, and
+      symbolic counts respectively
 - [ ] `struct`
 - [ ] `union`
 - [ ] `enum` constants and tagged unions `[?]`

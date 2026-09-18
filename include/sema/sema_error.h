@@ -306,6 +306,18 @@ enum class SemaErrorCode : std::uint8_t {
   // (`fn i32 g<T>(x: T) { return g::<*T>(x); }`) asks for one instance per step,
   // and a compiler that follows it runs out of memory instead of reporting.
   GenericInstanceLimit,
+  // The second word of a qualified name is not a constant of the first: `i32::PI`,
+  // `T::NEGATIVE`. The sentence lists the constants the type *has*, because a
+  // reader who guessed a name has no other way to learn the set -- and because a
+  // name that silently meant nothing would be the one outcome worse than an error
+  // (`type_constants.md`).
+  TypeConstantUnknown,
+  // The constant exists and the **class** does not grant it: `T::MAX` where `T`
+  // is `<T: Eq>`, or any of the three float-only ones on a binder that is not a
+  // `Float`. The sentence names the class to widen to, or the type to write -- one
+  // of the two is always a repair, and which one is decided by the same table the
+  // check read (`constraintGrantsConstant`).
+  TypeConstantNotGranted,
 };
 
 struct SemaErrorCodeInfo {

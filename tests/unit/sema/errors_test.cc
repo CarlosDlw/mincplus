@@ -707,6 +707,14 @@ TEST(ErrorsTest, EveryCodeIsReachableFromAnInputTheGrammarAccepts) {
       // (`casts.md`, decision 20).
       {"fn i32 main() { let a: i32 = 1; let b: i32 = 2; let c: i32 = 3; return a < b > c; }\n",
        false},
+      // The two codes the type constants add: a second word that is no constant of
+      // the first (`type_constants.md`), and one the *class* of a binder does not
+      // promise -- which is the half that has to be judged against the class, since
+      // the body is checked once and the value only exists per instance.
+      {"fn i32 main() { let a = i32::PI; return 0; }\n", false},
+      {"fn i32 f<T: Eq>(x: T) { return x == T::ZERO ? 1 : 0; }\n"
+       "fn i32 main() { return 0; }\n",
+       false},
   };
 
   for (const Case& one : cases) {

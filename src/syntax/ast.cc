@@ -44,6 +44,7 @@ bool isExpressionKind(parse::SyntaxKind kind) {
   switch (kind) {
   case parse::SyntaxKind::LiteralExpr:
   case parse::SyntaxKind::PathExpr:
+  case parse::SyntaxKind::QualifiedExpr:
   case parse::SyntaxKind::ParenExpr:
   case parse::SyntaxKind::PrefixExpr:
   case parse::SyntaxKind::PostfixExpr:

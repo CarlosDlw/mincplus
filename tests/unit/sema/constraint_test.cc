@@ -210,6 +210,23 @@ std::string programFor(const ClassCase& one, std::span<const MemberValue> member
   std::string out = "let probe: i32 = 7;\n\n";
   out += "fn " + one.result + " use<T: " + std::string(one.klass) + ">(x: T, y: T) {\n";
   out += one.body;
+  // The **constants** the class grants, one use each, and they are read from the
+  // table rather than written here: this is the other half of the invariant the
+  // matrix above states. A class promises the constants every member of it has, so
+  // a grant no member can answer -- or a member the lowering cannot build a value
+  // for -- fails at this program, and the instances below are what prove it once
+  // per member (`type_constants.md`).
+  if (const std::optional<support::ConstraintClass> klass =
+          support::constraintClassFromName(one.klass)) {
+    std::size_t constant = 0;
+    for (const support::TypeConstantInfo& row : support::typeConstants()) {
+      if (!support::constraintGrantsConstant(*klass, row.constant)) {
+        continue;
+      }
+      out += "  let k" + std::to_string(constant) + ": T = T::" + std::string(row.name) + ";\n";
+      ++constant;
+    }
+  }
   out += "\n}\n\nfn i32 main() {\n";
   for (std::size_t i = 0; i < members.size(); ++i) {
     const std::string& type = members[i].type;

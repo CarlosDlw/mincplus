@@ -188,6 +188,7 @@ describes:
 [parser](docs/architectures/parser.md) ·
 [resolve](docs/architectures/resolve.md) ·
 [sema](docs/architectures/sema.md) ·
+[type constants](docs/architectures/type_constants.md) ·
 [memory model](docs/architectures/memory.md) ·
 [the bottom type](docs/architectures/never.md) ·
 [IR](docs/architectures/ir.md) ·

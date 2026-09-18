@@ -180,6 +180,15 @@ public:
   // the worklist substitutes the enclosing instance before it interns anything, so
   // every argument reaching this from the expansion path is a real type.
   [[nodiscard]] bool satisfies(support::ConstraintClass klass, TypeId type) const;
+
+  // Does this type have this constant (`i32::MAX`, `f64::EPSILON`)?
+  //
+  // The *members* predicate of the constant table, and it lives here for the same
+  // reason the class predicates do: it is a question about a type. A binder is
+  // **not** judged here -- an abstract type has a constant when its *class* grants
+  // one (`constraintGrantsConstant`), and that is the checker's read, not this
+  // one's.
+  [[nodiscard]] bool hasConstant(TypeId id, support::TypeConstant constant) const;
   // Is this the parameter of *that* declaration? One question, because a binder
   // is only ever substituted by the declaration that owns it: a body referring to
   // an enclosing binder keeps it (decision 6), so "is this mine" is what every

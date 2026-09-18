@@ -83,6 +83,8 @@ constexpr auto kSemaErrorCodeInfos = std::to_array<SemaErrorCodeInfo>({
     {SemaErrorCode::GenericNameNotValue, "sema-generic-name-not-value", false},
     {SemaErrorCode::GenericNotInferable, "sema-generic-not-inferable", false},
     {SemaErrorCode::GenericTypeArgs, "sema-generic-type-args", false},
+    {SemaErrorCode::TypeConstantUnknown, "sema-type-constant-unknown", false},
+    {SemaErrorCode::TypeConstantNotGranted, "sema-type-constant-not-granted", false},
     {SemaErrorCode::GenericOperation, "sema-generic-operation", false},
     {SemaErrorCode::ConstraintNotAClass, "sema-constraint-not-a-class", false},
     {SemaErrorCode::ConstraintUnsatisfied, "sema-constraint-unsatisfied", false},
